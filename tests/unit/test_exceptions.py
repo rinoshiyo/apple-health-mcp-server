@@ -8,14 +8,14 @@ from apple_health_mcp.exceptions import (
     AppleHealthMCPError,
     ConfigError,
     DatabaseError,
-    ImportError,
+    HealthImportError,
     ValidationError,
 )
 
 
 @pytest.mark.parametrize(
     "exc_cls",
-    [ImportError, ValidationError, DatabaseError, ConfigError],
+    [HealthImportError, ValidationError, DatabaseError, ConfigError],
 )
 def test_subclasses_inherit_from_base(exc_cls: type[AppleHealthMCPError]) -> None:
     assert issubclass(exc_cls, AppleHealthMCPError)

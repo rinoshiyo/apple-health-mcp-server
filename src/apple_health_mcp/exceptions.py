@@ -7,8 +7,12 @@ class AppleHealthMCPError(Exception):
     """Base class for all Apple Health MCP errors."""
 
 
-class ImportError(AppleHealthMCPError):
-    """Raised when an Apple Health export cannot be imported."""
+class HealthImportError(AppleHealthMCPError):
+    """Raised when an Apple Health export cannot be imported.
+
+    Named ``HealthImportError`` (not ``ImportError``) to avoid shadowing the
+    builtin and breaking ``try / except ImportError`` for optional deps.
+    """
 
 
 class ValidationError(AppleHealthMCPError):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from typer.testing import CliRunner
 
@@ -17,8 +19,14 @@ def test_help_lists_subcommands() -> None:
     assert "serve" in result.stdout
 
 
-def test_import_stub_exits_zero(tmp_path: object) -> None:
+def test_import_stub_exits_zero(tmp_path: Path) -> None:
     result = runner.invoke(cli.app, ["import", str(tmp_path)])
+    assert result.exit_code == 0
+
+
+def test_import_stub_accepts_global_db(tmp_path: Path) -> None:
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(tmp_path)])
     assert result.exit_code == 0
 
 
@@ -30,6 +38,11 @@ def test_serve_stub_defaults_to_stdio() -> None:
 def test_serve_stub_accepts_http_transport() -> None:
     result = runner.invoke(cli.app, ["serve", "--transport", "http", "--port", "9090"])
     assert result.exit_code == 0
+
+
+def test_serve_rejects_unknown_transport() -> None:
+    result = runner.invoke(cli.app, ["serve", "--transport", "bogus"])
+    assert result.exit_code != 0
 
 
 def test_main_entry_point_invokes_app(monkeypatch: pytest.MonkeyPatch) -> None:
