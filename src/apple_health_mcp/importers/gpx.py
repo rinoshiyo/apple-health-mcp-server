@@ -19,6 +19,7 @@ strip-only behavior; the row still lands, but its wall-clock will be UTC.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -82,7 +83,11 @@ def shift_utc_to_local(ts: str, offset_minutes: int) -> str:
         except ValueError:
             continue
         if parsed.tzinfo is not None:
-            dt = parsed.replace(tzinfo=None) - parsed.utcoffset()  # type: ignore[operator]
+            offset = parsed.utcoffset()
+            # tzinfo is not None implies utcoffset() is not None; assert to
+            # narrow the Optional for mypy strict without a type: ignore.
+            assert offset is not None
+            dt = parsed.replace(tzinfo=None) - offset
         else:
             dt = parsed
         break
@@ -152,7 +157,9 @@ def import_single_gpx(
                     elif tag == "trkpt":
                         if lat is not None and lon is not None and timestamp is not None:
                             wh = workout_hash or ""
-                            point_hash = compute_hash([wh, timestamp, str(lat), str(lon)])
+                            point_hash = compute_hash(
+                                [wh, timestamp, _rust_float_repr(lat), _rust_float_repr(lon)]
+                            )
                             if workout_offset_minutes is not None:
                                 clean_ts = shift_utc_to_local(timestamp, workout_offset_minutes)
                             else:
@@ -186,12 +193,34 @@ def import_single_gpx(
 
 
 def _parse_float(raw: str | None) -> float | None:
+    """Parse ``raw`` as a finite float, returning ``None`` on failure.
+
+    Rejects NaN / Infinity — a single non-finite value poisons every
+    downstream aggregate because DuckDB propagates NaN through SUM/AVG.
+    Mirrors :func:`apple_health_mcp.importers.xml._parse_opt_float`.
+    """
     if raw is None:
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         return None
+    if not math.isfinite(value):
+        return None
+    return value
+
+
+def _rust_float_repr(x: float) -> str:
+    """Format ``x`` to match Rust's ``f64::to_string`` byte-for-byte.
+
+    Python's ``str(35.0)`` is ``'35.0'``; Rust's ``35.0_f64.to_string()`` is
+    ``'35'``. The point_hash composition must use the Rust formatting so a
+    DB built by the Rust binary stays compatible with the Python importer
+    after migration.
+    """
+    if x.is_integer() and math.isfinite(x):
+        return str(int(x))
+    return repr(x)
 
 
 def import_gpx_files(
@@ -214,6 +243,7 @@ def import_gpx_files(
     _logger.info("Found %d GPX route files", len(entries))
 
     total = 0
+    unmatched = 0
     for path in entries:
         # Map keys are the verbatim FileReference path Apple emits, e.g.
         # "/workout-routes/route_2020-05-21_1.14pm.gpx".
@@ -222,11 +252,31 @@ def import_gpx_files(
         workout_offset: int | None = None
         if workout_hash is not None:
             workout_offset = workout_offset_map.get(workout_hash)
+        else:
+            # The GPX file exists on disk but no Workout in the XML registered
+            # this file path. Common causes: case-mismatched extraction on
+            # case-insensitive filesystems, a Workout whose XML start handler
+            # raised mid-element, or a third-party producer using a different
+            # prefix. The points still land (with NULL workout_hash) so the
+            # data is not lost, but warn so the orphan is surfaced.
+            unmatched += 1
+            _logger.warning(
+                "GPX file %s has no matching workout in the XML map "
+                "(route_key=%s); inserting points with NULL workout_hash",
+                path.name,
+                route_key,
+            )
         try:
             total += import_single_gpx(conn, path, import_id, workout_hash, workout_offset)
         except HealthImportError as exc:
             _logger.warning("Failed to import GPX file %s: %s", path, exc)
         except OSError as exc:
             _logger.warning("Failed to read GPX file %s: %s", path, exc)
+    if unmatched:
+        _logger.warning(
+            "Imported %d GPX file(s) with no matching workout out of %d total",
+            unmatched,
+            len(entries),
+        )
     _logger.info("Imported %d route points from GPX files", total)
     return total

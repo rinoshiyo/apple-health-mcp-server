@@ -134,7 +134,9 @@ def _extract_offset_minutes(raw: str) -> int | None:
     if pos == -1:
         return None
     body = raw[pos + 2 :]
-    if len(body) != 4 or not body.isdigit():
+    # Reject non-ASCII digit characters (Arabic-Indic, full-width, etc.)
+    # that body.isdigit() alone would accept and then choke on in int().
+    if len(body) != 4 or not body.isascii() or not body.isdigit():
         return None
     hours = int(body[:2])
     mins = int(body[2:])
@@ -233,12 +235,13 @@ class _XmlImporter:
                         raise HealthImportError(
                             f"aborting XML import after {consecutive_errors} consecutive errors"
                         ) from exc
-                # Only reset the counter when a `start` event handler
-                # actually succeeded -- `end` events almost always succeed
-                # (the work is trivial), so resetting on them would defeat
-                # the consecutive-error budget against a fully-broken
-                # `start` handler.
-                if not handler_failed and event == "start":
+                # Reset the counter on any successful event (start OR end).
+                # The Rust reference resets after every successful event for
+                # the same reason: with iterparse firing roughly equal
+                # numbers of start and end events, gating the reset on
+                # `start` only would halve the effective budget and cause
+                # sparse-but-non-consecutive failures to trip the abort.
+                if not handler_failed:
                     consecutive_errors = 0
         except etree.XMLSyntaxError as exc:
             raise HealthImportError(f"unrecoverable XML syntax error: {exc}") from exc
@@ -335,12 +338,32 @@ class _XmlImporter:
 
     def _handle_export_date(self, elem: etree._Element) -> None:
         value = _clean_date_opt(elem.get("value"))
-        # ExportDate appears once; UPDATE the row HealthData inserted so the
-        # locale and export_date end up on the same row.
-        self._conn.execute(
-            "UPDATE export_metadata SET export_date = ? WHERE import_id = ?",
-            [value, self._import_id],
-        )
+        # ExportDate normally appears AFTER HealthData (which inserted the
+        # row), so a plain UPDATE works. But if HealthData failed (caught by
+        # the per-event consecutive-error budget) or is missing in a
+        # malformed export, the UPDATE matches zero rows and the export_date
+        # is silently lost. Detect that case and INSERT a standalone row so
+        # the data survives, logging a warning so the malformed root is
+        # surfaced to the user.
+        row = self._conn.execute(
+            "SELECT 1 FROM export_metadata WHERE import_id = ? LIMIT 1",
+            [self._import_id],
+        ).fetchone()
+        if row is None:
+            _logger.warning(
+                "ExportDate seen without a preceding HealthData row; "
+                "inserting standalone export_metadata (locale will be NULL)"
+            )
+            self._conn.execute(
+                "INSERT INTO export_metadata (import_id, export_date, locale) VALUES (?, ?, NULL)",
+                [self._import_id, value],
+            )
+            self._stats.export_metadata_rows += 1
+        else:
+            self._conn.execute(
+                "UPDATE export_metadata SET export_date = ? WHERE import_id = ?",
+                [value, self._import_id],
+            )
 
     def _handle_me(self, elem: etree._Element) -> None:
         self._conn.execute(
@@ -435,7 +458,17 @@ class _XmlImporter:
     def _handle_metadata_entry(self, elem: etree._Element) -> None:
         key = elem.get("key", "")
         value = elem.get("value", "")
-        if self._in_workout:
+        # Inner-most context wins: a <Record> nested inside a <Workout>
+        # (e.g. InstantaneousBeatsPerMinute samples or HK plain Records under
+        # a Workout block) must route its MetadataEntry to record_metadata,
+        # not workout_metadata. Checking _in_record first ensures the inner
+        # context takes priority over the enclosing Workout.
+        if self._in_record and self._current_record_hash is not None:
+            self._record_metadata.append((self._current_record_hash, key, value))
+            self._stats.metadata_entries += 1
+            if len(self._record_metadata) >= _BATCH_SIZE:
+                self._flush_record_metadata()
+        elif self._in_workout:
             # _in_workout is only set alongside _current_workout_hash, so the
             # None branch is unreachable in practice; keep the guard for
             # type-narrowing and tolerance to future refactors.
@@ -443,11 +476,6 @@ class _XmlImporter:
                 self._current_workout_metadata.append(
                     (self._current_workout_hash, key, value, self._import_id)
                 )
-        elif self._in_record and self._current_record_hash is not None:
-            self._record_metadata.append((self._current_record_hash, key, value))
-            self._stats.metadata_entries += 1
-            if len(self._record_metadata) >= _BATCH_SIZE:
-                self._flush_record_metadata()
 
     def _handle_workout_start(self, elem: etree._Element) -> None:
         self._in_workout = True

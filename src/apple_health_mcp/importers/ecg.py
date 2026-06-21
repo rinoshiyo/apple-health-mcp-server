@@ -150,15 +150,26 @@ def _strip_tz_suffix(raw: str) -> str:
     return raw
 
 
-def _read_text(path: Path) -> str:
-    """Read ``path`` and decode using a chardet-detected encoding.
+_CHARDET_SNIFF_BYTES = 4096
 
-    Falls back to UTF-8 when chardet returns ``None`` (very short file, or
-    bytes that look like every encoding). The BOM, if present, is stripped
-    by the caller via :func:`_strip_bom`.
+
+def _read_text(path: Path) -> str:
+    """Read ``path`` and decode with a UTF-8-first / chardet fallback strategy.
+
+    Apple ECG CSVs are predominantly ASCII voltage samples after a small
+    localized header, so chardet on the full file routinely misdetects
+    Japanese / Chinese / Korean UTF-8 as Windows-1252 (a known weakness with
+    ASCII-dominant inputs). We try strict UTF-8 first — the documented Apple
+    format — and only fall back to chardet sniffing the first 4 KB when the
+    UTF-8 decode itself fails. The BOM, if present, is stripped by the
+    caller via :func:`_strip_bom`.
     """
     raw = path.read_bytes()
-    detected = chardet.detect(raw)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    detected = chardet.detect(raw[:_CHARDET_SNIFF_BYTES])
     encoding = detected.get("encoding") if detected else None
     if not encoding:
         encoding = "utf-8"

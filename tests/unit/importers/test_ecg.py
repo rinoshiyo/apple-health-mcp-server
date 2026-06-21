@@ -278,8 +278,12 @@ def test_read_text_falls_back_when_chardet_returns_none(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If chardet returns no encoding, we fall back to UTF-8 and still parse."""
-    path = _write_csv(tmp_path, "ecg_undetected.csv", _MINIMAL_ECG_CSV)
+    """Non-UTF-8 bytes + chardet returning None falls through to UTF-8 with replace."""
+    path = tmp_path / "ecg_undetected.csv"
+    # Insert a raw 0xFF byte (invalid UTF-8) so the strict UTF-8 attempt
+    # fails and the chardet fallback path runs.
+    body = _MINIMAL_ECG_CSV.encode("utf-8") + b"\xff"
+    path.write_bytes(body)
 
     from apple_health_mcp.importers import ecg as ecg_module
 
@@ -295,7 +299,9 @@ def test_read_text_handles_unknown_encoding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A chardet-claimed encoding that Python does not know triggers the LookupError fallback."""
-    path = _write_csv(tmp_path, "ecg_funky.csv", _MINIMAL_ECG_CSV)
+    path = tmp_path / "ecg_funky.csv"
+    body = _MINIMAL_ECG_CSV.encode("utf-8") + b"\xff"
+    path.write_bytes(body)
 
     from apple_health_mcp.importers import ecg as ecg_module
 
@@ -303,5 +309,30 @@ def test_read_text_handles_unknown_encoding(
         ecg_module.chardet, "detect", lambda _raw: {"encoding": "definitely-not-a-real-encoding"}
     )
     import_single_ecg(conn, path, "imp_funky")
+    row = conn.execute("SELECT COUNT(*) FROM ecg_readings").fetchone()
+    assert row is not None and int(row[0]) == 1
+
+
+def test_read_text_decodes_shift_jis_via_chardet(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """Non-UTF-8 (Shift_JIS) Japanese ECG CSV decodes through the chardet fallback."""
+    # Japanese localized header in Shift_JIS — not valid UTF-8, forces the
+    # chardet sniffing path.
+    csv_text = (
+        "記録日,2024-01-01 12:00:00 +0900\n"
+        "分類,Sinus Rhythm\n"
+        "デバイス,Apple Watch\n"
+        "ソフトウェアバージョン,10.4\n"
+        "サンプリングレート,512 Hz\n"
+        "症状,なし\n"
+        "\n"
+        "電圧,\n"
+        "0.001\n"
+        "0.002\n"
+    )
+    path = tmp_path / "ecg_jp.csv"
+    path.write_bytes(csv_text.encode("shift_jis"))
+    import_single_ecg(conn, path, "imp_sjis")
     row = conn.execute("SELECT COUNT(*) FROM ecg_readings").fetchone()
     assert row is not None and int(row[0]) == 1

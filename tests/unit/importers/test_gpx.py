@@ -313,6 +313,59 @@ def test_import_single_gpx_unknown_child_inside_trkpt_ignored(
     assert count == 1
 
 
+def test_import_gpx_files_warns_on_unmatched_workout(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A GPX file with no entry in workout_route_map logs a warning and inserts
+    points with NULL workout_hash, rather than dropping the data silently."""
+    d = tmp_path / "routes"
+    d.mkdir()
+    (d / "orphan.gpx").write_text(_MINIMAL_GPX, encoding="utf-8")
+    # Empty maps → no match for the file.
+    total = import_gpx_files(conn, d, "imp_orphan", {}, {})
+    assert total == 2
+    assert any("has no matching workout" in rec.message for rec in caplog.records)
+    assert any("Imported 1 GPX file(s) with no matching" in rec.message for rec in caplog.records)
+    row = conn.execute("SELECT DISTINCT workout_hash FROM route_points").fetchone()
+    assert row == (None,)
+
+
+def test_parse_float_rejects_non_finite() -> None:
+    """NaN / Infinity must be dropped so they cannot poison downstream aggregates."""
+    from apple_health_mcp.importers.gpx import _parse_float, _rust_float_repr
+
+    assert _parse_float("NaN") is None
+    assert _parse_float("Infinity") is None
+    assert _parse_float("-Infinity") is None
+    assert _parse_float("3.14") == 3.14
+    # _rust_float_repr formats whole-number floats without trailing .0 for
+    # byte-for-byte parity with the Rust importer's hash composition.
+    assert _rust_float_repr(35.0) == "35"
+    assert _rust_float_repr(-139.0) == "-139"
+    assert _rust_float_repr(35.5) == "35.5"
+
+
+def test_import_single_gpx_skips_non_finite_elevation(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """A trkpt with NaN elevation must record the point but leave elevation NULL."""
+    gpx = """<?xml version="1.0" encoding="UTF-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">
+  <trk><trkseg>
+    <trkpt lat="35.5" lon="139.5">
+      <ele>NaN</ele>
+      <time>2024-01-01T00:00:00Z</time>
+    </trkpt>
+  </trkseg></trk>
+</gpx>"""
+    path = _write_gpx(tmp_path, "nan.gpx", gpx)
+    count = import_single_gpx(conn, path, "imp_nan", "wh", None)
+    assert count == 1
+    row = conn.execute("SELECT elevation FROM route_points").fetchone()
+    assert row is not None
+    assert row[0] is None
+
+
 def test_import_gpx_files_oserror_in_loop_is_logged(
     conn: duckdb.DuckDBPyConnection,
     tmp_path: Path,

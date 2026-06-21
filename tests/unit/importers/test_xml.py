@@ -383,23 +383,32 @@ def test_import_xml_handler_error_aborts_above_threshold(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exceed the consecutive-error budget and the importer must raise."""
-    # Build an XML with more Record elements than the threshold so every
-    # handler call triggers the synthetic error.
+    """Exceed the consecutive-error budget and the importer must raise.
+
+    The counter resets on any successful event (start OR end), so to trip
+    the abort we need both handlers to fail. We patch ``_XmlImporter._on_end``
+    to also raise, simulating a class of malformed elements that fail every
+    handler call. With both events failing per Record, 51 records produce
+    102 consecutive errors — above the 100 budget.
+    """
     body = "\n".join(
         '<Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" '
         f'value="{i}" startDate="2024-01-01 00:00:00 +0000" '
         'endDate="2024-01-01 01:00:00 +0000"/>'
-        for i in range(150)
+        for i in range(60)
     )
     xml = f'<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n{body}\n</HealthData>'
 
     from apple_health_mcp.importers import xml as xml_module
 
-    def always_fail(parts: list[str]) -> str:
-        raise RuntimeError("synthetic permanent error")
+    def always_fail_hash(parts: list[str]) -> str:
+        raise RuntimeError("synthetic start failure")
 
-    monkeypatch.setattr(xml_module, "compute_hash", always_fail)
+    def always_fail_end(self: object, elem: object) -> None:
+        raise RuntimeError("synthetic end failure")
+
+    monkeypatch.setattr(xml_module, "compute_hash", always_fail_hash)
+    monkeypatch.setattr(xml_module._XmlImporter, "_on_end", always_fail_end)
     with pytest.raises(HealthImportError, match="consecutive errors"):
         import_xml(conn, _write_xml(tmp_path, xml), "imp_die")
 
@@ -568,3 +577,58 @@ def test_import_xml_clears_iterated_elements(tmp_path: Path) -> None:
         assert len(tree.getroot().findall("Record")) == 10
     finally:
         conn.close()
+
+
+def test_import_xml_export_date_without_healthdata_inserts_standalone(
+    conn: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """If HealthData's INSERT fails (or is missing), ExportDate must still land
+    a row instead of being silently dropped by a zero-row UPDATE."""
+    from apple_health_mcp.importers import xml as xml_module
+
+    # Make the HealthData handler raise so no row is inserted. The
+    # consecutive-error budget absorbs the single failure.
+    real_handler = xml_module._XmlImporter._handle_health_data
+
+    def broken(self: object, elem: object) -> None:
+        raise RuntimeError("synthetic HealthData failure")
+
+    monkeypatch.setattr(xml_module._XmlImporter, "_handle_health_data", broken)
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <ExportDate value="2024-06-01 12:00:00 +0000"/>
+</HealthData>"""
+    import_xml(conn, _write_xml(tmp_path, xml), "imp_no_root")
+    row = conn.execute(
+        "SELECT locale, CAST(export_date AS VARCHAR) FROM export_metadata WHERE import_id=?",
+        ["imp_no_root"],
+    ).fetchone()
+    assert row == (None, "2024-06-01 12:00:00")
+    assert any("without a preceding HealthData" in rec.message for rec in caplog.records)
+    monkeypatch.setattr(xml_module._XmlImporter, "_handle_health_data", real_handler)
+
+
+def test_import_xml_nested_record_in_workout_routes_metadata_to_record(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """A <Record> nested under a <Workout> must route its <MetadataEntry> to
+    record_metadata (inner context wins), not workout_metadata."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2024-01-01 06:00:00 +0000" endDate="2024-01-01 06:30:00 +0000">
+  <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="150" startDate="2024-01-01 06:10:00 +0000" endDate="2024-01-01 06:10:00 +0000">
+   <MetadataEntry key="HKMetadataKeyHeartRateMotionContext" value="2"/>
+  </Record>
+ </Workout>
+</HealthData>"""
+    stats = import_xml(conn, _write_xml(tmp_path, xml), "imp_nested")
+    # MetadataEntry must land in record_metadata, NOT workout_metadata.
+    assert stats.metadata_entries == 1
+    assert stats.workout_metadata_entries == 0
+    row = conn.execute("SELECT COUNT(*) FROM record_metadata").fetchone()
+    assert row is not None and int(row[0]) == 1
+    row = conn.execute("SELECT COUNT(*) FROM workout_metadata").fetchone()
+    assert row is not None and int(row[0]) == 0
