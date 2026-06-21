@@ -18,6 +18,7 @@ their justification.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -337,27 +338,40 @@ SELECT * FROM (
     ORDER BY import_id, imported_at DESC
 );
 
+-- The next three tables hold at most one row per import_id (or per
+-- record_hash for state_of_mind), but the dedupe still adds a secondary
+-- tie-break column so the surviving row stays deterministic if a partial /
+-- replayed import happens to insert the same key twice. import_id DESC
+-- matches the "prefer the newest import" convention used everywhere else
+-- in this block.
 CREATE OR REPLACE TABLE export_metadata AS
 SELECT * FROM (
     SELECT DISTINCT ON (import_id) *
     FROM export_metadata
-    ORDER BY import_id
+    ORDER BY import_id DESC, export_date DESC
 );
 
 CREATE OR REPLACE TABLE me_attributes AS
 SELECT * FROM (
     SELECT DISTINCT ON (import_id) *
     FROM me_attributes
-    ORDER BY import_id
+    ORDER BY import_id DESC, date_of_birth
 );
 
 CREATE OR REPLACE TABLE state_of_mind AS
 SELECT * FROM (
     SELECT DISTINCT ON (record_hash) *
     FROM state_of_mind
-    ORDER BY record_hash, import_id DESC
+    ORDER BY record_hash, import_id DESC, valence
 );
+"""
 
+
+# Indexes live in their own SQL block so ensure_schema can install them on a
+# fresh database that has not yet run deduplicate_tables. deduplicate_tables
+# also re-applies them because CREATE OR REPLACE TABLE drops associated
+# indexes; CREATE INDEX IF NOT EXISTS is idempotent on the warm path.
+_CREATE_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_records_type_date ON records(record_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_name);
 CREATE INDEX IF NOT EXISTS idx_workouts_type_date ON workouts(activity_type, start_date);
@@ -375,19 +389,24 @@ CREATE INDEX IF NOT EXISTS idx_correlation_members_record
 """
 
 
-# Number of tables ensure_schema() creates. Used by the test suite as a smoke
-# check that no table is silently dropped during refactors.
-TABLE_COUNT = 18
+# Number of tables ensure_schema() creates. Derived from the canonical SQL
+# string so adding or removing a CREATE TABLE statement cannot drift away
+# from the smoke-check constant.
+TABLE_COUNT = len(re.findall(r"\bCREATE TABLE IF NOT EXISTS\b", _CREATE_TABLES_SQL))
 
 
 def ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create all tables if they do not already exist.
+    """Create all tables and indexes if they do not already exist.
 
     Tables are created without ``PRIMARY KEY`` constraints so the bulk loader
     can append duplicates; deduplication is a separate phase
-    (:func:`deduplicate_tables`) that runs after the import.
+    (:func:`deduplicate_tables`) that runs after the import. Indexes are
+    installed here so ensure_schema-only callers (read-only consumers,
+    integration tests, dry-runs) get an indexed database without having to
+    run the full dedupe pipeline.
     """
     conn.execute(_CREATE_TABLES_SQL)
+    conn.execute(_CREATE_INDEXES_SQL)
 
 
 def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
@@ -396,10 +415,12 @@ def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
     Each ``DISTINCT ON`` carries an explicit ``ORDER BY`` so the surviving
     row is deterministic across re-imports. The tie-break prefers the most
     recent ``import_id`` so re-importing the same export never silently flips
-    ``source_version`` / ``device`` / etc.
+    ``source_version`` / ``device`` / etc. Indexes are re-created after the
+    table rewrites because ``CREATE OR REPLACE TABLE`` drops them.
     """
     _logger.info("Deduplicating tables...")
     conn.execute(_DEDUPLICATE_SQL)
+    conn.execute(_CREATE_INDEXES_SQL)
     _logger.info("Deduplication complete")
 
 
@@ -440,8 +461,12 @@ def populate_workout_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
     # Distance across every distance-flavored quantity type. The statistics
-    # table only carries one distance type per workout in practice, so SUM is
-    # effectively a passthrough while still tolerating multi-row stats.
+    # table only carries one distance type per workout in practice. When that
+    # invariant breaks (e.g. a triathlon workout records swimming metres plus
+    # cycling kilometres on the same Workout element), the totals are
+    # incommensurable — we refuse to backfill via ``HAVING COUNT(DISTINCT
+    # unit) = 1`` so the column stays NULL rather than silently storing a
+    # nonsense sum like 1550 km.
     conn.execute(
         """
         UPDATE workouts AS w
@@ -456,6 +481,7 @@ def populate_workout_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
             WHERE stat_type LIKE 'HKQuantityTypeIdentifierDistance%'
               AND sum IS NOT NULL
             GROUP BY workout_hash
+            HAVING COUNT(DISTINCT unit) = 1
         ) AS agg
         WHERE w.workout_hash = agg.workout_hash
           AND w.total_distance IS NULL;

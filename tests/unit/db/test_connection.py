@@ -14,6 +14,7 @@ from apple_health_mcp.db.connection import (
     get_connection,
     get_in_memory_connection,
 )
+from apple_health_mcp.exceptions import DatabaseError
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -65,15 +66,30 @@ def test_get_connection_uses_default_when_not_provided(
         assert row[0] == 1
     finally:
         conn.close()
-    assert (tmp_path / "data" / "apple-health-mcp" / "health.duckdb").exists()
+    db_path = tmp_path / "data" / "apple-health-mcp" / "health.duckdb"
+    assert db_path.exists()
+    # We auto-create the default path's app subdir at 0700 because we own it;
+    # a more permissive mode means the chmod tightening regressed.
+    assert (db_path.parent.stat().st_mode & 0o777) == 0o700
 
 
-def test_get_connection_creates_parent_dir(tmp_path: Path) -> None:
+def test_get_connection_creates_parent_dir_without_chmod_on_user_path(tmp_path: Path) -> None:
+    """User-supplied paths must NOT have their parent dir chmod-ed.
+
+    Locking down ``$HOME`` / ``/tmp`` / a project dir to 0700 would silently
+    break sshd StrictModes and any tool that expects 0755 home permissions.
+    """
     db_path = tmp_path / "nested" / "dirs" / "h.duckdb"
+    pre_existing_mode = (tmp_path / "nested").exists() or db_path.parent.exists()
+    assert not pre_existing_mode
     conn = get_connection(db_path)
     try:
         assert db_path.parent.is_dir()
         assert db_path.exists()
+        # Parent dir basename is "dirs", not "apple-health-mcp", so chmod must
+        # not have fired. mkdir's default umask gives 0755 (or whatever the
+        # ambient umask permits) — assert the chmod did NOT lock it down.
+        assert (db_path.parent.stat().st_mode & 0o777) != 0o700
     finally:
         conn.close()
 
@@ -88,10 +104,8 @@ def test_get_connection_skips_chmod_on_windows(monkeypatch: MonkeyPatch, tmp_pat
         conn.close()
 
 
-def test_get_connection_read_only_requires_existing_db(tmp_path: Path) -> None:
+def test_get_connection_read_only_opens_existing_db(tmp_path: Path) -> None:
     db_path = tmp_path / "ro.duckdb"
-    # Seed the file with a writable connection first; DuckDB cannot open
-    # read-only when the file does not yet exist.
     seeder = get_connection(db_path)
     seeder.execute("CREATE TABLE t(x INTEGER);")
     seeder.execute("INSERT INTO t VALUES (1);")
@@ -106,6 +120,19 @@ def test_get_connection_read_only_requires_existing_db(tmp_path: Path) -> None:
             conn.execute("INSERT INTO t VALUES (2);")
     finally:
         conn.close()
+
+
+def test_get_connection_read_only_raises_when_missing(tmp_path: Path) -> None:
+    """Read-only open against a missing path must raise without side effects.
+
+    Without this guard, ``serve`` invoked before ``import`` would silently
+    create the parent directory and then surface an opaque DuckDB error.
+    """
+    db_path = tmp_path / "missing" / "ro.duckdb"
+    with pytest.raises(DatabaseError, match="cannot open read-only"):
+        get_connection(db_path, read_only=True)
+    # Parent dir must NOT have been created as a side effect.
+    assert not db_path.parent.exists()
 
 
 def test_get_in_memory_connection() -> None:

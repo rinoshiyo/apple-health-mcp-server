@@ -4,7 +4,11 @@ The v0.1.0 release ships a single canonical schema (see :mod:`schema`), so
 migrations is a deliberately small surface: a version sentinel persisted in a
 ``schema_version`` table plus a stub :func:`apply_pending_migrations` ready
 for future bumps. Future migrations register themselves in :data:`MIGRATIONS`
-as ``(target_version, callable)`` pairs.
+as ``(target_version, callable)`` pairs ordered by ascending target version.
+
+Ordering contract: callers must invoke :func:`schema.ensure_schema` before
+:func:`apply_pending_migrations` on a fresh database. The migration registry
+only tracks the version sentinel; it does not create the canonical tables.
 """
 
 from __future__ import annotations
@@ -56,8 +60,14 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
     """Run every migration whose target version is above the current one.
 
     Returns the version the database is on after applying all pending steps.
-    Raises :class:`DatabaseError` if a migration targets a version at or
-    below the persisted one (registration order bug).
+    Already-applied migrations (``target <= applied``) are skipped so the
+    function is idempotent across restarts. Raises :class:`DatabaseError` if
+    the database reports a version newer than the package supports or if a
+    registered migration targets a version above ``CURRENT_SCHEMA_VERSION``.
+
+    The caller must have created the canonical schema via
+    :func:`schema.ensure_schema` before invoking this function on a fresh
+    database; the migration layer only tracks the version sentinel.
     """
     current = get_current_version(conn)
     if current > CURRENT_SCHEMA_VERSION:
@@ -68,24 +78,21 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
 
     applied = current
     for target, migration in MIGRATIONS:
-        if target <= applied:
-            raise DatabaseError(
-                f"migration target {target} is not greater than applied version {applied}"
-            )
         if target > CURRENT_SCHEMA_VERSION:
             raise DatabaseError(
                 f"migration target {target} exceeds CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
             )
+        if target <= applied:
+            # Already applied on a previous run; idempotent skip.
+            continue
         _logger.info("Applying migration to schema version %d", target)
         migration(conn)
         applied = target
 
-    if applied != current:
-        set_current_version(conn, applied)
-    elif current == 0:
-        # First-ever connection: stamp the baseline so future bumps have a
-        # reference point even when no migration registered yet.
-        set_current_version(conn, CURRENT_SCHEMA_VERSION)
-        applied = CURRENT_SCHEMA_VERSION
-
-    return applied
+    # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION) so
+    # that fresh databases on schema-only bumps (no data migration registered)
+    # still record the package's current version.
+    final = max(applied, CURRENT_SCHEMA_VERSION)
+    if final != current:
+        set_current_version(conn, final)
+    return final

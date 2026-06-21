@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+
+import duckdb
 import pytest
 
 from apple_health_mcp.db import (
@@ -14,33 +17,59 @@ from apple_health_mcp.db import (
 )
 
 
-def _table_count(conn: object) -> int:
-    rows = conn.execute(  # type: ignore[attr-defined]
+def _table_count(conn: duckdb.DuckDBPyConnection) -> int:
+    rows = conn.execute(
         "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main'"
     ).fetchone()
     assert rows is not None
     return int(rows[0])
 
 
+def _index_exists(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM duckdb_indexes() WHERE index_name = ?",
+        [name],
+    ).fetchone()
+    return row is not None and int(row[0]) == 1
+
+
 @pytest.fixture
-def conn():  # type: ignore[no-untyped-def]
+def conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     connection = get_in_memory_connection()
     ensure_schema(connection)
     yield connection
     connection.close()
 
 
-def test_ensure_schema_creates_all_tables(conn) -> None:  # type: ignore[no-untyped-def]
+def test_ensure_schema_creates_all_tables(conn: duckdb.DuckDBPyConnection) -> None:
     assert _table_count(conn) == TABLE_COUNT
 
 
-def test_ensure_schema_is_idempotent(conn) -> None:  # type: ignore[no-untyped-def]
+def test_ensure_schema_is_idempotent(conn: duckdb.DuckDBPyConnection) -> None:
     ensure_schema(conn)
     ensure_schema(conn)
     assert _table_count(conn) == TABLE_COUNT
 
 
-def test_new_tables_present(conn) -> None:  # type: ignore[no-untyped-def]
+def test_ensure_schema_creates_indexes(conn: duckdb.DuckDBPyConnection) -> None:
+    """ensure_schema must install indexes so callers that never run dedupe
+    (read-only consumers, integration dry-runs) still get an indexed DB."""
+    for name in (
+        "idx_records_type_date",
+        "idx_records_source",
+        "idx_workouts_type_date",
+        "idx_route_points_workout",
+        "idx_workout_metadata_hash",
+        "idx_workout_routes_hash",
+        "idx_heart_rate_samples_parent",
+        "idx_correlations_type_date",
+        "idx_correlation_members_correlation",
+        "idx_correlation_members_record",
+    ):
+        assert _index_exists(conn, name), f"missing index {name}"
+
+
+def test_new_tables_present(conn: duckdb.DuckDBPyConnection) -> None:
     for table in ("export_metadata", "me_attributes", "state_of_mind"):
         row = conn.execute(
             "SELECT COUNT(*) FROM information_schema.tables "
@@ -51,7 +80,7 @@ def test_new_tables_present(conn) -> None:  # type: ignore[no-untyped-def]
         assert row[0] == 1, f"missing table {table}"
 
 
-def test_workout_routes_has_device_column(conn) -> None:  # type: ignore[no-untyped-def]
+def test_workout_routes_has_device_column(conn: duckdb.DuckDBPyConnection) -> None:
     row = conn.execute(
         "SELECT COUNT(*) FROM information_schema.columns "
         "WHERE table_schema='main' AND table_name='workout_routes' AND column_name='device'"
@@ -60,7 +89,7 @@ def test_workout_routes_has_device_column(conn) -> None:  # type: ignore[no-unty
     assert row[0] == 1
 
 
-def test_deduplicate_records(conn) -> None:  # type: ignore[no-untyped-def]
+def test_deduplicate_records(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO records VALUES
@@ -78,7 +107,7 @@ def test_deduplicate_records(conn) -> None:  # type: ignore[no-untyped-def]
     assert row[0] == 2
 
 
-def test_deduplicate_picks_newest_import_id(conn) -> None:  # type: ignore[no-untyped-def]
+def test_deduplicate_picks_newest_import_id(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO records VALUES
@@ -94,7 +123,7 @@ def test_deduplicate_picks_newest_import_id(conn) -> None:  # type: ignore[no-un
     assert row[0] == "2.0"
 
 
-def test_deduplicate_workout_statistics_and_events(conn) -> None:  # type: ignore[no-untyped-def]
+def test_deduplicate_workout_statistics_and_events(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO workout_statistics VALUES
@@ -117,7 +146,7 @@ def test_deduplicate_workout_statistics_and_events(conn) -> None:  # type: ignor
     assert events_row[0] == 2
 
 
-def test_deduplicate_extra_tables(conn) -> None:  # type: ignore[no-untyped-def]
+def test_deduplicate_extra_tables(conn: duckdb.DuckDBPyConnection) -> None:
     # Exercise the dedupe branches for every table we own beyond records.
     conn.execute(
         """
@@ -197,7 +226,71 @@ def test_deduplicate_extra_tables(conn) -> None:  # type: ignore[no-untyped-def]
         assert row[0] == want, f"{table} expected {want} got {row[0]}"
 
 
-def test_populate_vestigial_columns(conn) -> None:  # type: ignore[no-untyped-def]
+def test_dedupe_export_metadata_prefers_newest_import(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute(
+        """
+        INSERT INTO export_metadata VALUES
+          ('imp1','2024-01-01 00:00:00','en_US'),
+          ('imp2','2024-02-01 00:00:00','ja_JP');
+        """
+    )
+    # Same import_id twice with different locales — newest export_date wins.
+    conn.execute(
+        """
+        INSERT INTO export_metadata VALUES
+          ('imp2','2024-02-01 00:00:00','ja_JP'),
+          ('imp2','2024-02-02 00:00:00','fr_FR');
+        """
+    )
+    deduplicate_tables(conn)
+    rows = conn.execute(
+        "SELECT import_id, locale FROM export_metadata ORDER BY import_id"
+    ).fetchall()
+    assert ("imp1", "en_US") in rows
+    # For imp2, the later export_date wins thanks to the DESC tie-break.
+    imp2_row = next(r for r in rows if r[0] == "imp2")
+    assert imp2_row[1] == "fr_FR"
+
+
+def test_dedupe_me_attributes_prefers_newest_import(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute(
+        """
+        INSERT INTO me_attributes VALUES
+          ('imp1','1980-01-01','HKBiologicalSexMale','HKBloodTypeAPositive',
+           'HKFitzpatrickSkinTypeIII','HKCardioFitnessMedicationsUseNone'),
+          ('imp2','1990-12-31','HKBiologicalSexFemale','HKBloodTypeBNegative',
+           'HKFitzpatrickSkinTypeIV','HKCardioFitnessMedicationsUseSingleUse');
+        """
+    )
+    deduplicate_tables(conn)
+    row = conn.execute("SELECT date_of_birth FROM me_attributes WHERE import_id='imp2'").fetchone()
+    assert row is not None
+    assert row[0] == "1990-12-31"
+
+
+def test_dedupe_state_of_mind_uses_deterministic_tiebreak(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Same record_hash twice within one import (replayed import) must pick
+    deterministically via the valence tertiary key."""
+    conn.execute(
+        """
+        INSERT INTO state_of_mind VALUES
+          ('rh1',0.7,'Momentary','Happy','Family','imp1'),
+          ('rh1',0.3,'Momentary','Calm','Work','imp1');
+        """
+    )
+    deduplicate_tables(conn)
+    rows = conn.execute(
+        "SELECT valence, labels FROM state_of_mind WHERE record_hash='rh1'"
+    ).fetchall()
+    assert len(rows) == 1
+    # The lower valence wins because ORDER BY ... valence is ASC.
+    assert rows[0][0] == pytest.approx(0.3)
+    assert rows[0][1] == "Calm"
+
+
+def test_populate_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO workouts VALUES
@@ -224,7 +317,39 @@ def test_populate_vestigial_columns(conn) -> None:  # type: ignore[no-untyped-de
     assert distance_unit == "km"
 
 
-def test_populate_vestigial_columns_preserves_legacy_values(conn) -> None:  # type: ignore[no-untyped-def]
+def test_populate_vestigial_columns_skips_mixed_unit_distance(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A workout with multiple distance units (e.g. swim metres + cycle km)
+    must NOT receive a backfilled total_distance, because summing across
+    incommensurable units would silently store a nonsense value."""
+    conn.execute(
+        """
+        INSERT INTO workouts VALUES
+          ('wh_tri','HKWorkoutActivityTypeSwimBikeRun',7200,'s',
+           NULL,NULL,NULL,NULL,'Watch','11','iPhone',
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 08:00:00',NULL,'imp1');
+        INSERT INTO workout_statistics VALUES
+          ('wh_tri','HKQuantityTypeIdentifierDistanceSwimming',
+           '2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,NULL,NULL,1500.0,'m'),
+          ('wh_tri','HKQuantityTypeIdentifierDistanceCycling',
+           '2024-01-01 06:30:00','2024-01-01 07:30:00',NULL,NULL,NULL,40.0,'km'),
+          ('wh_tri','HKQuantityTypeIdentifierDistanceWalkingRunning',
+           '2024-01-01 07:30:00','2024-01-01 08:00:00',NULL,NULL,NULL,10.0,'km');
+        """
+    )
+    populate_workout_vestigial_columns(conn)
+    row = conn.execute(
+        "SELECT total_distance, total_distance_unit FROM workouts WHERE workout_hash='wh_tri'"
+    ).fetchone()
+    assert row is not None
+    assert row[0] is None
+    assert row[1] is None
+
+
+def test_populate_vestigial_columns_preserves_legacy_values(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
     conn.execute(
         """
         INSERT INTO workouts VALUES
@@ -248,7 +373,7 @@ def test_populate_vestigial_columns_preserves_legacy_values(conn) -> None:  # ty
     assert row[2] == "mi"
 
 
-def test_dedup_then_vestigial_is_idempotent(conn) -> None:  # type: ignore[no-untyped-def]
+def test_dedup_then_vestigial_is_idempotent(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO workouts VALUES
@@ -274,7 +399,7 @@ def test_dedup_then_vestigial_is_idempotent(conn) -> None:  # type: ignore[no-un
     assert row[1] == pytest.approx(3.2)
 
 
-def test_rebuild_daily_stats(conn) -> None:  # type: ignore[no-untyped-def]
+def test_rebuild_daily_stats(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
         INSERT INTO records VALUES
