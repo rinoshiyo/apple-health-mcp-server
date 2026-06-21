@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -69,8 +70,11 @@ def test_get_connection_uses_default_when_not_provided(
     db_path = tmp_path / "data" / "apple-health-mcp" / "health.duckdb"
     assert db_path.exists()
     # We auto-create the default path's app subdir at 0700 because we own it;
-    # a more permissive mode means the chmod tightening regressed.
-    assert (db_path.parent.stat().st_mode & 0o777) == 0o700
+    # a more permissive mode means the chmod tightening regressed. Skip the
+    # POSIX-mode check on real Windows (Path.chmod is ACL-only there and the
+    # mode bits do not reflect what we asked for).
+    if os.name == "posix":
+        assert (db_path.parent.stat().st_mode & 0o777) == 0o700
 
 
 def test_get_connection_creates_parent_dir_without_chmod_on_user_path(tmp_path: Path) -> None:
