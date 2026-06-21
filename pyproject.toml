@@ -75,6 +75,12 @@ select = [
 # typer relies on function-call defaults to declare CLI options; do not flag them as B008.
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
+[tool.ruff.lint.per-file-ignores]
+# Importer test fixtures embed multi-attribute Apple Health XML elements
+# verbatim; wrapping them would change the parser's input and defeat the
+# fixture. Allow long lines in the importer test files only.
+"tests/unit/importers/*.py" = ["E501"]
+
 [tool.ruff.format]
 quote-style = "double"
 
