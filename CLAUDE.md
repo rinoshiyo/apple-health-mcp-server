@@ -9,9 +9,10 @@ Codex, etc.) working on this repository.
 ingests an Apple Health export (`export.xml` + the ECG CSVs and GPX
 route files Apple ships alongside it) into a local DuckDB database
 and exposes 16 read-oriented tools over it. The CLI ships two
-subcommands: `apple-health-mcp import <dir>` and
-`apple-health-mcp serve`. Distribution targets are PyPI (uvx) and
-Claude Desktop DXT bundles. All data stays local; nothing is uploaded.
+subcommands: `apple-health-mcp-server import <dir>` and
+`apple-health-mcp-server serve`. Distribution targets are PyPI (uvx)
+and Claude Desktop DXT bundles. All data stays local; nothing is
+uploaded.
 
 ## 2. Architecture
 
@@ -119,21 +120,27 @@ Done once before the first release tag is pushed.
 
 ### Cutting a release
 
-Pre-flight (run locally before tagging):
+0. **Bump `[project] version`** in `pyproject.toml` to the version you
+   are about to ship, and merge that change to `main` via a PR. The
+   release workflow refuses to publish if the tag and pyproject
+   versions disagree, so this step is load-bearing.
 
-```bash
-uv run pytest --cov-branch --cov-fail-under=100
-uv build
-uvx twine check dist/*
-rm -rf dist/
-```
+1. Pre-flight (run locally before tagging):
 
-Then tag and push:
+   ```bash
+   rm -rf dist/
+   uv run pytest --cov-branch --cov-fail-under=100
+   uv build
+   uvx twine check --strict dist/*
+   ```
 
-```bash
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-```
+2. Tag and push:
 
-GitHub Actions builds the sdist + wheel, verifies metadata with
-`twine check`, and uploads via `pypa/gh-action-pypi-publish@release/v1`.
+   ```bash
+   git tag -a v0.1.0 -m "Release v0.1.0"
+   git push origin v0.1.0
+   ```
+
+GitHub Actions then verifies the tag matches the pyproject version,
+builds the sdist + wheel, runs `twine check --strict`, and uploads
+via `pypa/gh-action-pypi-publish@release/v1`.

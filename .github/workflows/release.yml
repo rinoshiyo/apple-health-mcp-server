@@ -1,22 +1,23 @@
 name: Release
 
-# Push a tag matching `v*` (e.g. `v0.1.0`) to build the wheel + sdist
-# and publish them to PyPI via OIDC Trusted Publishing — no API keys
-# are stored in this repository.
+# Push a tag matching `v<MAJOR>.<MINOR>.<PATCH>` (optionally with a
+# pre-release / build suffix) to build the wheel + sdist and publish
+# them to PyPI via OIDC Trusted Publishing. No API keys are stored in
+# this repository.
 #
-# One-time setup (manual, maintainer only):
-#   https://pypi.org/manage/account/publishing/
-#   PyPI Project name:     apple-health-mcp-server
-#   Owner:                 rinoshiyo
-#   Repository name:       apple-health-mcp-server
-#   Workflow filename:     release.yml
-#   Environment name:      pypi
-# See CLAUDE.md section 8 for the full runbook.
+# One-time setup is documented in CLAUDE.md section 8 (PyPI Project
+# name, GitHub owner / repo / workflow / environment); kept there as
+# the single source of truth so this header can stay narrow.
 
 on:
   push:
     tags:
-      - "v*"
+      # Strict semver-ish pattern. The empty-glob style `v*` matched
+      # mistakes like `v-test` and would trigger a publish on the
+      # first such tag push, permanently burning a version number on
+      # PyPI.
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: read
@@ -38,11 +39,31 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Verify tag matches pyproject version
+        # A tag of `v0.1.1` paired with a pyproject still on `0.1.0`
+        # would silently publish `0.1.0` again (or get rejected by
+        # PyPI's "file already exists" gate), and the tag would point
+        # at a release that never made it to the registry. Fail early.
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(uv run python -c 'import tomllib; print(tomllib.loads(open("pyproject.toml","rb").read().decode())["project"]["version"])')"
+          if [ "$tag_version" != "$project_version" ]; then
+            echo "::error::Tag v$tag_version does not match pyproject [project] version $project_version. Bump pyproject and re-tag."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches pyproject version $project_version."
+
       - name: Build sdist and wheel
         run: uv build
 
-      - name: Verify metadata with twine
-        run: uvx twine check dist/*
+      - name: Verify metadata with twine (strict)
+        # `--strict` upgrades WARN-level findings (e.g. README rendered
+        # as plain text on PyPI because long_description_content_type
+        # is missing) into errors, catching them before upload.
+        run: uvx twine check --strict dist/*
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -56,14 +77,19 @@ jobs:
     name: Publish to PyPI via Trusted Publishing
     needs: build
     runs-on: ubuntu-latest
-    # `pypi` environment must be configured on PyPI as the Trusted
-    # Publisher target; see the comment block at the top of this file.
+    # The `pypi` environment must be configured on PyPI as the Trusted
+    # Publisher target; CLAUDE.md section 8 has the one-time
+    # registration steps.
     environment:
       name: pypi
       url: https://pypi.org/project/apple-health-mcp-server/
     permissions:
-      # OIDC token minting — required by pypa/gh-action-pypi-publish to
-      # exchange GitHub identity for a short-lived PyPI upload token.
+      # Job-level `permissions:` REPLACES the top-level block rather
+      # than merging — restating `contents: read` keeps the publish job
+      # safe if a future edit adds a checkout step. `id-token: write`
+      # is what `pypa/gh-action-pypi-publish` exchanges for the PyPI
+      # upload token via OIDC.
+      contents: read
       id-token: write
     steps:
       - name: Download build artifacts
@@ -74,3 +100,11 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-runs of a partially-successful publish (e.g. the
+          # workflow was re-dispatched after a transient network
+          # failure) would otherwise hard-fail with 400 "file already
+          # exists". `skip-existing` makes the step a no-op when PyPI
+          # already has the artefact, which is the desired idempotent
+          # behaviour for a tag-triggered release.
+          skip-existing: true

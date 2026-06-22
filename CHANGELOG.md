@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **PyPI Trusted Publishing release workflow** (`v*` tag triggers OIDC
-  publish via `pypa/gh-action-pypi-publish`); the v0.1.0 tag is pushed
-  manually by the maintainer after the release branch is merged. See
-  CLAUDE.md §8 for the runbook. (#20)
+- **PyPI Trusted Publishing release workflow.** Pushing a
+  `v<MAJOR>.<MINOR>.<PATCH>` tag builds the sdist and wheel, verifies
+  metadata with `twine check --strict`, and publishes to PyPI via
+  OIDC. The v0.1.0 tag is pushed manually by the maintainer after the
+  release branch is merged. (#20)
 - **Project bootstrap.** `pyproject.toml` targeting Python 3.12+ with
   `uv`, `ruff`, `mypy --strict`, `pytest --cov-branch --cov-fail-under=100`,
   and `pre-commit` wired up. (#1, #2, #3, #4)
