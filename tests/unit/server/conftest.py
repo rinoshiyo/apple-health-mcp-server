@@ -37,7 +37,7 @@ INSERT INTO workouts VALUES
     ('wh1', 'HKWorkoutActivityTypeRunning', 1800.0, 'sec', 5000.0, 'm',
      300.0, 'kcal', 'Apple Watch', '10.0', NULL, NULL,
      TIMESTAMP '2024-01-01 10:00:00', TIMESTAMP '2024-01-01 10:30:00',
-     NULL, 'imp1');
+     'imp1');
 INSERT INTO workout_events VALUES
     ('wh1', 'HKWorkoutEventTypeLap', TIMESTAMP '2024-01-01 10:15:00', NULL, NULL);
 INSERT INTO workout_statistics VALUES

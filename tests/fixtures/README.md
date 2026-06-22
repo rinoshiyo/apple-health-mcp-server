@@ -16,6 +16,11 @@ by the integration smoke tests in `tests/integration/`.
 - **English locale only.** Locale-specific parsing edge cases (Japanese,
   Spanish, etc.) are exercised by inline strings inside the per-importer
   unit tests, not by these on-disk fixtures.
+- **Timestamps carry their UTC offset** (`startDate="2024-06-15 08:00:00 +0000"`,
+  GPX `<time>2024-06-15T10:00:00Z</time>`). DuckDB's `TIMESTAMPTZ` parser
+  normalises both forms to a UTC instant on insert, so the smoke tests can
+  pin the session TZ (typically `UTC`) and assert string-formatted equality
+  without worrying about which OS the test happens to run on.
 
 These rules keep the fixtures safely committable to a public repository.
 

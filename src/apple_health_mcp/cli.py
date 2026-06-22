@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from enum import StrEnum
 from pathlib import Path
 
@@ -44,9 +45,24 @@ def _root(
         "--db",
         help="DuckDB path override (default: XDG_DATA_HOME/apple-health-mcp/health.duckdb).",
     ),
+    tz: str | None = typer.Option(
+        None,
+        "--tz",
+        help=(
+            "Session timezone for rendering TIMESTAMPTZ columns (e.g. 'Asia/Tokyo'). "
+            "Overrides APPLE_HEALTH_TZ. When neither is set, DuckDB renders in the "
+            "operating system's local timezone."
+        ),
+    ),
 ) -> None:
     """Configure logging once and stash global options on the context."""
     configure_logging()
+    # The DB connection layer reads APPLE_HEALTH_TZ when it opens a
+    # connection (see db/connection.py::_apply_session_tz). Promote the
+    # flag into the env so import / serve / any nested caller picks it up
+    # without having to thread it through every function signature.
+    if tz is not None:
+        os.environ["APPLE_HEALTH_TZ"] = tz
     ctx.obj = {"db": db}
 
 

@@ -1,7 +1,7 @@
 """DuckDB schema definitions, deduplication, and derived-column population.
 
-Ported verbatim from the Rust reference implementation (``src/db.rs``) plus
-the additional storage required by the Python port:
+Ported from the Rust reference implementation (``src/db.rs``) with three
+deliberate Python-only changes:
 
 * ``export_metadata`` — root-level ``<HealthData locale="...">`` attribute and
   ``<ExportDate value="...">`` value, keyed by ``import_id``.
@@ -11,8 +11,15 @@ the additional storage required by the Python port:
 * ``workout_routes.device`` — ``<WorkoutRoute device="...">`` attribute that
   the Rust version dropped on the floor.
 
-The audit memory ``project_data_audit_2026_06_21`` documents these gaps and
-their justification.
+Every timestamp column is ``TIMESTAMPTZ`` (UTC instant under the hood with
+session-TZ rendering on read). The Rust port stored XML attributes as naive
+``TIMESTAMP`` holding local wall-clock time and shifted GPX UTC timestamps
+back to local using a per-workout ``start_offset_minutes`` column; that
+workaround is gone — the importers now feed the raw offset/Z-suffixed
+strings straight through to DuckDB's TIMESTAMPTZ parser.
+
+The audit memory ``project_data_audit_2026_06_21`` and the TZ memo
+``project_tz_offset_inconsistency`` document the justification.
 """
 
 from __future__ import annotations
@@ -37,9 +44,9 @@ CREATE TABLE IF NOT EXISTS records (
     source_name     VARCHAR,
     source_version  VARCHAR,
     device          VARCHAR,
-    creation_date   TIMESTAMP,
-    start_date      TIMESTAMP NOT NULL,
-    end_date        TIMESTAMP NOT NULL,
+    creation_date   TIMESTAMPTZ,
+    start_date      TIMESTAMPTZ NOT NULL,
+    end_date        TIMESTAMPTZ NOT NULL,
     import_id       VARCHAR NOT NULL
 );
 
@@ -61,23 +68,16 @@ CREATE TABLE IF NOT EXISTS workouts (
     source_name          VARCHAR,
     source_version       VARCHAR,
     device               VARCHAR,
-    creation_date        TIMESTAMP,
-    start_date           TIMESTAMP NOT NULL,
-    end_date             TIMESTAMP NOT NULL,
-    -- Minutes east of UTC parsed from the workout's `startDate` attribute
-    -- (e.g. 540 for `+0900`, -420 for `-0700`). The XML importer strips the
-    -- offset before storing `start_date`, leaving a naive TIMESTAMP that
-    -- holds local wall-clock time. This column preserves the original offset
-    -- so the GPX importer can shift true-UTC route timestamps onto the same
-    -- local-time basis as the rest of the data.
-    start_offset_minutes INTEGER,
+    creation_date        TIMESTAMPTZ,
+    start_date           TIMESTAMPTZ NOT NULL,
+    end_date             TIMESTAMPTZ NOT NULL,
     import_id            VARCHAR NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workout_events (
     workout_hash    VARCHAR NOT NULL,
     event_type      VARCHAR NOT NULL,
-    date            TIMESTAMP,
+    date            TIMESTAMPTZ,
     duration        DOUBLE,
     duration_unit   VARCHAR
 );
@@ -85,8 +85,8 @@ CREATE TABLE IF NOT EXISTS workout_events (
 CREATE TABLE IF NOT EXISTS workout_statistics (
     workout_hash    VARCHAR NOT NULL,
     stat_type       VARCHAR NOT NULL,
-    start_date      TIMESTAMP,
-    end_date        TIMESTAMP,
+    start_date      TIMESTAMPTZ,
+    end_date        TIMESTAMPTZ,
     average         DOUBLE,
     minimum         DOUBLE,
     maximum         DOUBLE,
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS activity_summaries (
 
 CREATE TABLE IF NOT EXISTS ecg_readings (
     ecg_hash         VARCHAR,
-    recorded_date    TIMESTAMP NOT NULL,
+    recorded_date    TIMESTAMPTZ NOT NULL,
     classification   VARCHAR,
     device           VARCHAR,
     sample_rate_hz   DOUBLE,
@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS route_points (
     latitude      DOUBLE NOT NULL,
     longitude     DOUBLE NOT NULL,
     elevation     DOUBLE,
-    timestamp     TIMESTAMP NOT NULL,
+    timestamp     TIMESTAMPTZ NOT NULL,
     speed         DOUBLE,
     course        DOUBLE,
     h_accuracy    DOUBLE,
@@ -152,9 +152,9 @@ CREATE TABLE IF NOT EXISTS workout_routes (
     source_name     VARCHAR,
     source_version  VARCHAR,
     device          VARCHAR,
-    creation_date   TIMESTAMP,
-    start_date      TIMESTAMP,
-    end_date        TIMESTAMP,
+    creation_date   TIMESTAMPTZ,
+    start_date      TIMESTAMPTZ,
+    end_date        TIMESTAMPTZ,
     import_id       VARCHAR NOT NULL
 );
 
@@ -172,9 +172,9 @@ CREATE TABLE IF NOT EXISTS correlations (
     source_name         VARCHAR,
     source_version      VARCHAR,
     device              VARCHAR,
-    creation_date       TIMESTAMP,
-    start_date          TIMESTAMP NOT NULL,
-    end_date            TIMESTAMP NOT NULL,
+    creation_date       TIMESTAMPTZ,
+    start_date          TIMESTAMPTZ NOT NULL,
+    end_date            TIMESTAMPTZ NOT NULL,
     import_id           VARCHAR NOT NULL
 );
 
@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS correlation_members (
 CREATE TABLE IF NOT EXISTS imports (
     import_id     VARCHAR,
     export_dir    VARCHAR NOT NULL,
-    imported_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    imported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     record_count  BIGINT,
     workout_count BIGINT,
     duration_secs DOUBLE
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS imports (
 -- imports stay distinguishable.
 CREATE TABLE IF NOT EXISTS export_metadata (
     import_id    VARCHAR NOT NULL,
-    export_date  TIMESTAMP,
+    export_date  TIMESTAMPTZ,
     locale       VARCHAR
 );
 

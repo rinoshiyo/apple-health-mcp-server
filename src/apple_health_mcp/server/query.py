@@ -39,7 +39,13 @@ def _coerce(value: object) -> Any:
     if isinstance(value, bool):
         return value
     if isinstance(value, _dt.datetime):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
+        # TIMESTAMPTZ columns surface as tz-aware ``datetime``; isoformat
+        # keeps the offset in the wire payload so a downstream LLM can
+        # render in any zone without consulting the server's session TZ.
+        # Naive datetimes (legacy TIMESTAMP columns the schema no longer
+        # declares; defensive) fall through to the same path and serialise
+        # without an offset suffix.
+        return value.isoformat(sep=" ")
     if isinstance(value, _dt.date):
         return value.strftime("%Y-%m-%d")
     if isinstance(value, _dt.time):

@@ -18,9 +18,6 @@ from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers.xml import (
     ImportStats,
-    _clean_date,
-    _clean_date_opt,
-    _extract_offset_minutes,
     _parse_opt_float,
     import_xml,
 )
@@ -30,6 +27,9 @@ from apple_health_mcp.importers.xml import (
 def conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     c = get_in_memory_connection()
     ensure_schema(c)
+    # Pin the session TZ so TIMESTAMPTZ -> string casts in assertions stay
+    # deterministic regardless of the host's OS local TZ.
+    c.execute("SET TimeZone = 'UTC';")
     yield c
     c.close()
 
@@ -43,23 +43,6 @@ def _write_xml(tmp_path: Path, body: str) -> Path:
 # --- pure-helper tests -------------------------------------------------------
 
 
-def test_clean_date_strips_positive_offset() -> None:
-    assert _clean_date("2024-01-01 12:00:00 +0900") == "2024-01-01 12:00:00"
-
-
-def test_clean_date_strips_negative_offset() -> None:
-    assert _clean_date("2024-01-01 12:00:00 -0500") == "2024-01-01 12:00:00"
-
-
-def test_clean_date_no_offset_passes_through() -> None:
-    assert _clean_date("2024-01-01 12:00:00") == "2024-01-01 12:00:00"
-
-
-def test_clean_date_opt_handles_none() -> None:
-    assert _clean_date_opt(None) is None
-    assert _clean_date_opt("2024-01-01 12:00:00 +0000") == "2024-01-01 12:00:00"
-
-
 def test_parse_opt_float_valid() -> None:
     assert _parse_opt_float("72.5") == 72.5
 
@@ -71,28 +54,6 @@ def test_parse_opt_float_rejects_invalid_and_non_finite(bad: str) -> None:
 
 def test_parse_opt_float_none() -> None:
     assert _parse_opt_float(None) is None
-
-
-def test_extract_offset_minutes_common_offsets() -> None:
-    assert _extract_offset_minutes("2024-01-01 00:00:00 +0900") == 540
-    assert _extract_offset_minutes("2024-01-01 00:00:00 -0700") == -420
-    assert _extract_offset_minutes("2024-01-01 00:00:00 +0000") == 0
-    # Half-hour zones.
-    assert _extract_offset_minutes("2024-01-01 00:00:00 +0530") == 330
-    assert _extract_offset_minutes("2024-01-01 00:00:00 -0345") == -225
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "2024-01-01 00:00:00",  # no offset
-        "2024-01-01 00:00:00 +090",  # too short
-        "2024-01-01 00:00:00 +09:00",  # RFC 3339 form rejected here
-        "2024-01-01 00:00:00 +09ab",  # non-digit body
-    ],
-)
-def test_extract_offset_minutes_rejects_malformed(raw: str) -> None:
-    assert _extract_offset_minutes(raw) is None
 
 
 # --- end-to-end importer tests ----------------------------------------------
@@ -139,8 +100,6 @@ def test_import_xml_minimal_happy_path(conn: duckdb.DuckDBPyConnection, tmp_path
 
     # Map keys: WorkoutRoute file_path -> workout_hash.
     assert "/workout-routes/route_2024-01-01.gpx" in stats.workout_route_map
-    # Offsets are +0000 -> 0 minutes east of UTC.
-    assert all(v == 0 for v in stats.workout_offset_map.values())
 
     # Verify DB rows.
     row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
@@ -149,7 +108,9 @@ def test_import_xml_minimal_happy_path(conn: duckdb.DuckDBPyConnection, tmp_path
     row = conn.execute(
         "SELECT locale, CAST(export_date AS VARCHAR) FROM export_metadata"
     ).fetchone()
-    assert row == ("en_US", "2024-06-01 12:00:00")
+    # Session TZ is UTC (see fixture); DuckDB renders TIMESTAMPTZ with the
+    # ``+00`` suffix once the offset has been normalised to UTC.
+    assert row == ("en_US", "2024-06-01 12:00:00+00")
 
     row = conn.execute("SELECT date_of_birth, biological_sex FROM me_attributes").fetchone()
     assert row == ("1990-01-01", "HKBiologicalSexNotSet")
@@ -261,9 +222,15 @@ def test_import_xml_hrv_metadata_list_samples(
     assert stats.heart_rate_samples == 2
 
 
-def test_import_xml_workout_offset_map_populated(
+def test_import_xml_offset_bearing_workouts_normalise_to_utc(
     conn: duckdb.DuckDBPyConnection, tmp_path: Path
 ) -> None:
+    """``+HHMM``-bearing ``startDate`` values land as their UTC equivalents.
+
+    JST ``04:58:38 +0900`` is ``19:58:38 UTC`` on the previous day; PDT
+    ``07:00:00 -0700`` is ``14:00:00 UTC``. We assert against the session-TZ
+    pinned to UTC (see fixture) so the host TZ never enters the comparison.
+    """
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <HealthData locale="en_US">
  <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2024-06-17 04:58:38 +0900" endDate="2024-06-17 05:28:38 +0900"/>
@@ -271,22 +238,13 @@ def test_import_xml_workout_offset_map_populated(
 </HealthData>"""
     stats = import_xml(conn, _write_xml(tmp_path, xml), "imp_off")
     assert stats.workouts == 2
-    assert len(stats.workout_offset_map) == 2
-    assert set(stats.workout_offset_map.values()) == {540, -420}
-
-
-def test_import_xml_workout_without_offset_skips_map_entry(
-    conn: duckdb.DuckDBPyConnection, tmp_path: Path
-) -> None:
-    xml = """<?xml version="1.0" encoding="UTF-8"?>
-<HealthData locale="en_US">
- <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2024-06-17 04:58:38" endDate="2024-06-17 05:28:38"/>
-</HealthData>"""
-    stats = import_xml(conn, _write_xml(tmp_path, xml), "imp_no_off")
-    assert stats.workouts == 1
-    assert stats.workout_offset_map == {}
-    row = conn.execute("SELECT start_offset_minutes FROM workouts").fetchone()
-    assert row == (None,)
+    rows = conn.execute(
+        "SELECT activity_type, CAST(start_date AS VARCHAR) FROM workouts ORDER BY start_date"
+    ).fetchall()
+    assert rows == [
+        ("HKWorkoutActivityTypeCycling", "2024-03-03 14:00:00+00"),
+        ("HKWorkoutActivityTypeRunning", "2024-06-16 19:58:38+00"),
+    ]
 
 
 def test_import_xml_activity_summary_without_unit_stays_null(
@@ -606,7 +564,7 @@ def test_import_xml_export_date_without_healthdata_inserts_standalone(
         "SELECT locale, CAST(export_date AS VARCHAR) FROM export_metadata WHERE import_id=?",
         ["imp_no_root"],
     ).fetchone()
-    assert row == (None, "2024-06-01 12:00:00")
+    assert row == (None, "2024-06-01 12:00:00+00")
     assert any("without a preceding HealthData" in rec.message for rec in caplog.records)
     monkeypatch.setattr(xml_module._XmlImporter, "_handle_health_data", real_handler)
 

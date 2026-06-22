@@ -8,19 +8,18 @@ since that is the only block we materialize. Each route file joins back to
 the parent workout via the ``workout_route_map`` produced by the XML
 importer.
 
-Time-zone handling: GPX timestamps are true UTC (``...Z``) while the rest
-of the database stores local wall-clock time as naive ``TIMESTAMP``. We
-shift route points by the owning workout's offset (carried in
-``workout_offset_map``) so a route joins cleanly against its workout's
-``start_date``. When the offset is unknown the importer falls back to
-strip-only behavior; the row still lands, but its wall-clock will be UTC.
+Time-zone handling: GPX timestamps are true UTC (``...Z``); we feed them
+straight through to DuckDB's ``TIMESTAMPTZ`` parser, which keeps them as
+UTC instants alongside the offset-bearing strings the XML importer emits.
+The pre-TIMESTAMPTZ implementation had to shift them by the owning
+workout's offset because the rest of the schema was naive ``TIMESTAMP``
+holding wall-clock; that workaround is gone.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -45,64 +44,11 @@ def _strip_ns(tag: str) -> str:
     return tag
 
 
-def clean_timestamp(ts: str) -> str:
-    """Strip TZ info from an ISO 8601 timestamp and use space as separator.
-
-    ``"2020-06-20T16:56:44Z"`` -> ``"2020-06-20 16:56:44"``. Note that this
-    preserves the original UTC instant in the emitted string, which only
-    matches the rest of the database if the rest is also interpreted as
-    UTC. The XML/ECG importers store local wall-clock time; the GPX
-    importer normally calls :func:`shift_utc_to_local` to align with that
-    convention, and this helper is only the fallback when the owning
-    workout's offset is unknown.
-    """
-    s = ts.strip()
-    if s.endswith("Z"):
-        s = s[:-1]
-    if len(s) > 6:
-        tail = s[-6:]
-        if (tail.startswith("+") or tail.startswith("-")) and ":" in tail:
-            s = s[:-6]
-    return s.replace("T", " ")
-
-
-def shift_utc_to_local(ts: str, offset_minutes: int) -> str:
-    """Shift a true-UTC GPX timestamp by ``offset_minutes`` into naive local form.
-
-    ``"2020-06-20T16:56:44Z"`` plus 540 (i.e. ``+09:00``) ->
-    ``"2020-06-21 01:56:44"``. Falls back to :func:`clean_timestamp` when
-    the input cannot be parsed as ISO 8601 so a malformed ``<time>`` element
-    degrades gracefully instead of dropping the point.
-    """
-    trimmed = ts.strip()
-    dt: datetime | None = None
-    # Python 3.11+ understands trailing 'Z' on fromisoformat.
-    for candidate in (trimmed, trimmed.replace(" ", "T")):
-        try:
-            parsed = datetime.fromisoformat(candidate)
-        except ValueError:
-            continue
-        if parsed.tzinfo is not None:
-            offset = parsed.utcoffset()
-            # tzinfo is not None implies utcoffset() is not None; assert to
-            # narrow the Optional for mypy strict without a type: ignore.
-            assert offset is not None
-            dt = parsed.replace(tzinfo=None) - offset
-        else:
-            dt = parsed
-        break
-    if dt is None:
-        return clean_timestamp(ts)
-    shifted = dt + timedelta(minutes=offset_minutes)
-    return shifted.strftime("%Y-%m-%d %H:%M:%S")
-
-
 def import_single_gpx(
     conn: duckdb.DuckDBPyConnection,
     path: Path,
     import_id: str,
     workout_hash: str | None,
-    workout_offset_minutes: int | None,
 ) -> int:
     """Parse one GPX file and insert its track points; return the count."""
     try:
@@ -160,10 +106,6 @@ def import_single_gpx(
                             point_hash = compute_hash(
                                 [wh, timestamp, _rust_float_repr(lat), _rust_float_repr(lon)]
                             )
-                            if workout_offset_minutes is not None:
-                                clean_ts = shift_utc_to_local(timestamp, workout_offset_minutes)
-                            else:
-                                clean_ts = clean_timestamp(timestamp)
                             rows.append(
                                 (
                                     point_hash,
@@ -171,7 +113,7 @@ def import_single_gpx(
                                     lat,
                                     lon,
                                     ele,
-                                    clean_ts,
+                                    timestamp,
                                     speed,
                                     course,
                                     h_acc,
@@ -228,7 +170,6 @@ def import_gpx_files(
     routes_dir: Path,
     import_id: str,
     workout_route_map: dict[str, str],
-    workout_offset_map: dict[str, int],
 ) -> int:
     """Import every ``*.gpx`` under ``routes_dir``; return total point count.
 
@@ -249,10 +190,7 @@ def import_gpx_files(
         # "/workout-routes/route_2020-05-21_1.14pm.gpx".
         route_key = f"/workout-routes/{path.name}"
         workout_hash = workout_route_map.get(route_key)
-        workout_offset: int | None = None
-        if workout_hash is not None:
-            workout_offset = workout_offset_map.get(workout_hash)
-        else:
+        if workout_hash is None:
             # The GPX file exists on disk but no Workout in the XML registered
             # this file path. Common causes: case-mismatched extraction on
             # case-insensitive filesystems, a Workout whose XML start handler
@@ -267,7 +205,7 @@ def import_gpx_files(
                 route_key,
             )
         try:
-            total += import_single_gpx(conn, path, import_id, workout_hash, workout_offset)
+            total += import_single_gpx(conn, path, import_id, workout_hash)
         except HealthImportError as exc:
             _logger.warning("Failed to import GPX file %s: %s", path, exc)
         except OSError as exc:

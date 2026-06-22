@@ -155,10 +155,10 @@ def test_deduplicate_extra_tables(conn: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO workouts VALUES
           ('wh1','HKWorkoutActivityTypeRunning',1800,'s',
            NULL,NULL,NULL,NULL,'Watch','11','iPhone',
-           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,'imp1'),
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00','imp1'),
           ('wh1','HKWorkoutActivityTypeRunning',1800,'s',
            NULL,NULL,NULL,NULL,'Watch','11','iPhone',
-           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,'imp1');
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00','imp1');
         INSERT INTO activity_summaries VALUES
           ('2024-01-01',100,500,'kcal',30,30,30,30,12,12,'imp1'),
           ('2024-01-01',100,500,'kcal',30,30,30,30,12,12,'imp1');
@@ -296,7 +296,7 @@ def test_populate_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO workouts VALUES
           ('wh_run','HKWorkoutActivityTypeRunning',1800,'s',
            NULL,NULL,NULL,NULL,'Watch','11','iPhone',
-           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,'imp1');
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00','imp1');
         INSERT INTO workout_statistics VALUES
           ('wh_run','HKQuantityTypeIdentifierActiveEnergyBurned',
            '2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,NULL,NULL,240.5,'kcal'),
@@ -328,7 +328,7 @@ def test_populate_vestigial_columns_skips_mixed_unit_distance(
         INSERT INTO workouts VALUES
           ('wh_tri','HKWorkoutActivityTypeSwimBikeRun',7200,'s',
            NULL,NULL,NULL,NULL,'Watch','11','iPhone',
-           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 08:00:00',NULL,'imp1');
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 08:00:00','imp1');
         INSERT INTO workout_statistics VALUES
           ('wh_tri','HKQuantityTypeIdentifierDistanceSwimming',
            '2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,NULL,NULL,1500.0,'m'),
@@ -355,7 +355,7 @@ def test_populate_vestigial_columns_preserves_legacy_values(
         INSERT INTO workouts VALUES
           ('wh_legacy','HKWorkoutActivityTypeRunning',1800,'s',
            5.0,'mi',300.0,'kcal','Watch','10','iPhone',
-           '2020-01-01 06:00:00','2020-01-01 06:00:00','2020-01-01 06:30:00',NULL,'imp1');
+           '2020-01-01 06:00:00','2020-01-01 06:00:00','2020-01-01 06:30:00','imp1');
         INSERT INTO workout_statistics VALUES
           ('wh_legacy','HKQuantityTypeIdentifierActiveEnergyBurned',
            '2020-01-01 06:00:00','2020-01-01 06:30:00',NULL,NULL,NULL,999.0,'kcal'),
@@ -379,7 +379,7 @@ def test_dedup_then_vestigial_is_idempotent(conn: duckdb.DuckDBPyConnection) -> 
         INSERT INTO workouts VALUES
           ('wh_run','HKWorkoutActivityTypeRunning',1800,'s',
            NULL,NULL,NULL,NULL,'Watch','11','iPhone',
-           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,'imp1');
+           '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:30:00','imp1');
         INSERT INTO workout_statistics VALUES
           ('wh_run','HKQuantityTypeIdentifierActiveEnergyBurned',
            '2024-01-01 06:00:00','2024-01-01 06:30:00',NULL,NULL,NULL,240.5,'kcal'),
