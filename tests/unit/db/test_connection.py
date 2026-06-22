@@ -147,3 +147,30 @@ def test_get_in_memory_connection() -> None:
         assert row[0] == 1
     finally:
         conn.close()
+
+
+def test_get_in_memory_connection_applies_session_tz_from_env(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """APPLE_HEALTH_TZ flows through to ``SET TimeZone`` on the new connection."""
+    monkeypatch.setenv("APPLE_HEALTH_TZ", "Asia/Tokyo")
+    conn = get_in_memory_connection()
+    try:
+        row = conn.execute("SELECT current_setting('TimeZone')").fetchone()
+        assert row is not None
+        assert row[0] == "Asia/Tokyo"
+    finally:
+        conn.close()
+
+
+def test_get_in_memory_connection_rejects_invalid_session_tz(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Garbage in the env var is rejected before the SET TimeZone interpolation."""
+    from apple_health_mcp.exceptions import ConfigError
+
+    # A semicolon would be a SQL-injection vector if the connection layer
+    # interpolated the env value directly; the validation regex rejects it.
+    monkeypatch.setenv("APPLE_HEALTH_TZ", "Asia/Tokyo'; DROP TABLE x;--")
+    with pytest.raises(ConfigError, match="invalid APPLE_HEALTH_TZ"):
+        get_in_memory_connection()

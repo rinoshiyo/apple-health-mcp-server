@@ -19,6 +19,7 @@ import chardet
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._hash import compute_hash
+from apple_health_mcp.importers._tz import normalize_apple_offset
 
 if TYPE_CHECKING:
     import duckdb
@@ -141,15 +142,6 @@ def _parse_sample_rate(raw: str) -> float | None:
         return None
 
 
-def _strip_tz_suffix(raw: str) -> str:
-    """Strip the trailing ``" +OOOO"`` / ``" -OOOO"`` suffix from a date."""
-    for marker in (" +", " -"):
-        pos = raw.rfind(marker)
-        if pos != -1:
-            return raw[:pos]
-    return raw
-
-
 _CHARDET_SNIFF_BYTES = 4096
 
 
@@ -209,7 +201,7 @@ def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: st
             continue
         raw = _match_header(trimmed, _RECORDED_DATE_LABELS)
         if raw is not None:
-            recorded_date = _strip_tz_suffix(raw)
+            recorded_date = normalize_apple_offset(raw)
             continue
         raw = _match_header(trimmed, _CLASSIFICATION_LABELS)
         if raw is not None:

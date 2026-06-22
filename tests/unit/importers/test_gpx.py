@@ -1,7 +1,9 @@
 """Tests for importers.gpx.
 
 Fixtures use synthetic coordinates (San Francisco / Tokyo) and timestamps;
-no real movement data is replayed here.
+no real movement data is replayed here. The connection fixture pins the
+session timezone to UTC so timestamp assertions stay stable across the
+CI matrix's three operating systems.
 """
 
 from __future__ import annotations
@@ -16,10 +18,8 @@ from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers.gpx import (
     _strip_ns,
-    clean_timestamp,
     import_gpx_files,
     import_single_gpx,
-    shift_utc_to_local,
 )
 
 
@@ -27,6 +27,9 @@ from apple_health_mcp.importers.gpx import (
 def conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     c = get_in_memory_connection()
     ensure_schema(c)
+    # Pin the session TZ so TIMESTAMPTZ -> string casts are deterministic
+    # regardless of the host's OS local TZ.
+    c.execute("SET TimeZone = 'UTC';")
     yield c
     c.close()
 
@@ -43,47 +46,6 @@ def _write_gpx(tmp_path: Path, name: str, body: str) -> Path:
 def test_strip_ns_with_and_without_namespace() -> None:
     assert _strip_ns("{http://example}foo") == "foo"
     assert _strip_ns("foo") == "foo"
-
-
-def test_clean_timestamp_z_suffix() -> None:
-    assert clean_timestamp("2020-06-20T16:56:44Z") == "2020-06-20 16:56:44"
-
-
-def test_clean_timestamp_positive_offset() -> None:
-    assert clean_timestamp("2020-06-20T16:56:44+00:00") == "2020-06-20 16:56:44"
-
-
-def test_clean_timestamp_negative_offset() -> None:
-    assert clean_timestamp("2020-06-20T16:56:44-05:00") == "2020-06-20 16:56:44"
-
-
-def test_clean_timestamp_short_string_passthrough() -> None:
-    assert clean_timestamp("12:00") == "12:00"
-
-
-def test_clean_timestamp_no_tz_just_replaces_t() -> None:
-    assert clean_timestamp("2020-06-20T16:56:44") == "2020-06-20 16:56:44"
-
-
-def test_shift_utc_to_local_jst() -> None:
-    assert shift_utc_to_local("2020-06-20T16:56:44Z", 540) == "2020-06-21 01:56:44"
-
-
-def test_shift_utc_to_local_pst() -> None:
-    assert shift_utc_to_local("2024-03-03T15:00:00Z", -480) == "2024-03-03 07:00:00"
-
-
-def test_shift_utc_to_local_explicit_offset_in_input() -> None:
-    assert shift_utc_to_local("2024-03-03T15:00:00+00:00", 540) == "2024-03-04 00:00:00"
-
-
-def test_shift_utc_to_local_unparseable_falls_back() -> None:
-    assert shift_utc_to_local("garbage", 540) == "garbage"
-
-
-def test_shift_utc_to_local_accepts_space_separator() -> None:
-    # Some GPX writers emit "YYYY-MM-DD HH:MM:SS" instead of with 'T'.
-    assert shift_utc_to_local("2024-01-01 00:00:00", 60) == "2024-01-01 01:00:00"
 
 
 # --- end-to-end importer tests ----------------------------------------------
@@ -114,7 +76,7 @@ _MINIMAL_GPX = """<?xml version="1.0" encoding="UTF-8"?>
 
 def test_import_single_gpx_minimal(conn: duckdb.DuckDBPyConnection, tmp_path: Path) -> None:
     path = _write_gpx(tmp_path, "route.gpx", _MINIMAL_GPX)
-    count = import_single_gpx(conn, path, "imp", "wh_1", None)
+    count = import_single_gpx(conn, path, "imp", "wh_1")
     assert count == 2
     row = conn.execute("SELECT COUNT(*) FROM route_points").fetchone()
     assert row is not None and int(row[0]) == 2
@@ -124,9 +86,10 @@ def test_import_single_gpx_minimal(conn: duckdb.DuckDBPyConnection, tmp_path: Pa
     assert row == ("wh_1", 3.5, 180.0, 5.0, 3.0)
 
 
-def test_import_single_gpx_shifts_by_workout_offset(
+def test_import_single_gpx_preserves_utc_instant(
     conn: duckdb.DuckDBPyConnection, tmp_path: Path
 ) -> None:
+    """A ``Z``-suffixed GPX timestamp lands as a true UTC instant in TIMESTAMPTZ."""
     gpx = """<?xml version="1.0" encoding="UTF-8"?>
 <gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">
   <trk><trkseg>
@@ -137,27 +100,10 @@ def test_import_single_gpx_shifts_by_workout_offset(
   </trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "jst.gpx", gpx)
-    import_single_gpx(conn, path, "imp", "wh_jst", 540)
+    import_single_gpx(conn, path, "imp", "wh_jst")
+    # Session TZ is UTC (see fixture) so CAST renders as the UTC instant.
     ts = conn.execute("SELECT CAST(timestamp AS VARCHAR) FROM route_points").fetchone()
-    assert ts == ("2024-06-17 13:58:39",)
-
-
-def test_import_single_gpx_without_offset_uses_legacy_strip(
-    conn: duckdb.DuckDBPyConnection, tmp_path: Path
-) -> None:
-    gpx = """<?xml version="1.0" encoding="UTF-8"?>
-<gpx xmlns="http://www.topografix.com/GPX/1/1" version="1.1">
-  <trk><trkseg>
-    <trkpt lat="35.0" lon="139.0">
-      <ele>10.0</ele>
-      <time>2024-06-17T04:58:39Z</time>
-    </trkpt>
-  </trkseg></trk>
-</gpx>"""
-    path = _write_gpx(tmp_path, "orphan.gpx", gpx)
-    import_single_gpx(conn, path, "imp", None, None)
-    ts = conn.execute("SELECT CAST(timestamp AS VARCHAR) FROM route_points").fetchone()
-    assert ts == ("2024-06-17 04:58:39",)
+    assert ts == ("2024-06-17 04:58:39+00",)
 
 
 def test_import_single_gpx_skips_trkpt_missing_required(
@@ -174,7 +120,7 @@ def test_import_single_gpx_skips_trkpt_missing_required(
   </trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "partial.gpx", gpx)
-    count = import_single_gpx(conn, path, "imp", "wh_p", None)
+    count = import_single_gpx(conn, path, "imp", "wh_p")
     assert count == 1
 
 
@@ -192,7 +138,7 @@ def test_import_single_gpx_invalid_numeric_falls_back_to_none(
   </trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "bad_numeric.gpx", gpx)
-    import_single_gpx(conn, path, "imp", "wh_b", None)
+    import_single_gpx(conn, path, "imp", "wh_b")
     row = conn.execute("SELECT elevation, speed FROM route_points").fetchone()
     assert row == (None, None)
 
@@ -201,7 +147,7 @@ def test_import_single_gpx_missing_file_raises(
     conn: duckdb.DuckDBPyConnection, tmp_path: Path
 ) -> None:
     with pytest.raises(HealthImportError, match="failed to open"):
-        import_single_gpx(conn, tmp_path / "nope.gpx", "imp", None, None)
+        import_single_gpx(conn, tmp_path / "nope.gpx", "imp", None)
 
 
 def test_import_single_gpx_unrecoverable_syntax_error(
@@ -224,11 +170,11 @@ def test_import_single_gpx_unrecoverable_syntax_error(
     monkeypatch.setattr(gpx_module.etree, "iterparse", lambda *_a, **_kw: _Boom())
     path = _write_gpx(tmp_path, "ok.gpx", _MINIMAL_GPX)
     with pytest.raises(HealthImportError, match="unrecoverable GPX"):
-        import_single_gpx(conn, path, "imp", None, None)
+        import_single_gpx(conn, path, "imp", None)
 
 
 def test_import_gpx_files_missing_dir(conn: duckdb.DuckDBPyConnection, tmp_path: Path) -> None:
-    count = import_gpx_files(conn, tmp_path / "missing", "imp", {}, {})
+    count = import_gpx_files(conn, tmp_path / "missing", "imp", {})
     assert count == 0
 
 
@@ -240,8 +186,7 @@ def test_import_gpx_files_routes_files_to_workout(
     (d / "route_2024-01-01.gpx").write_text(_MINIMAL_GPX, encoding="utf-8")
     (d / "irrelevant.txt").write_text("ignored", encoding="utf-8")
     route_map = {"/workout-routes/route_2024-01-01.gpx": "wh_mapped"}
-    offset_map = {"wh_mapped": 60}
-    total = import_gpx_files(conn, d, "imp", route_map, offset_map)
+    total = import_gpx_files(conn, d, "imp", route_map)
     assert total == 2
     row = conn.execute("SELECT DISTINCT workout_hash FROM route_points").fetchone()
     assert row == ("wh_mapped",)
@@ -268,15 +213,14 @@ def test_import_gpx_files_handles_per_file_error(
         path: Path,
         import_id: str,
         workout_hash: str | None,
-        workout_offset: int | None,
     ) -> int:
         state["n"] += 1
         if state["n"] == 1:
             raise HealthImportError("boom")
-        return real(conn, path, import_id, workout_hash, workout_offset)
+        return real(conn, path, import_id, workout_hash)
 
     monkeypatch.setattr(gpx_module, "import_single_gpx", flaky)
-    total = import_gpx_files(conn, d, "imp", {}, {})
+    total = import_gpx_files(conn, d, "imp", {})
     # Two files; one raised so only the second contributed 2 points.
     assert total == 2
     assert any("Failed to import GPX" in rec.message for rec in caplog.records)
@@ -291,7 +235,7 @@ def test_import_single_gpx_empty_file_returns_zero(
   <trk><trkseg></trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "empty.gpx", gpx)
-    count = import_single_gpx(conn, path, "imp", None, None)
+    count = import_single_gpx(conn, path, "imp", None)
     assert count == 0
 
 
@@ -309,7 +253,7 @@ def test_import_single_gpx_unknown_child_inside_trkpt_ignored(
   </trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "extn.gpx", gpx)
-    count = import_single_gpx(conn, path, "imp", "wh_e", None)
+    count = import_single_gpx(conn, path, "imp", "wh_e")
     assert count == 1
 
 
@@ -321,8 +265,8 @@ def test_import_gpx_files_warns_on_unmatched_workout(
     d = tmp_path / "routes"
     d.mkdir()
     (d / "orphan.gpx").write_text(_MINIMAL_GPX, encoding="utf-8")
-    # Empty maps → no match for the file.
-    total = import_gpx_files(conn, d, "imp_orphan", {}, {})
+    # Empty map → no match for the file.
+    total = import_gpx_files(conn, d, "imp_orphan", {})
     assert total == 2
     assert any("has no matching workout" in rec.message for rec in caplog.records)
     assert any("Imported 1 GPX file(s) with no matching" in rec.message for rec in caplog.records)
@@ -359,7 +303,7 @@ def test_import_single_gpx_skips_non_finite_elevation(
   </trkseg></trk>
 </gpx>"""
     path = _write_gpx(tmp_path, "nan.gpx", gpx)
-    count = import_single_gpx(conn, path, "imp_nan", "wh", None)
+    count = import_single_gpx(conn, path, "imp_nan", "wh")
     assert count == 1
     row = conn.execute("SELECT elevation FROM route_points").fetchone()
     assert row is not None
@@ -382,6 +326,6 @@ def test_import_gpx_files_oserror_in_loop_is_logged(
         raise OSError("disk failure")
 
     monkeypatch.setattr(gpx_module, "import_single_gpx", boom)
-    total = import_gpx_files(conn, d, "imp", {}, {})
+    total = import_gpx_files(conn, d, "imp", {})
     assert total == 0
     assert any("Failed to read GPX" in rec.message for rec in caplog.records)

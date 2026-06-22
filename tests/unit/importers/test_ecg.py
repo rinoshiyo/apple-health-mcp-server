@@ -13,11 +13,11 @@ import pytest
 
 from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import HealthImportError
+from apple_health_mcp.importers._tz import normalize_apple_offset
 from apple_health_mcp.importers.ecg import (
     _match_header,
     _parse_sample_rate,
     _strip_bom,
-    _strip_tz_suffix,
     import_ecg_files,
     import_single_ecg,
 )
@@ -98,10 +98,16 @@ def test_strip_bom_handles_both_cases() -> None:
     assert _strip_bom("﻿hello") == "hello"
 
 
-def test_strip_tz_suffix_positive_and_negative() -> None:
-    assert _strip_tz_suffix("2024-01-01 10:00:00 +0900") == "2024-01-01 10:00:00"
-    assert _strip_tz_suffix("2024-01-01 10:00:00 -0500") == "2024-01-01 10:00:00"
-    assert _strip_tz_suffix("2024-01-01 10:00:00") == "2024-01-01 10:00:00"
+def test_ecg_offset_normalisation_preserves_utc_instant() -> None:
+    """ECG and XML importers share ``normalize_apple_offset`` so a JST-tagged
+    ECG row and the same JST-tagged Workout row land as the same UTC
+    instant in TIMESTAMPTZ columns. Stripping the offset (the pre-PR
+    behaviour) would silently re-interpret the wall-clock under the
+    session TZ and break this invariant."""
+    assert normalize_apple_offset("2024-01-01 10:00:00 +0900") == "2024-01-01 10:00:00+09:00"
+    assert normalize_apple_offset("2024-01-01 10:00:00 -0500") == "2024-01-01 10:00:00-05:00"
+    # Naive timestamps pass through unchanged for the DuckDB session-TZ path.
+    assert normalize_apple_offset("2024-01-01 10:00:00") == "2024-01-01 10:00:00"
 
 
 def test_parse_sample_rate_english_and_japanese() -> None:

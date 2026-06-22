@@ -37,7 +37,7 @@ INSERT INTO workouts VALUES
     ('wh1', 'HKWorkoutActivityTypeRunning', 1800.0, 'sec', 5000.0, 'm',
      300.0, 'kcal', 'Apple Watch', '10.0', NULL, NULL,
      TIMESTAMP '2024-01-01 10:00:00', TIMESTAMP '2024-01-01 10:30:00',
-     NULL, 'imp1');
+     'imp1');
 INSERT INTO workout_events VALUES
     ('wh1', 'HKWorkoutEventTypeLap', TIMESTAMP '2024-01-01 10:15:00', NULL, NULL);
 INSERT INTO workout_statistics VALUES
@@ -101,6 +101,12 @@ def seeded_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection populated with synthetic Apple Health rows."""
     conn = get_in_memory_connection()
     ensure_schema(conn)
+    # Pin the session TZ so naive TIMESTAMP seed literals land at the
+    # same UTC instant regardless of the host OS local TZ. The seeds
+    # below intentionally use bare ``TIMESTAMP '...'`` literals because
+    # they read as "Apple Watch / iPhone wall-clock"; pinning UTC here
+    # keeps that mental model deterministic across the CI matrix.
+    conn.execute("SET TimeZone = 'UTC';")
     conn.execute(_SEED_SQL)
     rebuild_daily_stats(conn)
     yield conn
@@ -112,6 +118,7 @@ def empty_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection with schema only -- no rows."""
     conn = get_in_memory_connection()
     ensure_schema(conn)
+    conn.execute("SET TimeZone = 'UTC';")
     rebuild_daily_stats(conn)
     yield conn
     conn.close()

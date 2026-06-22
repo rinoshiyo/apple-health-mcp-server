@@ -134,3 +134,18 @@ def test_main_entry_point_invokes_app(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as excinfo:
         cli.main()
     assert excinfo.value.code == 0
+
+
+def test_tz_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--tz`` populates APPLE_HEALTH_TZ so the connection layer picks it up."""
+    import os as _os
+
+    monkeypatch.delenv("APPLE_HEALTH_TZ", raising=False)
+    export_dir = _materialise_export(tmp_path)
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(
+        cli.app,
+        ["--db", str(db), "--tz", "Asia/Tokyo", "import", str(export_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert _os.environ.get("APPLE_HEALTH_TZ") == "Asia/Tokyo"

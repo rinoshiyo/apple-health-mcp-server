@@ -29,6 +29,10 @@ from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._hash import compute_hash
+from apple_health_mcp.importers._tz import (
+    normalize_apple_offset,
+    normalize_apple_offset_opt,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -53,14 +57,12 @@ _STATE_OF_MIND_RECORD_TYPE = "HKCategoryTypeIdentifierStateOfMind"
 
 @dataclass
 class ImportStats:
-    """Counters and lookup maps returned by :func:`import_xml`.
+    """Counters and lookup map returned by :func:`import_xml`.
 
-    The two maps feed the GPX importer: ``workout_route_map`` keys the route
-    file path emitted by Apple (verbatim, including the ``/workout-routes/``
-    prefix) to the owning workout's hash, and ``workout_offset_map`` carries
-    each workout's ``startDate`` UTC offset in minutes east of UTC so GPX's
-    true-UTC timestamps can be aligned with the rest of the local-time
-    naive-TIMESTAMP columns.
+    ``workout_route_map`` keys the route file path emitted by Apple
+    (verbatim, including the ``/workout-routes/`` prefix) to the owning
+    workout's hash so the GPX importer can attach each route file's points
+    to the correct workout.
     """
 
     records: int = 0
@@ -80,7 +82,6 @@ class ImportStats:
     export_metadata_rows: int = 0
     state_of_mind_rows: int = 0
     workout_route_map: dict[str, str] = field(default_factory=dict)
-    workout_offset_map: dict[str, int] = field(default_factory=dict)
 
 
 # --- attribute helpers -------------------------------------------------------
@@ -104,50 +105,12 @@ def _parse_opt_float(raw: str | None) -> float | None:
     return value
 
 
-def _clean_date(raw: str) -> str:
-    """Strip the trailing ``" +HHMM"`` / ``" -HHMM"`` offset from an Apple date.
-
-    Apple emits ``"YYYY-MM-DD HH:MM:SS +OOOO"`` where the time half is
-    already the local wall-clock of the recording device. Drop the suffix so
-    the result fits a naive DuckDB ``TIMESTAMP``; pair with
-    :func:`_extract_offset_minutes` to recover the dropped offset.
-    """
-    pos = raw.rfind(" +")
-    if pos == -1:
-        pos = raw.rfind(" -")
-    if pos == -1:
-        return raw
-    return raw[:pos]
-
-
-def _clean_date_opt(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    return _clean_date(raw)
-
-
-def _extract_offset_minutes(raw: str) -> int | None:
-    """Parse minutes east of UTC from an Apple date string.
-
-    ``"...  +0900"`` -> ``540``; ``"...  -0700"`` -> ``-420``. Returns
-    ``None`` when the suffix is absent or malformed. Deliberately rejects
-    RFC 3339 ``+HH:MM`` form -- that lives in GPX, not the XML payload.
-    """
-    pos = raw.rfind(" +")
-    sign = 1
-    if pos == -1:
-        pos = raw.rfind(" -")
-        sign = -1
-    if pos == -1:
-        return None
-    body = raw[pos + 2 :]
-    # Reject non-ASCII digit characters (Arabic-Indic, full-width, etc.)
-    # that body.isdigit() alone would accept and then choke on in int().
-    if len(body) != 4 or not body.isascii() or not body.isdigit():
-        return None
-    hours = int(body[:2])
-    mins = int(body[2:])
-    return sign * (hours * 60 + mins)
+# XML date attributes go through the shared ``importers/_tz.py`` helpers
+# so the ECG importer applies the identical normalisation — a JST row from
+# the XML feed and the same JST row from an ECG CSV must land as the same
+# UTC instant in TIMESTAMPTZ columns.
+_clean_date = normalize_apple_offset
+_clean_date_opt = normalize_apple_offset_opt
 
 
 # --- importer ----------------------------------------------------------------
@@ -189,7 +152,6 @@ class _XmlImporter:
         # so a malformed mid-workout abort never leaks orphan children).
         self._current_workout: tuple[object, ...] | None = None
         self._current_workout_hash: str | None = None
-        self._current_workout_offset: int | None = None
         self._current_workout_events: list[tuple[object, ...]] = []
         self._current_workout_stats: list[tuple[object, ...]] = []
         self._current_workout_metadata: list[tuple[object, ...]] = []
@@ -508,9 +470,7 @@ class _XmlImporter:
         self._in_workout = True
         activity_type = elem.get("workoutActivityType", "")
         source_name = elem.get("sourceName", "")
-        start_date_raw = elem.get("startDate", "")
-        start_date = _clean_date(start_date_raw)
-        start_offset_minutes = _extract_offset_minutes(start_date_raw)
+        start_date = _clean_date(elem.get("startDate", ""))
         end_date = _clean_date(elem.get("endDate", ""))
         duration_str = elem.get("duration")
         duration = _parse_opt_float(duration_str)
@@ -519,7 +479,6 @@ class _XmlImporter:
             [activity_type, source_name, start_date, end_date, duration_str or ""]
         )
         self._current_workout_hash = workout_hash
-        self._current_workout_offset = start_offset_minutes
         self._current_workout = (
             workout_hash,
             activity_type,
@@ -535,7 +494,6 @@ class _XmlImporter:
             _clean_date_opt(elem.get("creationDate")),
             start_date,
             end_date,
-            start_offset_minutes,
             self._import_id,
         )
         self._current_workout_events.clear()
@@ -775,14 +733,10 @@ class _XmlImporter:
         workout = self._current_workout
         self._current_workout = None
         workout_hash = self._current_workout_hash
-        offset = self._current_workout_offset
         self._current_workout_hash = None
-        self._current_workout_offset = None
         self._in_workout = False
         if workout is None or workout_hash is None:  # pragma: no cover - defensive
             return
-        if offset is not None:
-            self._stats.workout_offset_map[workout_hash] = offset
         self._workouts.append(workout)
         self._stats.workouts += 1
         for ev in self._current_workout_events:
@@ -830,7 +784,7 @@ class _XmlImporter:
         if not self._workouts:
             return
         self._conn.executemany(
-            "INSERT INTO workouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO workouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             self._workouts,
         )
         self._workouts.clear()

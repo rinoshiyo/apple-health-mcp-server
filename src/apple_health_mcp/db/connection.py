@@ -15,18 +15,43 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
 import duckdb
 
-from apple_health_mcp.exceptions import DatabaseError
+from apple_health_mcp.exceptions import ConfigError, DatabaseError
 
 _logger = logging.getLogger(__name__)
 
 _APP_DIR_NAME = "apple-health-mcp"
 _DB_FILE_NAME = "health.duckdb"
 _DEFAULT_THREADS = 4
+_TZ_ENV_VAR = "APPLE_HEALTH_TZ"
+# IANA TZ names are alphanumerics plus '/', '_', '+', '-'. DuckDB's
+# `SET TimeZone = '...'` cannot be parameterised, so we validate against
+# this whitelist before interpolating to keep the surface free of SQL
+# injection even when the value comes from an env var.
+_TZ_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-/]*$")
+
+
+def _apply_session_tz(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply ``APPLE_HEALTH_TZ`` to the connection's session TZ when set.
+
+    When the env var is empty/unset DuckDB keeps its own default (OS local
+    TZ), which is what we want for the common single-machine case. The
+    override is for users on globally-mobile or DST-active data who need
+    a stable rendering TZ across imports.
+    """
+    tz = os.environ.get(_TZ_ENV_VAR, "").strip()
+    if not tz:
+        return
+    if not _TZ_NAME_RE.fullmatch(tz):
+        raise ConfigError(
+            f"invalid {_TZ_ENV_VAR}={tz!r}: expected an IANA timezone like 'Asia/Tokyo'"
+        )
+    conn.execute(f"SET TimeZone = '{tz}';")
 
 
 def default_db_path() -> Path:
@@ -89,6 +114,7 @@ def get_connection(
     conn = duckdb.connect(str(resolved), read_only=read_only)
     if not read_only:
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+    _apply_session_tz(conn)
     return conn
 
 
@@ -100,4 +126,5 @@ def get_in_memory_connection() -> duckdb.DuckDBPyConnection:
     """
     conn = duckdb.connect(":memory:")
     conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+    _apply_session_tz(conn)
     return conn

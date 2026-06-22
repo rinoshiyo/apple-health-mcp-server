@@ -1,10 +1,10 @@
 """Top-level pipeline that runs XML, ECG, GPX importers in order.
 
-Mirrors the Rust ``import::run_import``: parse ``export.xml`` first because
-its scan produces the route map and workout-offset map the GPX phase
-needs, then ECG (independent), then GPX (depends on the XML output), then
-the dedupe / backfill / daily-stats finalize phase. Each phase logs at
-INFO level for human-readable progress.
+Mirrors the Rust ``import::run_import``: parse ``export.xml`` first
+because its scan produces the route map the GPX phase needs, then ECG
+(independent), then GPX (depends on the XML output), then the dedupe /
+backfill / daily-stats finalize phase. Each phase logs at INFO level for
+human-readable progress.
 """
 
 from __future__ import annotations
@@ -76,7 +76,6 @@ def run_import(
             export_dir / "workout-routes",
             actual_import_id,
             stats.workout_route_map,
-            stats.workout_offset_map,
         )
 
         _logger.info("Phase 4: Finalize (dedupe, backfill, daily stats)")

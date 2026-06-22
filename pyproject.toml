@@ -27,6 +27,11 @@ dependencies = [
     "chardet>=5.0",
     "typer>=0.12",
     "sqlglot>=25.0",
+    # DuckDB's Python binding lazily imports pytz when materialising a
+    # TIMESTAMPTZ value into a tz-aware ``datetime``. zoneinfo would be
+    # the obvious stdlib choice but DuckDB has not migrated; declare the
+    # transitive dependency explicitly so a fresh `uv sync` succeeds.
+    "pytz>=2024.1",
 ]
 
 [project.scripts]
