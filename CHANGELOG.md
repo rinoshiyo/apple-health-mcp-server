@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-23
+
 ### Changed
 
 - **`apple-health-mcp-server import` is dramatically faster** for real
@@ -14,16 +16,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through DuckDB's `COPY FROM CSV` (via a per-batch tempfile) instead
   of `executemany("INSERT INTO ... VALUES (?, ...)")`. Measured throughput
   on a synthetic in-memory benchmark: ~325× speedup (~300 rows/s →
-  ~100 000 rows/s); on the maintainer's real ~1.2 GB `export.xml`, an
-  import that did not finish in 20 minutes under v0.1.2 now completes
-  in well under a minute. DuckDB's Python binding does not expose the
-  columnar Appender API the Rust reference uses, so `COPY FROM CSV` is
-  the fastest path available without adding pandas / pyarrow as
-  runtime dependencies. (#41)
+  ~100 000 rows/s); on the maintainer's real ~1.2 GB `export.xml`
+  (2.6M records / 350 workouts / 325k GPX route points / 7 ECGs /
+  1.5M metadata entries), an import that did not finish in 20 minutes
+  under v0.1.2 now completes in **194 seconds end-to-end** (~3 min
+  wall-clock, vs the Rust reference's 67-73 s — the remaining ~3×
+  gap is the per-batch CSV serialise+write+COPY overhead, which
+  cannot be flattened without adding pandas / pyarrow as a runtime
+  dependency). (#41, #42)
 - `run_import` now issues `PRAGMA preserve_insertion_order = false`
   for the import session — the bulk-load path is unordered by design
   and downstream queries always `ORDER BY` anyway, so the per-row sort
   during checkpoint is pure waste.
+
+### Fixed
+
+- ECG sample parser now rejects non-finite voltages (`inf`, `-inf`,
+  `nan`) so a single malformed line does not fail the entire
+  bulk-load `COPY` for that ECG file. Matches the rejection that the
+  XML and GPX float parsers already enforced.
 
 ## [0.1.2] - 2026-06-22
 
@@ -124,7 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   19-character fixed-width form should update their parsers to ISO
   8601. (#29)
 
-[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rinoshiyo/apple-health-mcp-server/releases/tag/v0.1.0
