@@ -92,3 +92,48 @@ must be fully green; the unit and integration tests share fixtures via
 - [CHANGELOG.md](./CHANGELOG.md) — Keep a Changelog format
 - [tests/fixtures/README.md](./tests/fixtures/README.md) — fixture policy and catalogue
 - `.github/workflows/ci.yml` — 3 OS × 3 Python matrix, coverage artifacts
+- `.github/workflows/release.yml` — tag-triggered PyPI publish (Trusted Publishing)
+
+## 8. Release Operations
+
+The release workflow (`.github/workflows/release.yml`) publishes to
+PyPI via [OIDC Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+— no API tokens are stored in this repository.
+
+### One-time PyPI registration (maintainer)
+
+Done once before the first release tag is pushed.
+
+1. Visit <https://pypi.org/manage/account/publishing/> and add a new
+   pending Trusted Publisher:
+   - **PyPI Project name**: `apple-health-mcp-server`
+   - **Owner**: `rinoshiyo`
+   - **Repository name**: `apple-health-mcp-server`
+   - **Workflow filename**: `release.yml`
+   - **Environment name**: `pypi`
+2. In the GitHub repository Settings → Environments, create an
+   environment named `pypi` (no secrets required; the OIDC token is
+   minted at job time).
+3. After the first successful publish, the project switches from
+   "pending" to a normal Trusted Publisher entry.
+
+### Cutting a release
+
+Pre-flight (run locally before tagging):
+
+```bash
+uv run pytest --cov-branch --cov-fail-under=100
+uv build
+uvx twine check dist/*
+rm -rf dist/
+```
+
+Then tag and push:
+
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+GitHub Actions builds the sdist + wheel, verifies metadata with
+`twine check`, and uploads via `pypa/gh-action-pypi-publish@release/v1`.
