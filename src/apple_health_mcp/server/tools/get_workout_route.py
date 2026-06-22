@@ -50,8 +50,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             ),
         ] = None,
     ) -> str:
-        effective_limit = min(limit or _DEFAULT_LIMIT, _MAX_LIMIT)
-        effective_offset = max(offset or 0, 0)
+        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        effective_offset = 0 if offset is None else max(0, offset)
         sql = (
             "SELECT latitude, longitude, elevation, timestamp, speed, course "
             "FROM route_points WHERE workout_hash = ? "

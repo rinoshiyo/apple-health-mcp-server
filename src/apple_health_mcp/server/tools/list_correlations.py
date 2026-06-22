@@ -50,7 +50,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             Field(description="Maximum number of results (default 50, max 500)"),
         ] = None,
     ) -> str:
-        effective_limit = min(limit or _DEFAULT_LIMIT, _MAX_LIMIT)
+        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
         sql_parts = [
             "SELECT correlation_hash, correlation_type, source_name, "
             "start_date, end_date FROM correlations WHERE 1=1"

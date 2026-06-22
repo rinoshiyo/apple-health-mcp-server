@@ -87,32 +87,64 @@ def test_validate_query_accepts_known_safe_functions() -> None:
     validate_query("SELECT COUNT(*) AS c, AVG(value) AS a FROM records")
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "foo.csv",
+        "/etc/passwd.csv",
+        "https://attacker.example/x.parquet",
+        "s3://bucket/x.json",
+    ],
+)
+def test_validate_query_rejects_quoted_path_table_references(path: str) -> None:
+    """Regression: FROM '<path>' lets DuckDB auto-detect the literal as a
+    file / URL to read, bypassing the function-name denylist entirely."""
+    with pytest.raises(QueryValidationError, match="Quoted-path"):
+        validate_query(f"SELECT * FROM '{path}'")
+
+
+def test_validate_query_returns_parsed_query() -> None:
+    """The parsed AST is returned so ``enforce_limit`` can render from it."""
+    import sqlglot
+    from sqlglot import exp
+
+    stmt = validate_query("SELECT 1")
+    assert isinstance(stmt, exp.Query)
+    # Re-rendering should round-trip.
+    rendered = stmt.sql(dialect="duckdb")
+    sqlglot.parse_one(rendered, dialect="duckdb")
+
+
+def _limit_for(sql: str, max_rows: int = MAX_CUSTOM_QUERY_ROWS) -> str:
+    """Helper: validate then enforce_limit so tests assert end-to-end."""
+    return enforce_limit(validate_query(sql), max_rows)
+
+
 def test_enforce_limit_appends_when_missing() -> None:
-    assert enforce_limit("SELECT * FROM records") == (
-        f"SELECT * FROM records LIMIT {MAX_CUSTOM_QUERY_ROWS}"
-    )
-
-
-def test_enforce_limit_strips_trailing_semicolon_before_appending() -> None:
-    assert enforce_limit("SELECT * FROM records;   ") == (
-        f"SELECT * FROM records LIMIT {MAX_CUSTOM_QUERY_ROWS}"
-    )
+    assert f"LIMIT {MAX_CUSTOM_QUERY_ROWS}" in _limit_for("SELECT * FROM records")
 
 
 def test_enforce_limit_passes_through_existing_limit() -> None:
-    sql = "SELECT * FROM records LIMIT 10"
-    assert enforce_limit(sql) == sql
+    out = _limit_for("SELECT * FROM records LIMIT 10")
+    assert "LIMIT 10" in out
+    # The hard cap must NOT be re-applied when the caller already set one.
+    assert f"LIMIT {MAX_CUSTOM_QUERY_ROWS}" not in out
 
 
 def test_enforce_limit_ignores_subquery_limit() -> None:
     # Inner LIMIT in a derived table should not bypass the outer cap.
-    sql = "SELECT * FROM (SELECT * FROM records LIMIT 10) t"
-    out = enforce_limit(sql)
-    assert out.endswith(f"LIMIT {MAX_CUSTOM_QUERY_ROWS}")
+    out = _limit_for("SELECT * FROM (SELECT * FROM records LIMIT 10) t")
+    assert f"LIMIT {MAX_CUSTOM_QUERY_ROWS}" in out
 
 
-def test_enforce_limit_falls_through_on_parse_failure() -> None:
-    # Malformed SQL should still get a LIMIT appended; the trailing append
-    # is a belt-and-suspenders fallback.
-    out = enforce_limit("SELECT FROM WHERE")
-    assert out.endswith(f"LIMIT {MAX_CUSTOM_QUERY_ROWS}")
+def test_enforce_limit_survives_trailing_line_comment() -> None:
+    # Regression: appending text after a `-- ...` line comment would swallow
+    # the LIMIT. The fix renders the AST instead, so the LIMIT is materialised
+    # in the SQL regardless of trailing comments.
+    out = _limit_for("SELECT * FROM records -- trailing comment")
+    assert f"LIMIT {MAX_CUSTOM_QUERY_ROWS}" in out
+    # Re-parsing the rendered SQL must surface the LIMIT in the AST.
+    import sqlglot
+
+    reparsed = sqlglot.parse_one(out, dialect="duckdb")
+    assert reparsed.args.get("limit") is not None

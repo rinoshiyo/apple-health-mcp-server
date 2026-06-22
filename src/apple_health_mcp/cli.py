@@ -86,6 +86,7 @@ def serve(
     """Run the Apple Health MCP server."""
     # Imported lazily so `apple-health-mcp import ...` does not pay the
     # FastMCP / mcp import cost on every CLI invocation.
+    from apple_health_mcp.exceptions import AppleHealthMCPError
     from apple_health_mcp.server import run_server
 
     db: Path | None = ctx.obj["db"]
@@ -96,7 +97,14 @@ def serve(
         port,
         db,
     )
-    asyncio.run(run_server(db, transport.value, host=host, port=port))
+    try:
+        asyncio.run(run_server(db, transport.value, host=host, port=port))
+    except AppleHealthMCPError as exc:
+        # Surface a typed exit instead of a raw traceback. The most common
+        # cause is ``DatabaseError`` from a fresh install that hasn't run
+        # ``apple-health-mcp import`` yet.
+        _logger.error("server failed to start: %s", exc)
+        raise typer.Exit(code=1) from exc
 
 
 def main() -> None:

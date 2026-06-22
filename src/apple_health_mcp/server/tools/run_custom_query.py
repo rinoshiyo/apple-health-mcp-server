@@ -46,8 +46,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     ) -> str:
         trimmed = query.strip()
         try:
-            validate_query(trimmed)
+            stmt = validate_query(trimmed)
         except QueryValidationError as exc:
             return f"Error: {exc}"
-        sql = enforce_limit(trimmed, MAX_CUSTOM_QUERY_ROWS)
+        sql = enforce_limit(stmt, MAX_CUSTOM_QUERY_ROWS)
         return run_query(conn, sql, lock=lock)

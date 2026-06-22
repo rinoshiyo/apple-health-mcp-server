@@ -54,7 +54,9 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             Field(description="Maximum number of results (default 100, max 1000)"),
         ] = None,
     ) -> str:
-        effective_limit = min(limit or _DEFAULT_LIMIT, _MAX_LIMIT)
+        # ``None`` -> default; explicit 0 stays 0; negatives clamp to 0 so DuckDB
+        # never sees ``LIMIT -1`` (which would surface as a raw parser error).
+        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
         sql_parts = [
             "SELECT record_hash, record_type, value, text_value, unit, source_name, "
             "start_date, end_date FROM records WHERE record_type = ?"

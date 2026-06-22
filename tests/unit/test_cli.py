@@ -81,6 +81,29 @@ def test_serve_rejects_unknown_transport() -> None:
     assert result.exit_code != 0
 
 
+def test_serve_surfaces_apple_health_error_as_clean_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: serve must convert AppleHealthMCPError into a typer exit
+    rather than letting asyncio.run propagate a raw traceback (the failure
+    mode on a fresh install where ``import`` was never run)."""
+    from apple_health_mcp.exceptions import DatabaseError
+
+    async def boom(
+        db_path: Path | None,
+        transport: str,
+        *,
+        host: str,
+        port: int,
+    ) -> None:
+        raise DatabaseError("simulated missing DB")
+
+    monkeypatch.setattr("apple_health_mcp.server.run_server", boom, raising=False)
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "serve"])
+    assert result.exit_code == 1, result.output
+
+
 def test_main_entry_point_invokes_app(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.argv", ["apple-health-mcp", "--help"])
     with pytest.raises(SystemExit) as excinfo:

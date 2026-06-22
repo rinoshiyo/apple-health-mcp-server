@@ -83,15 +83,71 @@ def test_state_of_mind_ignores_unparseable_valence(
  <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone"
          value="0.1" startDate="2024-06-01 09:00:00 +0000"
          endDate="2024-06-01 09:00:00 +0000">
-  <MetadataEntry key="HKMetadataKeyMoodValence" value="not-a-number"/>
-  <MetadataEntry key="HKMetadataKeyMoodValenceInfinity" value="inf"/>
+  <MetadataEntry key="HKMetadataKeyStateOfMindValence" value="not-a-number"/>
  </Record>
 </HealthData>"""
     import_xml(conn, _write(tmp_path, xml), "imp_som3")
-    # Unparseable / non-finite valence is ignored; record-level value sticks.
+    # Unparseable valence is ignored; record-level value sticks.
     row = conn.execute("SELECT valence FROM state_of_mind").fetchone()
     assert row is not None
     assert row[0] == pytest.approx(0.1)
+
+
+def test_state_of_mind_ignores_non_finite_valence(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """Regression: a parseable but non-finite valence (``inf`` / ``nan``)
+    must not poison the row."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone"
+         value="0.15" startDate="2024-06-01 09:00:00 +0000"
+         endDate="2024-06-01 09:00:00 +0000">
+  <MetadataEntry key="HKMetadataKeyStateOfMindValence" value="inf"/>
+ </Record>
+</HealthData>"""
+    import_xml(conn, _write(tmp_path, xml), "imp_som_inf")
+    row = conn.execute("SELECT valence FROM state_of_mind").fetchone()
+    assert row is not None
+    assert row[0] == pytest.approx(0.15)
+
+
+def test_state_of_mind_ignores_non_hkmetadatakey_metadata(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """Regression: a metadata key that does NOT start with ``HKMetadataKey``
+    must be ignored entirely so a custom / third-party key cannot smuggle
+    StateOfMind fields via substring collision."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone"
+         value="0.25" startDate="2024-06-01 09:00:00 +0000"
+         endDate="2024-06-01 09:00:00 +0000">
+  <MetadataEntry key="CustomLabels" value="spoofed"/>
+  <MetadataEntry key="MyOwnKind" value="spoofed"/>
+ </Record>
+</HealthData>"""
+    import_xml(conn, _write(tmp_path, xml), "imp_som_custom")
+    row = conn.execute("SELECT valence, kind, labels FROM state_of_mind").fetchone()
+    assert row is not None
+    assert row == (pytest.approx(0.25), None, None)
+
+
+def test_state_of_mind_record_with_no_signals_is_skipped(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """Regression: a StateOfMind-typed record with no parseable valence and
+    no recognised metadata yields no ``state_of_mind`` row at all."""
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone"
+         value="" startDate="2024-06-01 09:00:00 +0000"
+         endDate="2024-06-01 09:00:00 +0000"/>
+</HealthData>"""
+    stats = import_xml(conn, _write(tmp_path, xml), "imp_som_blank")
+    assert stats.state_of_mind_rows == 0
+    row = conn.execute("SELECT COUNT(*) FROM state_of_mind").fetchone()
+    assert row is not None and int(row[0]) == 0
 
 
 def test_state_of_mind_unrelated_metadata_key_left_alone(

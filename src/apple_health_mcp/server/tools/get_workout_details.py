@@ -72,19 +72,30 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                 [workout_hash],
                 lock=lock,
             )
-            route_point_count_rows = query_to_json(
-                conn,
-                "SELECT COUNT(*) AS count FROM route_points WHERE workout_hash = ?",
-                [workout_hash],
-                lock=lock,
-            )
+            # ``has_route`` stays true in two cases: ``workout_routes`` has a
+            # row (XML claimed a GPX file -- ``route_rows`` already carries the
+            # correlated point_count) OR route_points has rows without a
+            # parent workout_routes row (GPX import succeeded against a
+            # partial export). Only pay for the fallback count when the
+            # cheap case is empty.
+            if route_rows:
+                route_obj: Any = route_rows[0]
+                has_route = True
+            else:
+                route_obj = None
+                fallback = query_to_json(
+                    conn,
+                    "SELECT COUNT(*) AS count FROM route_points WHERE workout_hash = ?",
+                    [workout_hash],
+                    lock=lock,
+                )
+                fallback_count = fallback[0]["count"] if fallback else 0
+                has_route = isinstance(fallback_count, int) and fallback_count > 0
         except Exception as exc:
             return f"Error: {exc}"
 
         workout = workout_rows[0] if workout_rows else None
-        route: Any = route_rows[0] if route_rows else None
-        point_count = route_point_count_rows[0]["count"] if route_point_count_rows else 0
-        has_route = route is not None or (isinstance(point_count, int) and point_count > 0)
+        route: Any = route_obj
         payload = {
             "workout": workout,
             "events": events,

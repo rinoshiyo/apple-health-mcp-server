@@ -672,17 +672,26 @@ class _XmlImporter:
     def _capture_state_of_mind_metadata(self, key: str, value: str) -> None:
         """Pull StateOfMind fields out of a generic ``MetadataEntry``.
 
-        Apple has shipped multiple key spellings for these fields between
-        iOS 17 betas and the GM release; rather than enumerate every
-        permutation, match by case-insensitive substring. ``valence`` is
-        coerced to ``float`` and silently dropped on parse failure (so a
-        future Apple change from numeric to enum-string does not poison
-        the row -- it just falls back to the record's seeded value).
+        Apple shipped multiple key spellings between iOS 17 betas and the
+        GM release (``HKMetadataKeyMoodValenceClassification`` vs
+        ``HKMetadataKeyStateOfMindValence``), so we don't pin a hard-coded
+        list. Instead the key must start with ``HKMetadataKey`` *and* end
+        with one of the well-defined tokens, so an unrelated key that
+        merely contains "association" / "kind" / "label" / "valence" as a
+        substring (e.g. a hypothetical ``...StateOfMindAssociatedFood``)
+        cannot silently overwrite the structured field.
+
+        ``valence`` is coerced to ``float`` and silently dropped on parse
+        failure (so a future Apple change from numeric to enum-string does
+        not poison the row -- it just falls back to the record's seeded
+        value).
         """
         if self._current_state_of_mind is None:
             return
+        if not key.startswith("HKMetadataKey"):
+            return
         key_lower = key.lower()
-        if "valence" in key_lower:
+        if key_lower.endswith("valence") or key_lower.endswith("valenceclassification"):
             try:
                 parsed = float(value)
             except ValueError:
@@ -690,17 +699,29 @@ class _XmlImporter:
             if not math.isfinite(parsed):
                 return
             self._current_state_of_mind["valence"] = parsed
-        elif "label" in key_lower:
+        elif key_lower.endswith("labels"):
             self._current_state_of_mind["labels"] = value
-        elif "association" in key_lower:
+        elif key_lower.endswith("associations"):
             self._current_state_of_mind["associations"] = value
-        elif "kind" in key_lower:
+        elif key_lower.endswith("kind"):
             self._current_state_of_mind["kind"] = value
 
     def _finalize_state_of_mind(self) -> None:
         som = self._current_state_of_mind
         self._current_state_of_mind = None
         if som is None:
+            return
+        # Skip records that yielded no structured StateOfMind information at
+        # all. A category Record that happens to carry the StateOfMind type
+        # identifier (or a stripped export with metadata removed) would
+        # otherwise produce an all-NULL row that ``list_state_of_mind``
+        # surfaces as a real mood entry.
+        if (
+            som["valence"] is None
+            and som["kind"] is None
+            and som["labels"] is None
+            and som["associations"] is None
+        ):
             return
         self._state_of_mind.append(
             (

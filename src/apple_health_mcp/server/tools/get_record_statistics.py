@@ -56,7 +56,9 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
     ) -> str:
         # Unknown periods fall back to ``day`` so a typo never leaks raw SQL.
-        date_trunc = _PERIOD_TRUNCS.get(period or "day", "date")
+        # Lookup is case-insensitive so "Week" / "MONTH" match ``week`` /
+        # ``month`` instead of silently falling through to daily aggregation.
+        date_trunc = _PERIOD_TRUNCS.get((period or "day").lower(), "date")
         sql_parts = [
             f"SELECT {date_trunc} AS period, SUM(count) AS count, "
             "SUM(sum_value)/SUM(count) AS avg_value, "

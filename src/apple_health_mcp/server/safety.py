@@ -3,15 +3,20 @@
 ``run_custom_query`` exposes the DuckDB engine to LLM-generated SQL. Even
 opening the connection in read-only mode is not sufficient because DuckDB
 ships built-in functions that can read host files (``read_text``,
-``read_csv``, ...) or hit external networks (``read_json`` with a URL).
-Those would leak data through the query result even on a read-only
-connection. Mirrors the Rust ``server::mod`` defences (issues #1, #2).
+``read_csv``, ...) or hit external networks (``read_json`` with a URL),
+plus a ``FROM '<path>.csv'`` / ``FROM 'https://...'`` auto-detect shortcut
+that reads files / URLs without naming any function. Those would leak data
+through the query result even on a read-only connection. Mirrors the Rust
+``server::mod`` defences (issues #1, #2) plus the quoted-path bypass
+discovered during the Python port review.
 """
 
 from __future__ import annotations
 
 import sqlglot
 from sqlglot import exp
+
+from apple_health_mcp.exceptions import ValidationError
 
 # Built-in DuckDB functions that can read host files or hit external networks.
 # Even a read-only connection must reject these because the data leaves
@@ -38,17 +43,24 @@ DENIED_FUNCTIONS: frozenset[str] = frozenset(
 MAX_CUSTOM_QUERY_ROWS = 1000
 
 
-class QueryValidationError(ValueError):
-    """Raised when ``validate_query`` rejects a custom SQL statement."""
+class QueryValidationError(ValidationError):
+    """Raised when ``validate_query`` rejects a custom SQL statement.
+
+    Inherits from the project's :class:`ValidationError` so callers catching
+    the shared :class:`AppleHealthMCPError` base also catch SQL-validation
+    failures.
+    """
 
 
-def validate_query(sql: str) -> None:
+def validate_query(sql: str) -> exp.Query:
     """Reject anything that is not a single read-only SELECT / WITH query.
 
-    The parser is run with the DuckDB dialect so functions, type names, and
+    The parser runs with the DuckDB dialect so functions, type names, and
     list literals match what ``run_custom_query`` will eventually execute.
     On rejection a :class:`QueryValidationError` is raised whose message is
-    the human-readable string to send back to the MCP client.
+    the human-readable string to send back to the MCP client. The parsed
+    AST node is returned so :func:`enforce_limit` can apply the row cap
+    without re-parsing the same string.
     """
     try:
         statements = sqlglot.parse(sql, dialect="duckdb")
@@ -73,11 +85,22 @@ def validate_query(sql: str) -> None:
             "INSTALL, LOAD, PRAGMA, etc. are rejected)"
         )
 
-    # Walk the AST looking for denylisted function calls. Covers scalar
-    # ``f(...)`` calls, table-valued ``FROM read_text(...)`` references, and
-    # the ``FROM LATERAL fn(...)`` form, all of which surface as nodes with
-    # an identifier ``name`` attribute.
+    # Walk the AST looking for two failure modes:
+    #
+    # 1. Denylisted function calls (scalar ``f(...)``, table-valued
+    #    ``FROM read_text(...)``, and the ``FROM LATERAL fn(...)`` form).
+    # 2. ``FROM '<path>'`` / ``FROM 'https://...'`` — sqlglot parses these
+    #    as a Table whose Identifier is *quoted*, and DuckDB auto-detects
+    #    the literal as a file / URL to read. The function-name walker
+    #    misses this because there is no Func / Anonymous node.
     for node in stmt.walk():
+        if isinstance(node, exp.Table):
+            ident = node.this
+            if isinstance(ident, exp.Identifier) and ident.quoted:
+                raise QueryValidationError(
+                    "Quoted-path table references are not allowed "
+                    "(DuckDB auto-detects them as file / URL reads)"
+                )
         name = _node_function_name(node)
         if name is None:
             continue
@@ -85,6 +108,8 @@ def validate_query(sql: str) -> None:
             raise QueryValidationError(
                 f"Function '{name}' is not allowed (reads host files or external resources)"
             )
+
+    return stmt
 
 
 def _node_function_name(node: exp.Expr) -> str | None:
@@ -110,24 +135,15 @@ def _node_function_name(node: exp.Expr) -> str | None:
     return None
 
 
-def enforce_limit(sql: str, max_rows: int = MAX_CUSTOM_QUERY_ROWS) -> str:
-    """Append ``LIMIT max_rows`` unless ``sql`` already has its own LIMIT.
+def enforce_limit(stmt: exp.Query, max_rows: int = MAX_CUSTOM_QUERY_ROWS) -> str:
+    """Render ``stmt`` back to SQL, applying ``LIMIT max_rows`` if it has none.
 
-    ``validate_query`` must have already confirmed ``sql`` is a single
-    SELECT / WITH so the append is unambiguous. The check parses the AST
-    again instead of regex-matching ``LIMIT`` so embedded subqueries with
-    their own LIMIT do not fool us into thinking the outer query is bounded.
+    Takes the parsed AST that :func:`validate_query` already produced (one
+    parse per custom query instead of two) and uses sqlglot's serializer so
+    the LIMIT is materialised inside the AST rather than appended as text.
+    Appending text after a trailing ``-- ...`` line comment would otherwise
+    push the LIMIT into the comment and bypass the row cap.
     """
-    try:
-        statements = sqlglot.parse(sql, dialect="duckdb")
-    except sqlglot.errors.ParseError:
-        # ``validate_query`` is the gatekeeper; if it accepted ``sql`` this
-        # path should be unreachable. Fall through to the trailing append.
-        statements = []
-    cleaned = [s for s in statements if s is not None]
-    if cleaned:
-        stmt = cleaned[0]
-        if isinstance(stmt, exp.Query) and stmt.args.get("limit") is not None:
-            return sql
-    trimmed = sql.rstrip().rstrip(";").rstrip()
-    return f"{trimmed} LIMIT {max_rows}"
+    if stmt.args.get("limit") is not None:
+        return stmt.sql(dialect="duckdb")
+    return stmt.limit(max_rows).sql(dialect="duckdb")

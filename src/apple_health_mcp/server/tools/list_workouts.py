@@ -48,7 +48,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             Field(description="Maximum number of results (default 50)"),
         ] = None,
     ) -> str:
-        effective_limit = min(limit or _DEFAULT_LIMIT, _MAX_LIMIT)
+        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
         sql_parts = [
             "SELECT workout_hash, activity_type, duration, duration_unit, "
             "total_distance, total_distance_unit, total_energy_burned, "
