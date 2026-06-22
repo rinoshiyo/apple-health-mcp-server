@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Synthetic Apple Health export used by integration smoke tests.
+
+  This file is hand-written. It contains NO real personal data, NO real
+  device UUIDs, and NO real source names. Sample values (heart rate,
+  step count, workout distance) are illustrative only.
+
+  See tests/fixtures/README.md for the catalogue of fixtures and the
+  policy that governs them.
+-->
+<HealthData locale="en_US">
+ <ExportDate value="2024-06-15 12:00:00 +0000"/>
+ <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01"
+     HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexNotSet"
+     HKCharacteristicTypeIdentifierBloodType="HKBloodTypeNotSet"
+     HKCharacteristicTypeIdentifierFitzpatrickSkinType="HKFitzpatrickSkinTypeNotSet"
+     HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse="None"/>
+ <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="72" startDate="2024-06-15 08:00:00 +0000" endDate="2024-06-15 08:01:00 +0000">
+  <MetadataEntry key="HKMetadataKeyHeartRateMotionContext" value="1"/>
+ </Record>
+ <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="78" startDate="2024-06-15 08:05:00 +0000" endDate="2024-06-15 08:06:00 +0000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" value="100" startDate="2024-06-15 09:00:00 +0000" endDate="2024-06-15 09:30:00 +0000"/>
+ <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone" value="HKCategoryValueStateOfMindNotSet" startDate="2024-06-15 12:00:00 +0000" endDate="2024-06-15 12:00:01 +0000">
+  <MetadataEntry key="HKMetadataKeyStateOfMindValence" value="0.25"/>
+  <MetadataEntry key="HKMetadataKeyStateOfMindKind" value="1"/>
+  <MetadataEntry key="HKMetadataKeyStateOfMindLabels" value="(    1,    2)"/>
+  <MetadataEntry key="HKMetadataKeyStateOfMindAssociations" value="(    3)"/>
+ </Record>
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30.5" durationUnit="min" totalDistance="5.0" totalDistanceUnit="km" totalEnergyBurned="300" totalEnergyBurnedUnit="kcal" sourceName="Apple Watch" startDate="2024-06-15 10:00:00 +0000" endDate="2024-06-15 10:30:00 +0000">
+  <WorkoutEvent type="HKWorkoutEventTypeLap" date="2024-06-15 10:15:00 +0000"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierHeartRate" startDate="2024-06-15 10:00:00 +0000" endDate="2024-06-15 10:30:00 +0000" average="150" minimum="120" maximum="180" unit="count/min"/>
+  <WorkoutRoute sourceName="Apple Watch" sourceVersion="10.0" device="&lt;&lt;HKDevice: 0x0&gt;, name:Apple Watch&gt;">
+   <FileReference path="/workout-routes/sample_workout_route.gpx"/>
+  </WorkoutRoute>
+ </Workout>
+ <ActivitySummary dateComponents="2024-06-15" activeEnergyBurned="450" activeEnergyBurnedGoal="500" activeEnergyBurnedUnit="kcal" appleMoveTime="0" appleMoveTimeGoal="0" appleExerciseTime="40" appleExerciseTimeGoal="30" appleStandHours="12" appleStandHoursGoal="12"/>
+ <!--
+   Apple Health duplicates Correlation child records at the top level by
+   spec, so the two BloodPressure rows below appear both as siblings of
+   the Correlation and as its <Record> children.
+ -->
+ <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Health" unit="mmHg" value="118" startDate="2024-06-15 07:00:00 +0000" endDate="2024-06-15 07:00:01 +0000"/>
+ <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Health" unit="mmHg" value="76" startDate="2024-06-15 07:00:00 +0000" endDate="2024-06-15 07:00:01 +0000"/>
+ <Correlation type="HKCorrelationTypeIdentifierBloodPressure" sourceName="Health" startDate="2024-06-15 07:00:00 +0000" endDate="2024-06-15 07:00:01 +0000">
+  <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Health" unit="mmHg" value="118" startDate="2024-06-15 07:00:00 +0000" endDate="2024-06-15 07:00:01 +0000"/>
+  <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Health" unit="mmHg" value="76" startDate="2024-06-15 07:00:00 +0000" endDate="2024-06-15 07:00:01 +0000"/>
+ </Correlation>
+</HealthData>
