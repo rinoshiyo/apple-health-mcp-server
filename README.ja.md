@@ -5,7 +5,6 @@
 [![PyPI version](https://img.shields.io/pypi/v/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![Python versions](https://img.shields.io/pypi/pyversions/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue.svg)](https://modelcontextprotocol.io/)
 
 > **おそらく、もっとも網羅的な Apple Health MCP サーバー。**
 >
@@ -82,32 +81,35 @@ uvx apple-health-mcp-server import /path/to/apple_health_export
 
 ## ツール群
 
-FastMCP に登録される 16 ツールは Apple Health 書き出しの主要な切り口を
-カバーします。網羅的な一覧は `apple_health_mcp.server.tools`（もしくは
-クライアントのツール一覧）を参照してください。大別すると、レコード /
-ワークアウト / アクティビティサマリー / 相関 / ECG / ルート /
-カスタム SQL / メタデータ系に分類されます。
+FastMCP に登録される 16 ツールを系統別にまとめます。
+
+| 系統 | ツール |
+|---|---|
+| レコード種別とデータ | `list_record_types`, `query_records`, `get_record_statistics` |
+| ワークアウト | `list_workouts`, `get_workout_details`, `get_workout_route` |
+| アクティビティサマリー | `get_activity_summaries` |
+| 心拍 | `get_heart_rate_samples` |
+| 相関 | `list_correlations`, `get_correlation_details` |
+| ECG | `list_ecg_readings`, `get_ecg_data` |
+| 気分（State of Mind） | `list_state_of_mind` |
+| メタデータ・運用 | `list_data_sources`, `get_import_history` |
+| エスケープハッチ | `run_custom_query`（読み取り専用の検証済み SQL） |
 
 ## 開発
 
 ```bash
 uv sync
-uv run pre-commit install
-uv run pytest --cov-branch --cov-fail-under=100
-uv run ruff check
-uv run ruff format --check
-uv run mypy
+uv run pytest
 ```
 
-リポジトリ運用の規約（プルリクエストごとの `/code-review --fix` 必須を含む）
-は [CLAUDE.md](./CLAUDE.md) を参照してください。
+開発コマンドの完全な一覧、コーディング規約、PR ごとの `/code-review --fix`
+必須運用は [CLAUDE.md](./CLAUDE.md) を参照してください。
 
 ## コントリビューション
 
 Issues / Pull Requests は **英語と日本語のどちらも歓迎** します。
-コード内のコメントおよび `docs/`, `README.md`, `CHANGELOG.md`,
-`CLAUDE.md`, `SECURITY.md` 配下のドキュメントは、コードベースを統一的に
-読める状態に保つために英語で固定しています。`README.ja.md` は唯一の例外です。
+言語ポリシーの全容は [CLAUDE.md §6](./CLAUDE.md#6-language-policy)
+を参照してください。
 
 ## ライセンス
 

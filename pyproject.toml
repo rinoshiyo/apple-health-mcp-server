@@ -1,5 +1,5 @@
 [project]
-name = "apple-health-mcp"
+name = "apple-health-mcp-server"
 version = "0.1.0"
 description = "Probably the most complete Apple Health MCP server"
 readme = "README.md"
@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-apple-health-mcp = "apple_health_mcp.cli:main"
+apple-health-mcp-server = "apple_health_mcp.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/rinoshiyo/apple-health-mcp-server"

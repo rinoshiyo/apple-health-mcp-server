@@ -42,7 +42,7 @@ wheels = [
 ]
 
 [[package]]
-name = "apple-health-mcp"
+name = "apple-health-mcp-server"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

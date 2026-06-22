@@ -5,7 +5,6 @@
 [![PyPI version](https://img.shields.io/pypi/v/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![Python versions](https://img.shields.io/pypi/pyversions/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![MCP Registry](https://img.shields.io/badge/MCP-Registry-blue.svg)](https://modelcontextprotocol.io/)
 
 > **Probably the most complete Apple Health MCP server.**
 >
@@ -85,33 +84,35 @@ Override with `--db /custom/path/health.duckdb` on either subcommand.
 
 ## Tools
 
-The 16 tools registered with FastMCP cover the common slices of an Apple
-Health export. Inspect `apple_health_mcp.server.tools` (or call the
-client's tool list) for the full set; broadly they fall into
-record / workout / activity-summary / correlation / ECG / route / custom
-SQL / metadata families.
+16 tools are registered with FastMCP, grouped by family:
+
+| Family | Tools |
+|---|---|
+| Record types & data | `list_record_types`, `query_records`, `get_record_statistics` |
+| Workouts | `list_workouts`, `get_workout_details`, `get_workout_route` |
+| Activity summaries | `get_activity_summaries` |
+| Heart rate | `get_heart_rate_samples` |
+| Correlations | `list_correlations`, `get_correlation_details` |
+| ECG | `list_ecg_readings`, `get_ecg_data` |
+| State of mind | `list_state_of_mind` |
+| Metadata & ops | `list_data_sources`, `get_import_history` |
+| Escape hatch | `run_custom_query` (read-only validated SQL) |
 
 ## Development
 
 ```bash
 uv sync
-uv run pre-commit install
-uv run pytest --cov-branch --cov-fail-under=100
-uv run ruff check
-uv run ruff format --check
-uv run mypy
+uv run pytest
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for the development conventions used in this
-repository, including the mandatory `/code-review --fix` policy on every
-pull request.
+See [CLAUDE.md](./CLAUDE.md) for the full command list, conventions, and
+the mandatory `/code-review --fix` policy on every pull request.
 
 ## Contributing
 
-Issues and pull requests in **English or Japanese** are both first class.
-Code comments and the documents under `docs/`, `README.md`,
-`CHANGELOG.md`, `CLAUDE.md`, and `SECURITY.md` stay in English so the
-codebase reads uniformly. `README.ja.md` is the one parallel exception.
+Issues and pull requests in **English or Japanese** are both first class;
+see [CLAUDE.md §6](./CLAUDE.md#6-language-policy) for the full language
+policy.
 
 ## License
 

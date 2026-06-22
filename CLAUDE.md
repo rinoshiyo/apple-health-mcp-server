@@ -80,9 +80,8 @@ must be fully green; the unit and integration tests share fixtures via
 - **Issues and PRs**: English and Japanese are both first-class. Use
   whichever the contributor is comfortable with; the maintainer reads
   both.
-- **Code and docs** (`README.md`, `CHANGELOG.md`, `CLAUDE.md`,
-  `SECURITY.md`, `docs/`): English only. `README.ja.md` is the one
-  parallel exception.
+- **Code and docs** (`README.md`, `CHANGELOG.md`, `CLAUDE.md`): English
+  only. `README.ja.md` is the one parallel exception.
 - **Commit messages**: English recommended; Japanese accepted as long
   as the Conventional Commits prefix stays.
 
@@ -91,8 +90,5 @@ must be fully green; the unit and integration tests share fixtures via
 - [README.md](./README.md) — public entry point (English)
 - [README.ja.md](./README.ja.md) — public entry point (Japanese)
 - [CHANGELOG.md](./CHANGELOG.md) — Keep a Changelog format
-- `tests/fixtures/README.md` — fixture policy and catalogue
+- [tests/fixtures/README.md](./tests/fixtures/README.md) — fixture policy and catalogue
 - `.github/workflows/ci.yml` — 3 OS × 3 Python matrix, coverage artifacts
-- Memory dir (Claude Code): contains the implementation-decision log
-  and the autonomous-loop work playbook; consult before starting a
-  large change.
