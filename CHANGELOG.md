@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-22
+
 ### Fixed
 
 - `apple-health-mcp-server serve` now starts successfully against a
@@ -23,12 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   https://github.com/rinoshiyo/apple-health-mcp-server#usage for details.
   ```
 
-  `get_import_history` is the single exception and still returns an
-  empty list on an empty DB so callers can confirm the empty-DB state
-  from the client side. Consumers parsing tool errors should anchor on
-  the message prefix (the trailing URL may change between minor
-  versions). README EN/JA gain a Troubleshooting section documenting
-  the path. (#38)
+  Two tools opt out: `get_import_history` returns an empty list on an
+  empty DB so callers can confirm the empty-DB state, and
+  `run_custom_query` stays callable so an LLM can introspect the
+  freshly-bootstrapped scaffold (e.g. `SELECT COUNT(*) FROM imports`).
+  Consumers parsing tool errors should anchor on the message prefix
+  (the trailing URL may change between minor versions). The bootstrap
+  itself is atomic (per-PID temp file + `os.replace`) so a crash
+  mid-DDL leaves no half-initialised file the next run would mistake
+  for a real DB, and concurrent `serve` processes race-safely. A
+  WARNING is logged when the bootstrap fires so a typo'd `--db` does
+  not silently masquerade as a successful install. README EN/JA gain
+  a Troubleshooting section documenting the path. (#38, #39)
 
 ## [0.1.1] - 2026-06-22
 
@@ -98,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   19-character fixed-width form should update their parsers to ISO
   8601. (#29)
 
-[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rinoshiyo/apple-health-mcp-server/releases/tag/v0.1.0
