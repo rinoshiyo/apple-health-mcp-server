@@ -99,6 +99,36 @@ Override with `--db /custom/path/health.duckdb` on either subcommand.
 | Metadata & ops | `list_data_sources`, `get_import_history` |
 | Escape hatch | `run_custom_query` (read-only validated SQL) |
 
+## Updating
+
+`uvx` caches the package on first run and re-uses that cached copy on
+subsequent invocations, so a new release does **not** install itself
+automatically. Pick one:
+
+- **Always run the latest** — pass `--refresh` once whenever you want
+  to pull a newer version:
+
+  ```bash
+  uvx --refresh apple-health-mcp-server serve
+  ```
+
+- **Pin a specific version** — write the version directly in your
+  Claude Desktop / Codex / Cursor config so an unrelated `uvx` cache
+  eviction cannot move you off it:
+
+  ```jsonc
+  {
+    "mcpServers": {
+      "apple-health": {
+        "command": "uvx",
+        "args": ["apple-health-mcp-server==0.1.0", "serve"]
+      }
+    }
+  }
+  ```
+
+See [CHANGELOG.md](./CHANGELOG.md) for the per-release notes.
+
 ## Development
 
 ```bash

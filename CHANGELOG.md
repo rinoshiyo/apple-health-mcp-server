@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- README "Updating" section (EN/JA) explaining how to refresh the
+  `uvx`-cached package and how to pin a specific version in the Claude
+  Desktop / Codex / Cursor configuration. (#33)
+
 ### Changed
 
 - **Time-zone handling: every timestamp column is now `TIMESTAMPTZ`.**
