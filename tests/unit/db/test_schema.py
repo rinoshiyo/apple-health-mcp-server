@@ -399,6 +399,88 @@ def test_dedup_then_vestigial_is_idempotent(conn: duckdb.DuckDBPyConnection) -> 
     assert row[1] == pytest.approx(3.2)
 
 
+# Source-schema-declared NOT NULL columns per table, derived directly from
+# ``_CREATE_TABLES_SQL``. This duplicates the SQL on purpose: the test fails
+# loudly if anyone adds/removes a NOT NULL declaration without updating the
+# ``_RESTORE_CONSTRAINTS_SQL`` block. Coupled, not generated.
+_EXPECTED_NOT_NULL: dict[str, frozenset[str]] = {
+    "records": frozenset({"record_type", "start_date", "end_date", "import_id"}),
+    "record_metadata": frozenset({"record_hash", "key"}),
+    "workouts": frozenset({"activity_type", "start_date", "end_date", "import_id"}),
+    "workout_events": frozenset({"workout_hash", "event_type"}),
+    "workout_statistics": frozenset({"workout_hash", "stat_type"}),
+    "activity_summaries": frozenset({"import_id"}),
+    "ecg_readings": frozenset({"recorded_date", "import_id"}),
+    "ecg_samples": frozenset({"ecg_hash", "sample_idx", "voltage_uv"}),
+    "route_points": frozenset({"latitude", "longitude", "timestamp", "import_id"}),
+    "workout_metadata": frozenset({"workout_hash", "key", "import_id"}),
+    "workout_routes": frozenset({"workout_hash", "file_path", "import_id"}),
+    "heart_rate_samples": frozenset({"parent_record_hash", "sample_idx", "import_id"}),
+    "correlations": frozenset(
+        {"correlation_hash", "correlation_type", "start_date", "end_date", "import_id"}
+    ),
+    "correlation_members": frozenset({"correlation_hash", "record_hash", "import_id"}),
+    "imports": frozenset({"export_dir", "imported_at"}),
+    "export_metadata": frozenset({"import_id"}),
+    "me_attributes": frozenset({"import_id"}),
+    "state_of_mind": frozenset({"record_hash", "import_id"}),
+}
+
+
+def _pragma_table_info(
+    conn: duckdb.DuckDBPyConnection, table: str
+) -> list[tuple[str, bool, str | None]]:
+    """Return ``(column_name, not_null, dflt_value)`` triples for ``table``.
+
+    ``PRAGMA table_info`` columns are ``cid, name, type, notnull, dflt_value,
+    pk``. The connection-mode equivalent ``duckdb_columns()`` would also
+    work but PRAGMA matches what the issue spec references.
+    """
+    rows = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    return [(str(r[1]), bool(r[3]), None if r[4] is None else str(r[4])) for r in rows]
+
+
+def test_deduplicate_restores_not_null_constraints(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """After ``deduplicate_tables`` the schema's NOT NULL columns are
+    restored on every dedup-target table.
+
+    ``CREATE OR REPLACE TABLE ... AS SELECT ...`` in DuckDB strips column
+    constraints. This regression test pins ``_RESTORE_CONSTRAINTS_SQL`` to
+    the source-schema declaration so a future schema change cannot silently
+    let the post-dedup tables drift away from their contract.
+    """
+    deduplicate_tables(conn)
+    for table, expected in _EXPECTED_NOT_NULL.items():
+        info = _pragma_table_info(conn, table)
+        observed_not_null = {name for name, not_null, _ in info if not_null}
+        assert observed_not_null == expected, (
+            f"{table}: NOT NULL set drifted; "
+            f"expected={sorted(expected)} observed={sorted(observed_not_null)}"
+        )
+
+
+def test_deduplicate_restores_imports_imported_at_default(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """``imports.imported_at`` keeps its ``CURRENT_TIMESTAMP`` default so
+    the orchestrator INSERT can keep omitting the column."""
+    deduplicate_tables(conn)
+    info = _pragma_table_info(conn, "imports")
+    dflt = next(d for name, _, d in info if name == "imported_at")
+    assert dflt is not None
+    assert "CURRENT_TIMESTAMP" in dflt.upper()
+
+    # Functional check: omit imported_at on INSERT and confirm the default
+    # actually fires (PRAGMA dflt_value is metadata; the runtime behaviour
+    # is the contract callers depend on).
+    conn.execute("INSERT INTO imports (import_id, export_dir) VALUES ('imp_x', '/tmp')")
+    row = conn.execute("SELECT imported_at FROM imports WHERE import_id='imp_x'").fetchone()
+    assert row is not None
+    assert row[0] is not None
+
+
 def test_rebuild_daily_stats(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """

@@ -367,6 +367,111 @@ SELECT * FROM (
 """
 
 
+# DuckDB's ``CREATE OR REPLACE TABLE foo AS SELECT ... FROM foo`` (used by
+# ``_DEDUPLICATE_SQL``) infers column types from the SELECT projection but
+# does NOT carry constraints (NOT NULL / DEFAULT / CHECK) through. After
+# dedup, ``PRAGMA table_info(<table>)`` reports every column nullable with
+# no default. This block re-applies every NOT NULL constraint and the one
+# DEFAULT clause that the source schema declares, so the post-dedup tables
+# match the contract ``_CREATE_TABLES_SQL`` set out. The visible bug this
+# fixes is ``imports.imported_at`` writing as NULL on every import (the
+# orchestrator omits the column expecting the stripped DEFAULT
+# ``CURRENT_TIMESTAMP`` to fire); the other 17 tables' lost constraints are
+# latent today but are restored defensively so a future INSERT path cannot
+# silently drift away from the declared schema.
+#
+# ``SET DEFAULT`` precedes ``SET NOT NULL`` on ``imports.imported_at`` so the
+# DEFAULT is in place before NOT NULL comes into force. For an empty table
+# the order is moot, but the pattern is correct for any future case where
+# the ALTER fires against a populated table.
+_RESTORE_CONSTRAINTS_SQL = """
+-- records
+ALTER TABLE records ALTER COLUMN record_type SET NOT NULL;
+ALTER TABLE records ALTER COLUMN start_date SET NOT NULL;
+ALTER TABLE records ALTER COLUMN end_date SET NOT NULL;
+ALTER TABLE records ALTER COLUMN import_id SET NOT NULL;
+
+-- record_metadata
+ALTER TABLE record_metadata ALTER COLUMN record_hash SET NOT NULL;
+ALTER TABLE record_metadata ALTER COLUMN key SET NOT NULL;
+
+-- workouts
+ALTER TABLE workouts ALTER COLUMN activity_type SET NOT NULL;
+ALTER TABLE workouts ALTER COLUMN start_date SET NOT NULL;
+ALTER TABLE workouts ALTER COLUMN end_date SET NOT NULL;
+ALTER TABLE workouts ALTER COLUMN import_id SET NOT NULL;
+
+-- workout_events
+ALTER TABLE workout_events ALTER COLUMN workout_hash SET NOT NULL;
+ALTER TABLE workout_events ALTER COLUMN event_type SET NOT NULL;
+
+-- workout_statistics
+ALTER TABLE workout_statistics ALTER COLUMN workout_hash SET NOT NULL;
+ALTER TABLE workout_statistics ALTER COLUMN stat_type SET NOT NULL;
+
+-- activity_summaries
+ALTER TABLE activity_summaries ALTER COLUMN import_id SET NOT NULL;
+
+-- ecg_readings
+ALTER TABLE ecg_readings ALTER COLUMN recorded_date SET NOT NULL;
+ALTER TABLE ecg_readings ALTER COLUMN import_id SET NOT NULL;
+
+-- ecg_samples
+ALTER TABLE ecg_samples ALTER COLUMN ecg_hash SET NOT NULL;
+ALTER TABLE ecg_samples ALTER COLUMN sample_idx SET NOT NULL;
+ALTER TABLE ecg_samples ALTER COLUMN voltage_uv SET NOT NULL;
+
+-- route_points
+ALTER TABLE route_points ALTER COLUMN latitude SET NOT NULL;
+ALTER TABLE route_points ALTER COLUMN longitude SET NOT NULL;
+ALTER TABLE route_points ALTER COLUMN timestamp SET NOT NULL;
+ALTER TABLE route_points ALTER COLUMN import_id SET NOT NULL;
+
+-- workout_metadata
+ALTER TABLE workout_metadata ALTER COLUMN workout_hash SET NOT NULL;
+ALTER TABLE workout_metadata ALTER COLUMN key SET NOT NULL;
+ALTER TABLE workout_metadata ALTER COLUMN import_id SET NOT NULL;
+
+-- workout_routes
+ALTER TABLE workout_routes ALTER COLUMN workout_hash SET NOT NULL;
+ALTER TABLE workout_routes ALTER COLUMN file_path SET NOT NULL;
+ALTER TABLE workout_routes ALTER COLUMN import_id SET NOT NULL;
+
+-- heart_rate_samples
+ALTER TABLE heart_rate_samples ALTER COLUMN parent_record_hash SET NOT NULL;
+ALTER TABLE heart_rate_samples ALTER COLUMN sample_idx SET NOT NULL;
+ALTER TABLE heart_rate_samples ALTER COLUMN import_id SET NOT NULL;
+
+-- correlations
+ALTER TABLE correlations ALTER COLUMN correlation_hash SET NOT NULL;
+ALTER TABLE correlations ALTER COLUMN correlation_type SET NOT NULL;
+ALTER TABLE correlations ALTER COLUMN start_date SET NOT NULL;
+ALTER TABLE correlations ALTER COLUMN end_date SET NOT NULL;
+ALTER TABLE correlations ALTER COLUMN import_id SET NOT NULL;
+
+-- correlation_members
+ALTER TABLE correlation_members ALTER COLUMN correlation_hash SET NOT NULL;
+ALTER TABLE correlation_members ALTER COLUMN record_hash SET NOT NULL;
+ALTER TABLE correlation_members ALTER COLUMN import_id SET NOT NULL;
+
+-- imports — also restore the DEFAULT so the orchestrator INSERT can keep
+-- omitting the column and the timestamp still populates.
+ALTER TABLE imports ALTER COLUMN export_dir SET NOT NULL;
+ALTER TABLE imports ALTER COLUMN imported_at SET DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE imports ALTER COLUMN imported_at SET NOT NULL;
+
+-- export_metadata
+ALTER TABLE export_metadata ALTER COLUMN import_id SET NOT NULL;
+
+-- me_attributes
+ALTER TABLE me_attributes ALTER COLUMN import_id SET NOT NULL;
+
+-- state_of_mind
+ALTER TABLE state_of_mind ALTER COLUMN record_hash SET NOT NULL;
+ALTER TABLE state_of_mind ALTER COLUMN import_id SET NOT NULL;
+"""
+
+
 # Indexes live in their own SQL block so ensure_schema can install them on a
 # fresh database that has not yet run deduplicate_tables. deduplicate_tables
 # also re-applies them because CREATE OR REPLACE TABLE drops associated
@@ -420,6 +525,8 @@ def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """
     _logger.info("Deduplicating tables...")
     conn.execute(_DEDUPLICATE_SQL)
+    # CREATE OR REPLACE TABLE AS SELECT strips NOT NULL / DEFAULT; reapply.
+    conn.execute(_RESTORE_CONSTRAINTS_SQL)
     conn.execute(_CREATE_INDEXES_SQL)
     _logger.info("Deduplication complete")
 

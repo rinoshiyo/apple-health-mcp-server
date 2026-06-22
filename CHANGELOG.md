@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`imports.imported_at` now populates on every import.** Previously
+  the column wrote as `NULL` because `deduplicate_tables()` rebuilds
+  each table via `CREATE OR REPLACE TABLE ... AS SELECT ...`, and
+  DuckDB does not carry NOT NULL / DEFAULT / CHECK constraints
+  through `CREATE TABLE AS SELECT`. With the source schema's
+  `DEFAULT CURRENT_TIMESTAMP` silently stripped, the orchestrator's
+  `INSERT INTO imports (...)` that omits `imported_at` left it
+  unset. The fix re-applies every NOT NULL constraint and the
+  `imported_at` default with a metadata-only `ALTER TABLE` pass
+  after dedup. User-visible effect: `get_import_history` now
+  returns a real `imported_at` timestamp instead of `NULL`, so the
+  tool's documented `ORDER BY imported_at DESC` is finally
+  meaningful. The same dedup bug was silently dropping NOT NULL
+  constraints on 17 other tables; no current code path INSERTs into
+  those tables post-dedup so the loss was latent, but the
+  restoration pass covers them defensively to prevent future drift.
+  Pre-existing in every prior release (Rust upstream included).
+  (#44)
+
 ## [0.1.3] - 2026-06-23
 
 ### Changed
