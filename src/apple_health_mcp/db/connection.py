@@ -97,20 +97,17 @@ def get_connection(
 
     When ``db_path`` is ``None`` the XDG-compliant default is used. For
     writable opens the parent directory is created on demand and the thread
-    pool is tuned via ``PRAGMA threads``. For ``read_only=True`` we never
-    create directories (the file is expected to already exist; raise a
-    clear error if it does not) and skip the PRAGMA so a read-only MCP
-    connection cannot perturb another process's thread-pool tuning.
+    pool is tuned via ``PRAGMA threads``. For ``read_only=True`` we still
+    open the file even if it does not yet exist: a fresh install bootstraps
+    an empty schema-only DB at the requested path via
+    :func:`_materialise_empty_db` so the MCP client can list tools and each
+    tool can surface the standard "run import first" guidance. A WARNING
+    is logged when the bootstrap fires so a typo'd ``--db`` does not
+    silently masquerade as a successful install.
     """
     resolved = db_path if db_path is not None else default_db_path()
     if read_only:
         if not resolved.exists():
-            # A fresh install hasn't run `apple-health-mcp-server import`
-            # yet, but the MCP client still expects to connect and list
-            # tools. Materialise an empty schema-only DB so the read-only
-            # open below succeeds; the tools then return
-            # ``IMPORT_REQUIRED_MESSAGE`` because the ``imports`` table is
-            # empty (see ``server/query.py``).
             _materialise_empty_db(resolved)
     else:
         _ensure_parent_dir(resolved)
@@ -122,22 +119,71 @@ def get_connection(
 
 
 def _materialise_empty_db(db_path: Path) -> None:
-    """Create ``db_path`` as a schema-only DuckDB file.
+    """Bootstrap ``db_path`` as a schema-only DuckDB file, atomically.
+
+    Writes the schema to a per-process temporary file alongside the final
+    path and atomically renames it into place at the end. The all-or-nothing
+    rename guarantees that:
+
+    * A crash partway through ``ensure_schema`` (KeyboardInterrupt, disk
+      full, schema error) leaves no half-initialised file at ``db_path`` —
+      the next ``serve`` invocation will hit the missing-file branch again
+      and re-bootstrap cleanly. Without this, an aborted bootstrap would
+      leave a real file on disk that the next run's ``exists()`` check
+      mistakes for a complete DB, then every tool errors with
+      ``Error: Table imports does not exist`` instead of returning
+      ``IMPORT_REQUIRED_MESSAGE``.
+    * Two concurrent ``serve`` processes (Claude Desktop + Claude Code
+      launched together against the same default XDG path before any
+      import) each write to a distinct ``<pid>``-suffixed temp file; the
+      first ``os.replace`` wins and the loser's temp file is removed.
+      Neither process crashes at startup, and only one bootstrap survives.
+    * If a legitimate ``import`` lands real data at ``db_path`` between
+      our ``exists()`` check and the rename, ``os.replace`` is skipped so
+      we never clobber user data with our empty scaffold.
+
+    The schema is built via ``ensure_schema`` + ``apply_pending_migrations``
+    so the bootstrap path stamps the same ``schema_version`` row the import
+    path would; otherwise a future v2 migration would re-run v1's ALTERs
+    against tables that already carry the v2 shape.
 
     Imported lazily to avoid a top-level circular import between
-    ``db.connection`` and ``db.schema``. The writable connection is closed
-    immediately so the caller can re-open in read-only mode without DuckDB
-    rejecting the second handle as conflicting.
+    ``db.connection`` and ``db.schema`` / ``db.migrations``.
     """
+    from apple_health_mcp.db.migrations import apply_pending_migrations
     from apple_health_mcp.db.schema import ensure_schema
 
+    _logger.warning(
+        "no DuckDB file at %s — bootstrapping an empty schema-only DB so the "
+        "MCP server can start. If this path is wrong (typo in --db, missing "
+        "APPLE_HEALTH_TZ env, etc.), the server will keep returning the "
+        "'run import first' guidance until the path matches your real import.",
+        db_path,
+    )
     _ensure_parent_dir(db_path)
-    bootstrap = duckdb.connect(str(db_path), read_only=False)
+    tmp_path = db_path.with_name(f"{db_path.name}.bootstrap.{os.getpid()}")
+    if tmp_path.exists():
+        # Stale leftover from a previous crash in the same PID slot.
+        tmp_path.unlink()
     try:
-        bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
-        ensure_schema(bootstrap)
-    finally:
-        bootstrap.close()
+        bootstrap = duckdb.connect(str(tmp_path), read_only=False)
+        try:
+            bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+            ensure_schema(bootstrap)
+            apply_pending_migrations(bootstrap)
+        finally:
+            bootstrap.close()
+        if not db_path.exists():
+            os.replace(str(tmp_path), str(db_path))
+        else:  # pragma: no cover - timing-dependent concurrent race
+            tmp_path.unlink()
+    except BaseException:
+        # ``missing_ok=True`` collapses the "did the tmp file ever get
+        # materialised before the crash?" branch into one cleanup call;
+        # the answer doesn't change what we do, only whether unlink
+        # would otherwise raise.
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def get_in_memory_connection() -> duckdb.DuckDBPyConnection:

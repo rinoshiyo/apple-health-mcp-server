@@ -12,8 +12,11 @@ import duckdb
 import pytest
 
 from apple_health_mcp.server.query import (
+    IMPORT_REQUIRED_MESSAGE,
     _coerce,
+    imports_present,
     query_to_json,
+    require_imports_or_message,
     run_query,
     run_query_payload,
 )
@@ -150,3 +153,33 @@ def test_query_to_json_int_types(v: int) -> None:
     conn = duckdb.connect(":memory:")
     rows = query_to_json(conn, f"SELECT CAST({v} AS BIGINT) AS x")
     assert rows == [{"x": v}]
+
+
+def test_imports_present_returns_false_when_imports_table_missing() -> None:
+    """A DB opened against a non-apple-health file returns False, not raise.
+
+    Without this, the surrounding gate would either propagate the
+    CatalogException (crashing the tool call) or swallow it as
+    ``"Error: Table imports does not exist"``, defeating the point of
+    surfacing ``IMPORT_REQUIRED_MESSAGE``.
+    """
+    conn = duckdb.connect(":memory:")
+    assert imports_present(conn) is False
+
+
+def test_require_imports_or_message_returns_message_when_empty() -> None:
+    conn = duckdb.connect(":memory:")
+    assert require_imports_or_message(conn) == IMPORT_REQUIRED_MESSAGE
+
+
+def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
+    """Once the gate sees data, the helper returns ``None`` so the caller proceeds."""
+    from apple_health_mcp.db.schema import ensure_schema
+
+    conn = duckdb.connect(":memory:")
+    ensure_schema(conn)
+    conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+    )
+    assert require_imports_or_message(conn) is None

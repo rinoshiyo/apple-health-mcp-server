@@ -53,12 +53,47 @@ def imports_present(
     check so callers can confirm the empty-DB state without seeing the
     guidance message.
 
-    The check is cheap (single aggregate over a tiny table) and runs on every
-    tool call rather than being cached, so a freshly-imported DB starts
-    returning real data on the very next call without restarting the server.
+    The DB connection holds a read-only snapshot for its lifetime, so a
+    fresh ``import`` from another process is not visible until the MCP
+    server is restarted (this is why the README's Troubleshooting section
+    spells out "restart the server"). We still re-query rather than cache
+    because the check is a single aggregate over a one-row table.
+
+    A missing ``imports`` table (the DB was opened against an unrelated
+    DuckDB file, or a stale pre-schema-version export) is treated as
+    "no imports yet" so the tool layer surfaces ``IMPORT_REQUIRED_MESSAGE``
+    instead of a cryptic ``Error: Table imports does not exist`` — the
+    user's actionable next step is the same either way (run the importer
+    against the right path), and burying the SQL error in a generic
+    "Error: ..." would defeat the whole point of this gate.
     """
-    rows = query_to_json(conn, "SELECT COUNT(*) AS n FROM imports", lock=lock)
-    return bool(rows) and int(rows[0]["n"]) > 0
+    try:
+        rows = query_to_json(conn, "SELECT COUNT(*) AS n FROM imports", lock=lock)
+    except Exception as exc:
+        _logger.debug("imports_present probe failed (%s); treating as empty DB", exc)
+        return False
+    # ``_coerce`` types come back as ``Any``; mypy's no-any-return rule wants
+    # an explicit bool here even though the COUNT(*) value is always an int.
+    return bool(rows[0]["n"] > 0)
+
+
+def require_imports_or_message(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    lock: Lock | None = None,
+) -> str | None:
+    """Return ``IMPORT_REQUIRED_MESSAGE`` when the DB is empty, else ``None``.
+
+    The 4 multi-query tools (``get_workout_details``,
+    ``get_correlation_details``, ``get_ecg_data``, ``get_me_attributes``)
+    cannot funnel through :func:`run_query`'s ``require_data`` gate because
+    they assemble their payload from several ``query_to_json`` calls. They
+    use this helper so the gate lives in one place::
+
+        if msg := require_imports_or_message(conn, lock=lock):
+            return msg
+    """
+    return None if imports_present(conn, lock=lock) else IMPORT_REQUIRED_MESSAGE
 
 
 def _coerce(value: object) -> Any:

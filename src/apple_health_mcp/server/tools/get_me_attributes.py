@@ -19,9 +19,8 @@ from threading import Lock
 from typing import TYPE_CHECKING
 
 from apple_health_mcp.server.query import (
-    IMPORT_REQUIRED_MESSAGE,
-    imports_present,
     query_to_json,
+    require_imports_or_message,
     run_query_payload,
 )
 
@@ -36,8 +35,11 @@ DESCRIPTION = (
     "Return the Apple Health 'Me' characteristic attributes for the most "
     "recent import: import_id, date_of_birth, biological_sex, blood_type, "
     "fitzpatrick_skin_type, cardio_fitness_medications_use. Each field is "
-    "null if the export omitted it. Returns an empty object {} when no "
-    "import has populated the me_attributes table yet."
+    "null if the export omitted it. Returns an empty object {} when an "
+    "import has happened but the export did not include a Me element. "
+    "Before any import has been run, returns the standard "
+    "'No Apple Health data has been imported yet.' guidance string "
+    "instead of an empty object so the LLM has an actionable next step."
 )
 
 # "Most recent" follows the same definition `get_import_history` exposes to
@@ -59,9 +61,9 @@ _SQL = (
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_me_attributes() -> str:
+        if msg := require_imports_or_message(conn, lock=lock):
+            return msg
         try:
-            if not imports_present(conn, lock=lock):
-                return IMPORT_REQUIRED_MESSAGE
             rows = query_to_json(conn, _SQL, lock=lock)
         except Exception as exc:
             # Match `server/query.py::run_query` observability: the wire

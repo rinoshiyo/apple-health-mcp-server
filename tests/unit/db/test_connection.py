@@ -146,11 +146,75 @@ def test_get_connection_read_only_materialises_empty_db_when_missing(
         row = conn.execute("SELECT COUNT(*) FROM imports").fetchone()
         assert row is not None
         assert row[0] == 0
-        # The handle is genuinely read-only — writes still fail.
+        # The handle is genuinely read-only — writes still fail. The INSERT
+        # supplies a fully-valid row (matching the imports schema) so the
+        # only possible cause of duckdb.Error is the read-only refusal: if
+        # we passed NULL for the NOT NULL imported_at column, a constraint
+        # failure could be mistaken for read-only enforcement and the test
+        # would keep passing if RO was silently regressed.
         with pytest.raises(duckdb.Error):
-            conn.execute("INSERT INTO imports VALUES ('x', 'x', NULL, 0, 0, 0)")
+            conn.execute(
+                "INSERT INTO imports VALUES "
+                "('x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+            )
     finally:
         conn.close()
+
+
+def test_materialise_empty_db_cleans_up_stale_bootstrap_tempfile(
+    tmp_path: Path,
+) -> None:
+    """A leftover .bootstrap.<pid> from a previous crash is removed before retry.
+
+    Without this guard, two successive bootstrap attempts from the same
+    process (CLI invoked twice, second time after a crash mid-DDL on the
+    first) would hit ``duckdb.Error`` opening the tmp path that already
+    exists with a half-written DuckDB header.
+    """
+    db_path = tmp_path / "fresh" / "h.duckdb"
+    tmp_marker = db_path.with_name(f"{db_path.name}.bootstrap.{os.getpid()}")
+    tmp_marker.parent.mkdir(parents=True, exist_ok=True)
+    tmp_marker.write_bytes(b"stale leftover from a previous crash")
+    assert tmp_marker.exists()
+
+    conn = get_connection(db_path, read_only=True)
+    try:
+        assert db_path.exists()
+        # Stale tmp marker was removed before the bootstrap re-used the slot,
+        # and the final atomic-rename consumed the new temp file too.
+        assert not tmp_marker.exists()
+    finally:
+        conn.close()
+
+
+def test_materialise_empty_db_removes_tempfile_when_bootstrap_raises(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """A crash mid-DDL leaves no half-initialised file at the final path.
+
+    Without the atomic-rename strategy, an aborted ensure_schema would
+    leave a real DuckDB file at ``db_path`` that the next ``serve`` run
+    would mistake for a complete DB and skip the bootstrap; every tool
+    would then error with ``Error: Table imports does not exist``
+    instead of returning ``IMPORT_REQUIRED_MESSAGE``.
+    """
+    from apple_health_mcp.db import schema as schema_mod
+
+    boom = RuntimeError("simulated DDL crash")
+
+    def _explode(_conn: object) -> None:
+        raise boom
+
+    monkeypatch.setattr(schema_mod, "ensure_schema", _explode)
+
+    db_path = tmp_path / "fresh" / "h.duckdb"
+    tmp_marker = db_path.with_name(f"{db_path.name}.bootstrap.{os.getpid()}")
+
+    with pytest.raises(RuntimeError, match="simulated DDL crash"):
+        get_connection(db_path, read_only=True)
+    # Neither the final path nor the per-pid temp file remain on disk.
+    assert not db_path.exists()
+    assert not tmp_marker.exists()
 
 
 def test_get_connection_read_only_preserves_existing_data_after_bootstrap(

@@ -165,9 +165,22 @@ def test_get_workout_details_missing(seeded_conn: duckdb.DuckDBPyConnection) -> 
     assert payload["route"] is None
 
 
-def test_get_workout_details_db_error_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the DB raises, the tool returns ``Error: ...`` instead of crashing."""
-    fn = _bind(get_workout_details, duckdb.connect(":memory:"))
+def test_get_workout_details_db_error_path(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """If a downstream query raises, the tool returns ``Error: ...``.
+
+    Seeds an ``imports`` row so the empty-DB gate passes (otherwise the
+    tool would short-circuit to ``IMPORT_REQUIRED_MESSAGE`` before the
+    downstream queries run), then drops the ``workouts`` table to force
+    the first ``query_to_json`` call into a binder error.
+    """
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+    )
+    empty_conn.execute("DROP TABLE workouts")
+    fn = _bind(get_workout_details, empty_conn)
     out = asyncio.run(fn(workout_hash="wh1"))
     assert out.startswith("Error: ")
 
@@ -272,8 +285,13 @@ def test_get_correlation_details_missing(
     assert payload["members"] == []
 
 
-def test_get_correlation_details_db_error() -> None:
-    fn = _bind(get_correlation_details, duckdb.connect(":memory:"))
+def test_get_correlation_details_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+    )
+    empty_conn.execute("DROP TABLE correlations")
+    fn = _bind(get_correlation_details, empty_conn)
     out = asyncio.run(fn(correlation_hash="x"))
     assert out.startswith("Error: ")
 
@@ -335,8 +353,13 @@ def test_get_ecg_data_missing_returns_zero_stats(
     assert payload["reading"] is None
 
 
-def test_get_ecg_data_db_error() -> None:
-    fn = _bind(get_ecg_data, duckdb.connect(":memory:"))
+def test_get_ecg_data_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+    )
+    empty_conn.execute("DROP TABLE ecg_readings")
+    fn = _bind(get_ecg_data, empty_conn)
     out = asyncio.run(fn(ecg_hash="x"))
     assert out.startswith("Error: ")
 
@@ -449,8 +472,13 @@ def test_get_me_attributes_returns_empty_when_import_lacks_me_row(
     assert payload == {}
 
 
-def test_get_me_attributes_db_error() -> None:
-    fn = _bind(get_me_attributes, duckdb.connect(":memory:"))
+def test_get_me_attributes_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0)"
+    )
+    empty_conn.execute("DROP TABLE me_attributes")
+    fn = _bind(get_me_attributes, empty_conn)
     out = asyncio.run(fn())
     assert out.startswith("Error: ")
 
@@ -476,7 +504,6 @@ _GATED_TOOLS: list[tuple[Any, dict[str, Any]]] = [
     (get_correlation_details, {"correlation_hash": "ch1"}),
     (list_ecg_readings, {}),
     (get_ecg_data, {"ecg_hash": "eh1"}),
-    (run_custom_query, {"query": "SELECT 1 AS x"}),
     (list_data_sources, {}),
     (list_state_of_mind, {}),
     (get_me_attributes, {}),
@@ -498,7 +525,20 @@ def test_tool_returns_import_required_message_on_empty_db(
 def test_get_import_history_returns_empty_list_on_empty_db(
     empty_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """``get_import_history`` is the sole exception — empty list, not the gate."""
+    """``get_import_history`` is one of two exceptions — empty list, not the gate."""
     fn = _bind(get_import_history, empty_conn)
     rows = _call(fn)
     assert rows == []
+
+
+def test_run_custom_query_runs_on_empty_db(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    """``run_custom_query`` opts out so LLMs can introspect the empty scaffold.
+
+    The natural way an LLM probes the empty-DB state is
+    ``SELECT COUNT(*) FROM imports``; if that hit the gate it would
+    return the guidance string instead of the count, defeating
+    introspection of the freshly-bootstrapped scaffold.
+    """
+    fn = _bind(run_custom_query, empty_conn)
+    rows = _call(fn, query="SELECT COUNT(*) AS n FROM imports")
+    assert rows == [{"n": 0}]
