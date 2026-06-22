@@ -12,6 +12,7 @@ detection is inconclusive.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -271,6 +272,14 @@ def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: st
             # Mid-stream non-numeric line ends the voltage section -- the
             # Rust importer behaves the same way for forward compatibility.
             break
+        # Reject NaN / Inf so a single bad sample does not poison the
+        # whole ECG file's bulk load. DuckDB's CSV reader does not parse
+        # ``inf`` / ``-inf`` into DOUBLE by default, so without this guard
+        # one malformed voltage line would fail the entire COPY for the
+        # file. Mirrors :func:`apple_health_mcp.importers.xml._parse_opt_float`
+        # and :func:`apple_health_mcp.importers.gpx._parse_float`.
+        if not math.isfinite(voltage):
+            continue
         samples.append((ecg_hash, sample_idx, voltage))
         sample_idx += 1
     # Per-file ECGs often carry several thousand voltage samples; route

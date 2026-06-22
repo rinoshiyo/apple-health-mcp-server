@@ -67,8 +67,16 @@ def run_import(
         # bulk-load path (issue #41) is unordered by design — Appender / COPY
         # FROM CSV both write in the order rows arrive at the buffer, and
         # downstream queries always re-sort via ORDER BY anyway — so we tell
-        # DuckDB to skip the preservation work for this session. Session
-        # PRAGMA, so the override does not leak to other connections.
+        # DuckDB to skip the preservation work.
+        #
+        # Scope: this is a session-scoped PRAGMA on the connection ``_open_db``
+        # just opened above; we close that connection in the ``finally`` at
+        # the bottom of ``run_import``. The override therefore lives for the
+        # lifetime of THIS import only, and cannot leak to a future caller
+        # that opens its own connection. A future refactor that calls
+        # ``run_import`` with an externally-owned conn would inherit the
+        # PRAGMA for that conn's remaining lifetime — if that ever happens,
+        # move the PRAGMA into ``get_connection(read_only=False)`` instead.
         conn.execute("PRAGMA preserve_insertion_order = false;")
 
         _logger.info("Phase 1: Parsing export.xml")

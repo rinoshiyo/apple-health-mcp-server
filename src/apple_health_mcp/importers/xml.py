@@ -15,6 +15,14 @@ Per-row state is built up while ``start`` events fire and committed at the
 matching ``end`` event (so a Workout that fails to close never leaks
 orphaned children into the database). Hashes match the Rust version
 byte-for-byte via :func:`apple_health_mcp.importers._hash.compute_hash`.
+
+Bulk-load policy (issue #41): every multi-row buffer flushes through
+:func:`apple_health_mcp.importers._bulk.bulk_load_via_csv` via the 12
+``_flush_*`` helpers below. The three singleton-row inserts (HealthData,
+ExportDate, Me) deliberately bypass the bulk helper — each fires at most
+once per import, so the tempfile+COPY overhead would dwarf a single
+``conn.execute("INSERT ...")``. Future contributors adding a per-import
+singleton row should follow the same direct-INSERT pattern.
 """
 
 from __future__ import annotations

@@ -228,6 +228,23 @@ def test_import_single_ecg_voltage_section_terminates_on_non_numeric(
     assert row is not None and int(row[0]) == 2
 
 
+def test_import_single_ecg_skips_non_finite_voltage_samples(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """``inf`` / ``nan`` voltage values are skipped so the bulk COPY does not fail.
+
+    Without the finite check in ``ecg.py``, a single non-finite sample
+    would fail the entire COPY for that ECG file because DuckDB's CSV
+    reader does not parse ``inf`` into the ``DOUBLE`` column. The skip
+    matches the ``_parse_opt_float`` rejection in xml.py / gpx.py.
+    """
+    csv = 'Recorded Date,2024-06-15 10:30:00 +0000\nDevice,"Apple Watch"\n\n10\ninf\n20\nnan\n30\n-inf\n40\n'
+    path = _write_csv(tmp_path, "ecg_nonfinite.csv", csv)
+    import_single_ecg(conn, path, "imp_nonfinite")
+    row = conn.execute("SELECT COUNT(*) FROM ecg_samples").fetchone()
+    assert row is not None and int(row[0]) == 4  # 10, 20, 30, 40 only
+
+
 def test_import_ecg_files_missing_dir_returns_zero(
     conn: duckdb.DuckDBPyConnection, tmp_path: Path
 ) -> None:
