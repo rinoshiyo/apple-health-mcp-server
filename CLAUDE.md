@@ -8,7 +8,7 @@ Codex, etc.) working on this repository.
 `apple-health-mcp-server` is a Model Context Protocol server that
 ingests an Apple Health export (`export.xml` + the ECG CSVs and GPX
 route files Apple ships alongside it) into a local DuckDB database
-and exposes 16 read-oriented tools over it. The CLI ships two
+and exposes 17 read-oriented tools over it. The CLI ships two
 subcommands: `apple-health-mcp-server import <dir>` and
 `apple-health-mcp-server serve`. Distribution targets are PyPI (uvx)
 and Claude Desktop DXT bundles. All data stays local; nothing is
@@ -23,7 +23,7 @@ src/apple_health_mcp/
   logging_config.py logging setup (stderr only, stdout reserved for MCP)
   importers/        XML / ECG / GPX importers + dedup + orchestrator
   db/               DuckDB schema + connection helpers + migrations
-  server/           FastMCP server, query validation, and 16 tool modules
+  server/           FastMCP server, query validation, and 17 tool modules
   models/           Pydantic v2 schemas (reserved for future use)
 ```
 

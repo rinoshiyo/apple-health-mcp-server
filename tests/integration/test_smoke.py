@@ -4,7 +4,7 @@ These tests are intentionally coarse: they assemble a minimal Apple Health
 ``export_dir`` from the synthetic fixtures under ``tests/fixtures/``, run
 the full XML -> ECG -> GPX -> finalize pipeline through
 :func:`apple_health_mcp.importers.run_import`, and then invoke every one of
-the 16 MCP tools to confirm each can return a well-formed JSON payload from
+the 17 MCP tools to confirm each can return a well-formed JSON payload from
 the resulting database. The fine-grained behaviour of each importer and
 tool is covered by the unit suites; this module's job is to catch
 regressions in the wiring between layers.
@@ -31,6 +31,7 @@ from apple_health_mcp.server.tools import (
     get_ecg_data,
     get_heart_rate_samples,
     get_import_history,
+    get_me_attributes,
     get_record_statistics,
     get_workout_details,
     get_workout_route,
@@ -142,7 +143,7 @@ def test_gpx_importer_smoke(imported_db: ImportedFixture) -> None:
 
 
 def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
-    """Invoke each of the 16 MCP tools against the fixture-imported DB."""
+    """Invoke each of the 17 MCP tools against the fixture-imported DB."""
     with _open_db(imported_db.db_path) as conn:
         # Resolve fixture-derived row keys once.
         workout_hash = _scalar(conn, "SELECT workout_hash FROM workouts LIMIT 1")
@@ -237,3 +238,9 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         # 16. list_state_of_mind
         rows = call_tool(bind_tool(list_state_of_mind, conn))
         assert len(rows) == 1
+
+        # 17. get_me_attributes — round-trip the <Me> element written into
+        # sample_export.xml.
+        payload = call_tool(bind_tool(get_me_attributes, conn))
+        assert payload["date_of_birth"] == "1990-01-01"
+        assert payload["biological_sex"] == "HKBiologicalSexNotSet"

@@ -27,13 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `apple_health_mcp.importers.run_import`. Time-zone alignment between
   XML (local wall-clock) and GPX (true UTC) is preserved via per-workout
   offsets. (#5, #6, #7, #8)
-- **FastMCP server with 16 read-oriented tools**:
+- **FastMCP server with 17 read-oriented tools**:
   `list_record_types`, `query_records`, `get_record_statistics`,
   `list_workouts`, `get_workout_details`, `get_activity_summaries`,
   `get_workout_route`, `get_heart_rate_samples`, `list_correlations`,
   `get_correlation_details`, `list_ecg_readings`, `get_ecg_data`,
   `run_custom_query`, `list_data_sources`, `get_import_history`,
-  `list_state_of_mind`. (#11, #12, #13)
+  `list_state_of_mind`, `get_me_attributes`. (#11, #12, #13, #30)
 - **Test fixtures and end-to-end integration smoke** under
   `tests/fixtures/` and `tests/integration/`, plus per-matrix-cell
   coverage XML and a single canonical HTML coverage artifact in CI.

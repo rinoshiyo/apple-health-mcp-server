@@ -19,6 +19,7 @@ from apple_health_mcp.server.tools import (
     get_ecg_data,
     get_heart_rate_samples,
     get_import_history,
+    get_me_attributes,
     get_record_statistics,
     get_workout_details,
     get_workout_route,
@@ -41,8 +42,10 @@ RegisterFn = Callable[["FastMCP", "duckdb.DuckDBPyConnection", Lock], None]
 
 
 # Ordered the same way the Rust reference declared them so a side-by-side
-# audit stays straightforward. ``list_state_of_mind`` is the Python-only
-# addition required by issue #13.
+# audit stays straightforward. ``list_state_of_mind`` (issue #13) and
+# ``get_me_attributes`` (issue #30) are Python-only additions that surface
+# structured Apple Health elements the Rust port left buried under the
+# generic record / metadata path.
 ALL_TOOLS: list[RegisterFn] = [
     list_record_types.register,
     query_records.register,
@@ -60,4 +63,5 @@ ALL_TOOLS: list[RegisterFn] = [
     list_data_sources.register,
     get_import_history.register,
     list_state_of_mind.register,
+    get_me_attributes.register,
 ]

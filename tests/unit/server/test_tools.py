@@ -1,4 +1,4 @@
-"""Tests for the 16 MCP tools.
+"""Tests for the 17 MCP tools.
 
 The tests bypass FastMCP entirely: each tool module's ``register`` is
 called with a small stub that records the decorated function, so the
@@ -22,6 +22,7 @@ from apple_health_mcp.server.tools import (
     get_ecg_data,
     get_heart_rate_samples,
     get_import_history,
+    get_me_attributes,
     get_record_statistics,
     get_workout_details,
     get_workout_route,
@@ -414,3 +415,33 @@ def test_list_state_of_mind_empty_when_outside_window(
     fn = _bind(list_state_of_mind, seeded_conn)
     rows = _call(fn, start_date="2030-01-01")
     assert rows == []
+
+
+# --- get_me_attributes -------------------------------------------------------
+
+
+def test_get_me_attributes_returns_seeded_row(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(get_me_attributes, seeded_conn)
+    payload = _call(fn)
+    assert payload["import_id"] == "imp1"
+    assert payload["date_of_birth"] == "1990-01-01"
+    assert payload["biological_sex"] == "HKBiologicalSexNotSet"
+    assert payload["blood_type"] == "HKBloodTypeNotSet"
+    assert payload["fitzpatrick_skin_type"] == "HKFitzpatrickSkinTypeNotSet"
+    assert payload["cardio_fitness_medications_use"] == "None"
+
+
+def test_get_me_attributes_returns_empty_when_no_row(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(get_me_attributes, empty_conn)
+    payload = _call(fn)
+    assert payload == {}
+
+
+def test_get_me_attributes_db_error() -> None:
+    fn = _bind(get_me_attributes, duckdb.connect(":memory:"))
+    out = asyncio.run(fn())
+    assert out.startswith("Error: ")

@@ -89,6 +89,10 @@ INSERT INTO records VALUES
      TIMESTAMP '2024-01-03 09:00:00', TIMESTAMP '2024-01-03 09:00:00', 'imp1');
 INSERT INTO state_of_mind VALUES
     ('som1', 0.5, 'momentary', 'Joy,Calm', 'Family', 'imp1');
+-- Me characteristic attributes seed (one row per import_id).
+INSERT INTO me_attributes VALUES
+    ('imp1', '1990-01-01', 'HKBiologicalSexNotSet', 'HKBloodTypeNotSet',
+     'HKFitzpatrickSkinTypeNotSet', 'None');
 """
 
 

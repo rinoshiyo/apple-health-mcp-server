@@ -14,7 +14,7 @@
 および同梱の ECG CSV / GPX ルートファイル群）を、ローカル
 [DuckDB](https://duckdb.org/) データベースを介して任意の
 [Model Context Protocol](https://modelcontextprotocol.io/) クライアント
-（Claude Desktop を含む）へ公開します。読み取り中心の 16 ツールで構成されます。
+（Claude Desktop を含む）へ公開します。読み取り中心の 17 ツールで構成されます。
 
 ## 特徴
 
@@ -81,7 +81,7 @@ uvx apple-health-mcp-server import /path/to/apple_health_export
 
 ## ツール群
 
-FastMCP に登録される 16 ツールを系統別にまとめます。
+FastMCP に登録される 17 ツールを系統別にまとめます。
 
 | 系統 | ツール |
 |---|---|
@@ -92,6 +92,7 @@ FastMCP に登録される 16 ツールを系統別にまとめます。
 | 相関 | `list_correlations`, `get_correlation_details` |
 | ECG | `list_ecg_readings`, `get_ecg_data` |
 | 気分（State of Mind） | `list_state_of_mind` |
+| Me 属性 | `get_me_attributes` |
 | メタデータ・運用 | `list_data_sources`, `get_import_history` |
 | エスケープハッチ | `run_custom_query`（読み取り専用の検証済み SQL） |
 
