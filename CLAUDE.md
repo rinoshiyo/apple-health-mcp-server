@@ -72,9 +72,12 @@ must be fully green; the unit and integration tests share fixtures via
 - Apple Health duplicates `Correlation` children at the top level by
   spec; importers must hash both paths identically so dedup collapses
   them to one `records` row.
-- GPX timestamps are true UTC; XML timestamps are local wall-clock
-  time. The GPX importer shifts route points by the parent workout's
-  offset (from `workout_offset_map`) so joins are clean.
+- GPX timestamps are true UTC (`Z`-suffixed); XML timestamps carry an
+  explicit `+HHMM` offset that the importer reshapes to ISO 8601
+  `+HH:MM` form. Both feed DuckDB's `TIMESTAMPTZ` parser, which stores
+  them as the same canonical UTC instant — no per-workout shift is
+  needed. The session timezone (`--tz` / `APPLE_HEALTH_TZ`, defaults to
+  the OS local TZ) only affects the render path.
 
 ## 6. Language Policy
 

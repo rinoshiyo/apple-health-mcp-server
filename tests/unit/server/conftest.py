@@ -101,6 +101,12 @@ def seeded_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection populated with synthetic Apple Health rows."""
     conn = get_in_memory_connection()
     ensure_schema(conn)
+    # Pin the session TZ so naive TIMESTAMP seed literals land at the
+    # same UTC instant regardless of the host OS local TZ. The seeds
+    # below intentionally use bare ``TIMESTAMP '...'`` literals because
+    # they read as "Apple Watch / iPhone wall-clock"; pinning UTC here
+    # keeps that mental model deterministic across the CI matrix.
+    conn.execute("SET TimeZone = 'UTC';")
     conn.execute(_SEED_SQL)
     rebuild_daily_stats(conn)
     yield conn
@@ -112,6 +118,7 @@ def empty_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection with schema only -- no rows."""
     conn = get_in_memory_connection()
     ensure_schema(conn)
+    conn.execute("SET TimeZone = 'UTC';")
     rebuild_daily_stats(conn)
     yield conn
     conn.close()

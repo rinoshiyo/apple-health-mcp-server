@@ -12,13 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Time-zone handling: every timestamp column is now `TIMESTAMPTZ`.**
   Apple Health XML offsets are normalised to ISO 8601 `+HH:MM` form and
   fed straight to DuckDB; GPX `Z`-suffixed timestamps land as true UTC
-  instants. The Rust port's wall-clock-plus-`start_offset_minutes`
-  workaround (and the GPX-side `shift_utc_to_local` shim) is gone. New
-  `--tz` CLI flag and `APPLE_HEALTH_TZ` env var override the session TZ
-  used to render TIMESTAMPTZ on read; the OS local TZ remains the
-  default. Required `pytz` as an explicit dependency because DuckDB's
-  Python binding lazily imports it for TIMESTAMPTZ -> tz-aware
-  `datetime` materialisation. (#29)
+  instants. New `--tz` CLI flag and `APPLE_HEALTH_TZ` env var override
+  the session TZ used to render TIMESTAMPTZ on read; the OS local TZ
+  remains the default. Required `pytz` as an explicit dependency
+  because DuckDB's Python binding lazily imports it for TIMESTAMPTZ ->
+  tz-aware `datetime` materialisation. (#29)
+- **Wire-format: tool responses now include a UTC offset suffix on
+  datetime fields** (e.g. `"2024-01-01 10:00:00+00:00"` instead of the
+  previous `"2024-01-01 10:00:00"`). Consumers that pinned the previous
+  19-character fixed-width form should update their parsers to ISO
+  8601. (#29)
 
 ## [0.1.0] - 2026-06-22
 

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +29,10 @@ from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._hash import compute_hash
+from apple_health_mcp.importers._tz import (
+    normalize_apple_offset,
+    normalize_apple_offset_opt,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -102,31 +105,12 @@ def _parse_opt_float(raw: str | None) -> float | None:
     return value
 
 
-# Collapses any trailing UTC offset of the form ``" +HHMM"``, ``"+HHMM"``,
-# ``" +HH:MM"``, or ``"+HH:MM"`` into the colon-bearing, space-less
-# ``"+HH:MM"`` ISO 8601 form. DuckDB's TIMESTAMPTZ parser treats the
-# four-digit Apple variant and the space-separated offset as a TZ
-# *name* — and then errors with "Unknown TimeZone" because the lookup
-# misses — so the importer normalises before insertion.
-_OFFSET_TAIL_RE = re.compile(r" *([+-])(\d{2}):?(\d{2})$")
-
-
-def _clean_date(raw: str) -> str:
-    """Normalize an Apple Health XML date for DuckDB ``TIMESTAMPTZ`` ingestion.
-
-    Apple emits ``"YYYY-MM-DD HH:MM:SS +HHMM"``. After this helper the
-    output is ``"YYYY-MM-DD HH:MM:SS+HH:MM"`` which DuckDB parses to a
-    UTC instant. Strings without a recognised offset suffix (naive
-    timestamps Apple occasionally emits for legacy fields) pass through
-    unchanged so DuckDB applies the session TZ on the read path.
-    """
-    return _OFFSET_TAIL_RE.sub(r"\1\2:\3", raw)
-
-
-def _clean_date_opt(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    return _clean_date(raw)
+# XML date attributes go through the shared ``importers/_tz.py`` helpers
+# so the ECG importer applies the identical normalisation — a JST row from
+# the XML feed and the same JST row from an ECG CSV must land as the same
+# UTC instant in TIMESTAMPTZ columns.
+_clean_date = normalize_apple_offset
+_clean_date_opt = normalize_apple_offset_opt
 
 
 # --- importer ----------------------------------------------------------------
