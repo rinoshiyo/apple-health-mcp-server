@@ -7,4 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/HEAD...HEAD
+- **PyPI Trusted Publishing release workflow** (`v*` tag triggers OIDC
+  publish via `pypa/gh-action-pypi-publish`); the v0.1.0 tag itself is
+  pushed only after manual go-ahead. (#20)
+- **Wire `apple-health-mcp-server import` to the orchestrator** so the
+  CLI subcommand actually ingests data. (#27)
+
+## [0.1.0] - 2026-06-22
+
+### Added
+
+- **Project bootstrap.** `pyproject.toml` targeting Python 3.12+ with
+  `uv`, `ruff`, `mypy --strict`, `pytest --cov-branch --cov-fail-under=100`,
+  and `pre-commit` wired up. (#1, #2, #3, #4)
+- **DuckDB schema and connection layer** ported from the Rust reference
+  implementation, including deterministic deduplication and derived
+  daily-stats rebuild. (#9, #10)
+- **Importers** for Apple Health XML, ECG CSV (multi-locale), and GPX
+  workout routes, orchestrated through
+  `apple_health_mcp.importers.run_import`. Time-zone alignment between
+  XML (local wall-clock) and GPX (true UTC) is preserved via per-workout
+  offsets. (#5, #6, #7, #8)
+- **FastMCP server with 16 read-oriented tools**:
+  `list_record_types`, `query_records`, `get_record_statistics`,
+  `list_workouts`, `get_workout_details`, `get_activity_summaries`,
+  `get_workout_route`, `get_heart_rate_samples`, `list_correlations`,
+  `get_correlation_details`, `list_ecg_readings`, `get_ecg_data`,
+  `run_custom_query`, `list_data_sources`, `get_import_history`,
+  `list_state_of_mind`. (#11, #12, #13)
+- **Test fixtures and end-to-end integration smoke** under
+  `tests/fixtures/` and `tests/integration/`, plus per-matrix-cell
+  coverage XML and a single canonical HTML coverage artifact in CI.
+  (#14, #15, #16)
+- **Documentation**: English and Japanese READMEs, this changelog, and
+  `CLAUDE.md` covering architecture, dev commands, conventions, domain
+  rules, language policy, and the mandatory `/code-review --fix`
+  policy for every PR. (#17, #18, #19)
+
+[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rinoshiyo/apple-health-mcp-server/releases/tag/v0.1.0

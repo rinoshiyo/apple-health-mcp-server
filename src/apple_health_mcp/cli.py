@@ -2,10 +2,8 @@
 
 Two subcommands:
 
-* ``import <export>`` -- ingest an Apple Health export into the local DB.
-  Still a stub here; the importers are wired in
-  :mod:`apple_health_mcp.importers.orchestrator` and will be hooked up in
-  a follow-up issue.
+* ``import <export>`` -- ingest an Apple Health export into the local DB
+  via :func:`apple_health_mcp.importers.run_import`.
 * ``serve`` -- run the FastMCP server. Defaults to stdio (so it drops into
   Claude Desktop / Codex / Cursor as-is); HTTP is opt-in via
   ``--transport http --port 8080``.
@@ -23,7 +21,7 @@ import typer
 from apple_health_mcp.logging_config import configure_logging
 
 app = typer.Typer(
-    name="apple-health-mcp",
+    name="apple-health-mcp-server",
     help="Apple Health MCP server command-line interface.",
     no_args_is_help=True,
 )
@@ -57,12 +55,29 @@ def import_cmd(
     ctx: typer.Context,
     export_path: Path = typer.Argument(
         ...,
-        help="Path to the Apple Health export.zip or extracted directory.",
+        help="Path to the Apple Health extracted export directory.",
     ),
 ) -> None:
     """Import an Apple Health export into the local DuckDB database."""
+    # Imported lazily so `apple-health-mcp-server serve` does not pay the
+    # importer / lxml import cost on every CLI invocation.
+    from apple_health_mcp.exceptions import AppleHealthMCPError
+    from apple_health_mcp.importers import run_import
+
     db: Path | None = ctx.obj["db"]
-    _logger.info("import stub invoked: export=%s db=%s", export_path, db)
+    _logger.info("import invoked: export=%s db=%s", export_path, db)
+    try:
+        stats = run_import(export_path, db)
+    except AppleHealthMCPError as exc:
+        _logger.error("import failed: %s", exc)
+        raise typer.Exit(code=1) from exc
+    _logger.info(
+        "import complete: records=%d workouts=%d ecg_readings=%d route_points=%d",
+        stats.records,
+        stats.workouts,
+        stats.ecg_readings,
+        stats.route_points,
+    )
 
 
 @app.command()
