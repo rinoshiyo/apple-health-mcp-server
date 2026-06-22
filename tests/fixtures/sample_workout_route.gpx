@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Synthetic Test Data" xmlns="http://www.topografix.com/GPX/1/1">
+ <metadata>
+  <time>2024-06-15T10:00:00Z</time>
+ </metadata>
+ <trk>
+  <name>sample_workout_route</name>
+  <trkseg>
+   <trkpt lat="37.7749" lon="-122.4194">
+    <ele>15.0</ele>
+    <time>2024-06-15T10:00:00Z</time>
+    <extensions>
+     <speed>2.5</speed>
+     <course>90.0</course>
+     <hAcc>5.0</hAcc>
+     <vAcc>5.0</vAcc>
+    </extensions>
+   </trkpt>
+   <trkpt lat="37.7750" lon="-122.4195">
+    <ele>15.5</ele>
+    <time>2024-06-15T10:00:10Z</time>
+    <extensions>
+     <speed>2.6</speed>
+     <course>92.0</course>
+     <hAcc>5.0</hAcc>
+     <vAcc>5.0</vAcc>
+    </extensions>
+   </trkpt>
+   <trkpt lat="37.7751" lon="-122.4196">
+    <ele>16.0</ele>
+    <time>2024-06-15T10:00:20Z</time>
+    <extensions>
+     <speed>2.7</speed>
+     <course>94.0</course>
+     <hAcc>5.0</hAcc>
+     <vAcc>5.0</vAcc>
+    </extensions>
+   </trkpt>
+  </trkseg>
+ </trk>
+</gpx>
