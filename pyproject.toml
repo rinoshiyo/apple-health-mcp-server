@@ -26,6 +26,7 @@ dependencies = [
     "pydantic>=2.0",
     "chardet>=5.0",
     "typer>=0.12",
+    "sqlglot>=25.0",
 ]
 
 [project.scripts]
@@ -91,7 +92,7 @@ packages = ["apple_health_mcp"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["duckdb", "chardet"]
+module = ["duckdb", "chardet", "sqlglot", "sqlglot.expressions"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

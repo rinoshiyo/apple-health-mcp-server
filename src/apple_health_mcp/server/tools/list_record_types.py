@@ -1,0 +1,32 @@
+"""``list_record_types`` MCP tool."""
+
+from __future__ import annotations
+
+from threading import Lock
+from typing import TYPE_CHECKING
+
+from apple_health_mcp.server.query import run_query
+
+if TYPE_CHECKING:
+    import duckdb
+    from mcp.server.fastmcp import FastMCP
+
+
+DESCRIPTION = (
+    "List all available health record types with counts and date ranges. "
+    "Use this first to discover what data is available. Returns: type "
+    "(e.g. HKQuantityTypeIdentifierHeartRate, HKQuantityTypeIdentifierStepCount), "
+    "count, unit, earliest_date, latest_date."
+)
+
+_SQL = (
+    "SELECT record_type AS type, COUNT(*) AS count, unit, "
+    "MIN(start_date) AS earliest_date, MAX(start_date) AS latest_date "
+    "FROM records GROUP BY record_type, unit ORDER BY count DESC"
+)
+
+
+def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
+    @mcp.tool(description=DESCRIPTION)
+    async def list_record_types() -> str:
+        return run_query(conn, _SQL, lock=lock)
