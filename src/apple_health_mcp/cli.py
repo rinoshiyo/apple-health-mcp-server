@@ -1,11 +1,19 @@
 """Command-line interface for the Apple Health MCP server.
 
-This module currently exposes ``import`` and ``serve`` stub subcommands.
-Concrete behavior is implemented in later milestones (importers / server).
+Two subcommands:
+
+* ``import <export>`` -- ingest an Apple Health export into the local DB.
+  Still a stub here; the importers are wired in
+  :mod:`apple_health_mcp.importers.orchestrator` and will be hooked up in
+  a follow-up issue.
+* ``serve`` -- run the FastMCP server. Defaults to stdio (so it drops into
+  Claude Desktop / Codex / Cursor as-is); HTTP is opt-in via
+  ``--transport http --port 8080``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from enum import StrEnum
 from pathlib import Path
@@ -66,13 +74,37 @@ def serve(
         case_sensitive=False,
         help="Transport: 'stdio' (default) or 'http'.",
     ),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="HTTP bind host when --transport=http.",
+    ),
     port: int = typer.Option(
         8080, "--port", min=1, max=65535, help="HTTP port when --transport=http."
     ),
 ) -> None:
     """Run the Apple Health MCP server."""
+    # Imported lazily so `apple-health-mcp import ...` does not pay the
+    # FastMCP / mcp import cost on every CLI invocation.
+    from apple_health_mcp.exceptions import AppleHealthMCPError
+    from apple_health_mcp.server import run_server
+
     db: Path | None = ctx.obj["db"]
-    _logger.info("serve stub invoked: transport=%s port=%s db=%s", transport.value, port, db)
+    _logger.info(
+        "serve invoked: transport=%s host=%s port=%s db=%s",
+        transport.value,
+        host,
+        port,
+        db,
+    )
+    try:
+        asyncio.run(run_server(db, transport.value, host=host, port=port))
+    except AppleHealthMCPError as exc:
+        # Surface a typed exit instead of a raw traceback. The most common
+        # cause is ``DatabaseError`` from a fresh install that hasn't run
+        # ``apple-health-mcp import`` yet.
+        _logger.error("server failed to start: %s", exc)
+        raise typer.Exit(code=1) from exc
 
 
 def main() -> None:

@@ -44,6 +44,12 @@ _BATCH_SIZE = 100_000
 # consecutive errors so a corrupt-stream loop cannot spin forever.
 _MAX_CONSECUTIVE_PARSE_ERRORS = 100
 
+# iOS 17+ State of Mind records are emitted as Category records of this type.
+# The XML importer breaks them out into the dedicated ``state_of_mind`` table
+# so the ``list_state_of_mind`` MCP tool can return valence / kind / labels /
+# associations as first-class fields instead of opaque metadata blobs.
+_STATE_OF_MIND_RECORD_TYPE = "HKCategoryTypeIdentifierStateOfMind"
+
 
 @dataclass
 class ImportStats:
@@ -72,6 +78,7 @@ class ImportStats:
     correlation_members: int = 0
     me_rows: int = 0
     export_metadata_rows: int = 0
+    state_of_mind_rows: int = 0
     workout_route_map: dict[str, str] = field(default_factory=dict)
     workout_offset_map: dict[str, int] = field(default_factory=dict)
 
@@ -176,6 +183,7 @@ class _XmlImporter:
         self._heart_rate_samples: list[tuple[object, ...]] = []
         self._correlations: list[tuple[object, ...]] = []
         self._correlation_members: list[tuple[object, ...]] = []
+        self._state_of_mind: list[tuple[object, ...]] = []
 
         # Per-workout staging (only flushed when the Workout end-event fires
         # so a malformed mid-workout abort never leaks orphan children).
@@ -193,6 +201,11 @@ class _XmlImporter:
         self._in_record = False
         self._current_record_hash: str | None = None
         self._current_hr_sample_idx = 0
+
+        # Per-StateOfMind-record staging. Populated only when the current
+        # Record is a HKCategoryTypeIdentifierStateOfMind; flushed at the
+        # Record end event.
+        self._current_state_of_mind: dict[str, object] | None = None
 
         # Correlation children share the top-level Record structure but their
         # row is recorded by the top-level scanner; here we only capture the
@@ -298,6 +311,7 @@ class _XmlImporter:
     def _on_end(self, elem: etree._Element) -> None:
         tag = elem.tag
         if tag == "Record":
+            self._finalize_state_of_mind()
             self._in_record = False
             self._current_record_hash = None
         elif tag == "WorkoutRoute":
@@ -429,6 +443,18 @@ class _XmlImporter:
         self._in_record = True
         self._current_record_hash = record_hash
         self._current_hr_sample_idx = 0
+        if record_type == _STATE_OF_MIND_RECORD_TYPE:
+            # Seed the StateOfMind buffer with the record's numeric value as
+            # a starting valence; metadata-supplied valence (if any) wins.
+            self._current_state_of_mind = {
+                "record_hash": record_hash,
+                "valence": value,
+                "kind": None,
+                "labels": None,
+                "associations": None,
+            }
+        else:
+            self._current_state_of_mind = None
         if len(self._records) >= _BATCH_SIZE:
             self._flush_records()
 
@@ -466,6 +492,7 @@ class _XmlImporter:
         if self._in_record and self._current_record_hash is not None:
             self._record_metadata.append((self._current_record_hash, key, value))
             self._stats.metadata_entries += 1
+            self._capture_state_of_mind_metadata(key, value)
             if len(self._record_metadata) >= _BATCH_SIZE:
                 self._flush_record_metadata()
         elif self._in_workout:
@@ -640,6 +667,76 @@ class _XmlImporter:
         if len(self._correlations) >= _BATCH_SIZE:
             self._flush_correlations()
 
+    # -- StateOfMind helpers ------------------------------------------------
+
+    def _capture_state_of_mind_metadata(self, key: str, value: str) -> None:
+        """Pull StateOfMind fields out of a generic ``MetadataEntry``.
+
+        Apple shipped multiple key spellings between iOS 17 betas and the
+        GM release (``HKMetadataKeyMoodValenceClassification`` vs
+        ``HKMetadataKeyStateOfMindValence``), so we don't pin a hard-coded
+        list. Instead the key must start with ``HKMetadataKey`` *and* end
+        with one of the well-defined tokens, so an unrelated key that
+        merely contains "association" / "kind" / "label" / "valence" as a
+        substring (e.g. a hypothetical ``...StateOfMindAssociatedFood``)
+        cannot silently overwrite the structured field.
+
+        ``valence`` is coerced to ``float`` and silently dropped on parse
+        failure (so a future Apple change from numeric to enum-string does
+        not poison the row -- it just falls back to the record's seeded
+        value).
+        """
+        if self._current_state_of_mind is None:
+            return
+        if not key.startswith("HKMetadataKey"):
+            return
+        key_lower = key.lower()
+        if key_lower.endswith("valence") or key_lower.endswith("valenceclassification"):
+            try:
+                parsed = float(value)
+            except ValueError:
+                return
+            if not math.isfinite(parsed):
+                return
+            self._current_state_of_mind["valence"] = parsed
+        elif key_lower.endswith("labels"):
+            self._current_state_of_mind["labels"] = value
+        elif key_lower.endswith("associations"):
+            self._current_state_of_mind["associations"] = value
+        elif key_lower.endswith("kind"):
+            self._current_state_of_mind["kind"] = value
+
+    def _finalize_state_of_mind(self) -> None:
+        som = self._current_state_of_mind
+        self._current_state_of_mind = None
+        if som is None:
+            return
+        # Skip records that yielded no structured StateOfMind information at
+        # all. A category Record that happens to carry the StateOfMind type
+        # identifier (or a stripped export with metadata removed) would
+        # otherwise produce an all-NULL row that ``list_state_of_mind``
+        # surfaces as a real mood entry.
+        if (
+            som["valence"] is None
+            and som["kind"] is None
+            and som["labels"] is None
+            and som["associations"] is None
+        ):
+            return
+        self._state_of_mind.append(
+            (
+                som["record_hash"],
+                som["valence"],
+                som["kind"],
+                som["labels"],
+                som["associations"],
+                self._import_id,
+            )
+        )
+        self._stats.state_of_mind_rows += 1
+        if len(self._state_of_mind) >= _BATCH_SIZE:
+            self._flush_state_of_mind()
+
     # -- finalizers for nested blocks ---------------------------------------
 
     def _finalize_workout_route(self) -> None:
@@ -810,6 +907,15 @@ class _XmlImporter:
         )
         self._correlation_members.clear()
 
+    def _flush_state_of_mind(self) -> None:
+        if not self._state_of_mind:
+            return
+        self._conn.executemany(
+            "INSERT INTO state_of_mind VALUES (?, ?, ?, ?, ?, ?)",
+            self._state_of_mind,
+        )
+        self._state_of_mind.clear()
+
     def _flush_all(self) -> None:
         self._flush_records()
         self._flush_record_metadata()
@@ -822,6 +928,7 @@ class _XmlImporter:
         self._flush_heart_rate_samples()
         self._flush_correlations()
         self._flush_correlation_members()
+        self._flush_state_of_mind()
 
 
 def import_xml(conn: duckdb.DuckDBPyConnection, xml_path: Path, import_id: str) -> ImportStats:
