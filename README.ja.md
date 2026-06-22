@@ -178,12 +178,19 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 するため、 新しいリリースを公開しても**自動では更新されません**。 用途に応
 じて以下のいずれかを選んでください。
 
-- **常に最新版を取得する** — 更新したいタイミングで `--refresh` を一度付け
-  て実行します。
+- **常に最新版を取得する** — 最新の公開バージョンを使いたい場合は
+  `@latest` サフィックスを付けて実行します。
 
   ```bash
-  uvx --refresh apple-health-mcp-server serve
+  uvx apple-health-mcp-server@latest serve
   ```
+
+  > **なぜ `--refresh` ではないのか？** `--refresh` は PyPI のメタデータを
+  > 再検証するものの、 キャッシュ済みのツール環境を必ず再構築するわけでは
+  > なく、 新しいリリースが公開されていても以前のキャッシュが黙って使われ
+  > 続けることがあります（[astral-sh/uv#16991](https://github.com/astral-sh/uv/pull/16991)）。
+  > `@latest` は [uv 公式ドキュメント](https://docs.astral.sh/uv/concepts/tools/)
+  > が推奨している曖昧さのない方法です。
 
 - **特定バージョンに固定する** — Claude Desktop / Codex / Cursor の設定で
   バージョンを明記しておくと、 `uvx` のキャッシュが消えても固定版が維持さ
