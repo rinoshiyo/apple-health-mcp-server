@@ -182,12 +182,20 @@ Override with `--db /custom/path/health.duckdb` on either subcommand.
 subsequent invocations, so a new release does **not** install itself
 automatically. Pick one:
 
-- **Always run the latest** — pass `--refresh` once whenever you want
-  to pull a newer version:
+- **Always run the latest** — use the `@latest` suffix whenever you
+  want the newest published version:
 
   ```bash
-  uvx --refresh apple-health-mcp-server serve
+  uvx apple-health-mcp-server@latest serve
   ```
+
+  > **Why not `--refresh`?** `--refresh` revalidates PyPI metadata but
+  > does not always rebuild the cached tool environment, so a freshly
+  > published release can be silently shadowed by the previously-cached
+  > version (see [astral-sh/uv#16991](https://github.com/astral-sh/uv/pull/16991)).
+  > `@latest` is the method
+  > [recommended by the uv docs](https://docs.astral.sh/uv/concepts/tools/)
+  > and is unambiguous.
 
 - **Pin a specific version** — write the version directly in your
   Claude Desktop / Codex / Cursor config so an unrelated `uvx` cache
