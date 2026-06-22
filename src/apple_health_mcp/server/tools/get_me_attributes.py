@@ -14,6 +14,7 @@ element out of the generic record stream into a first-class tool.
 
 from __future__ import annotations
 
+import logging
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,8 @@ from apple_health_mcp.server.query import query_to_json, run_query_payload
 if TYPE_CHECKING:
     import duckdb
     from mcp.server.fastmcp import FastMCP
+
+_logger = logging.getLogger(__name__)
 
 
 DESCRIPTION = (
@@ -32,14 +35,19 @@ DESCRIPTION = (
     "import has populated the me_attributes table yet."
 )
 
-# Match the dedupe ORDER BY in db/schema.py (``import_id DESC``): "most
-# recent" is the lexicographically-greatest import_id, the same convention
-# used everywhere else in this codebase for picking a winner across
-# multiple imports.
+# "Most recent" follows the same definition `get_import_history` exposes to
+# clients: the import with the latest wall-clock `imported_at`. Joining
+# through `imports` keeps the two tools aligned even when the caller
+# supplies a non-timestamp `import_id` to `run_import` (in which case a
+# plain `ORDER BY import_id DESC` would silently flip to lexicographic
+# order and disagree with `get_import_history`'s ranking). The
+# `m.import_id DESC` tie-break mirrors the dedupe ORDER BY in
+# db/schema.py for the rare case where `imported_at` collides.
 _SQL = (
-    "SELECT import_id, date_of_birth, biological_sex, blood_type, "
-    "fitzpatrick_skin_type, cardio_fitness_medications_use "
-    "FROM me_attributes ORDER BY import_id DESC LIMIT 1"
+    "SELECT m.import_id, m.date_of_birth, m.biological_sex, m.blood_type, "
+    "m.fitzpatrick_skin_type, m.cardio_fitness_medications_use "
+    "FROM me_attributes m JOIN imports i USING (import_id) "
+    "ORDER BY i.imported_at DESC, m.import_id DESC LIMIT 1"
 )
 
 
@@ -49,5 +57,9 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         try:
             rows = query_to_json(conn, _SQL, lock=lock)
         except Exception as exc:
+            # Match `server/query.py::run_query` observability: the wire
+            # response carries the error string but stderr also gets a debug
+            # line so operators can correlate one with the other.
+            _logger.debug("get_me_attributes query failed: %s", exc)
             return f"Error: {exc}"
         return run_query_payload(rows[0] if rows else {})

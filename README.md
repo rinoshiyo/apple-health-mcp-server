@@ -13,7 +13,7 @@
 `apple-health-mcp-server` exposes the contents of your Apple Health export
 (`export.xml` plus the ECG CSV and GPX route files Apple ships alongside it)
 to any [Model Context Protocol](https://modelcontextprotocol.io/) client —
-including Claude Desktop — through 16 read-oriented tools backed by a local
+including Claude Desktop — through 17 read-oriented tools backed by a local
 [DuckDB](https://duckdb.org/) database.
 
 ## Features
