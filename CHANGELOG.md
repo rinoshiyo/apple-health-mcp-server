@@ -7,16 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **PyPI Trusted Publishing release workflow** (`v*` tag triggers OIDC
-  publish via `pypa/gh-action-pypi-publish`); the v0.1.0 tag itself is
-  pushed only after manual go-ahead. (#20)
-- **Wire `apple-health-mcp-server import` to the orchestrator** so the
-  CLI subcommand actually ingests data. (#27)
-
 ## [0.1.0] - 2026-06-22
 
 ### Added
 
+- **PyPI Trusted Publishing release workflow.** Pushing a
+  `v<MAJOR>.<MINOR>.<PATCH>` tag builds the sdist and wheel, verifies
+  metadata with `twine check --strict`, and publishes to PyPI via
+  OIDC. The v0.1.0 tag is pushed manually by the maintainer after the
+  release branch is merged. (#20)
 - **Project bootstrap.** `pyproject.toml` targeting Python 3.12+ with
   `uv`, `ruff`, `mypy --strict`, `pytest --cov-branch --cov-fail-under=100`,
   and `pre-commit` wired up. (#1, #2, #3, #4)
@@ -41,8 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#14, #15, #16)
 - **Documentation**: English and Japanese READMEs, this changelog, and
   `CLAUDE.md` covering architecture, dev commands, conventions, domain
-  rules, language policy, and the mandatory `/code-review --fix`
-  policy for every PR. (#17, #18, #19)
+  rules, language policy, release operations, and the mandatory
+  `/code-review --fix` policy for every PR. (#17, #18, #19)
+- **CLI `import` subcommand** wired to `importers.run_import` so
+  `apple-health-mcp-server import <export>` actually ingests data
+  before `serve` is started. (#27)
 
 [Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/rinoshiyo/apple-health-mcp-server/releases/tag/v0.1.0

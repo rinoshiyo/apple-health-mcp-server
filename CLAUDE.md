@@ -9,9 +9,10 @@ Codex, etc.) working on this repository.
 ingests an Apple Health export (`export.xml` + the ECG CSVs and GPX
 route files Apple ships alongside it) into a local DuckDB database
 and exposes 16 read-oriented tools over it. The CLI ships two
-subcommands: `apple-health-mcp import <dir>` and
-`apple-health-mcp serve`. Distribution targets are PyPI (uvx) and
-Claude Desktop DXT bundles. All data stays local; nothing is uploaded.
+subcommands: `apple-health-mcp-server import <dir>` and
+`apple-health-mcp-server serve`. Distribution targets are PyPI (uvx)
+and Claude Desktop DXT bundles. All data stays local; nothing is
+uploaded.
 
 ## 2. Architecture
 
@@ -92,3 +93,54 @@ must be fully green; the unit and integration tests share fixtures via
 - [CHANGELOG.md](./CHANGELOG.md) — Keep a Changelog format
 - [tests/fixtures/README.md](./tests/fixtures/README.md) — fixture policy and catalogue
 - `.github/workflows/ci.yml` — 3 OS × 3 Python matrix, coverage artifacts
+- `.github/workflows/release.yml` — tag-triggered PyPI publish (Trusted Publishing)
+
+## 8. Release Operations
+
+The release workflow (`.github/workflows/release.yml`) publishes to
+PyPI via [OIDC Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
+— no API tokens are stored in this repository.
+
+### One-time PyPI registration (maintainer)
+
+Done once before the first release tag is pushed.
+
+1. Visit <https://pypi.org/manage/account/publishing/> and add a new
+   pending Trusted Publisher:
+   - **PyPI Project name**: `apple-health-mcp-server`
+   - **Owner**: `rinoshiyo`
+   - **Repository name**: `apple-health-mcp-server`
+   - **Workflow filename**: `release.yml`
+   - **Environment name**: `pypi`
+2. In the GitHub repository Settings → Environments, create an
+   environment named `pypi` (no secrets required; the OIDC token is
+   minted at job time).
+3. After the first successful publish, the project switches from
+   "pending" to a normal Trusted Publisher entry.
+
+### Cutting a release
+
+0. **Bump `[project] version`** in `pyproject.toml` to the version you
+   are about to ship, and merge that change to `main` via a PR. The
+   release workflow refuses to publish if the tag and pyproject
+   versions disagree, so this step is load-bearing.
+
+1. Pre-flight (run locally before tagging):
+
+   ```bash
+   rm -rf dist/
+   uv run pytest --cov-branch --cov-fail-under=100
+   uv build
+   uvx twine check --strict dist/*
+   ```
+
+2. Tag and push:
+
+   ```bash
+   git tag -a v0.1.0 -m "Release v0.1.0"
+   git push origin v0.1.0
+   ```
+
+GitHub Actions then verifies the tag matches the pyproject version,
+builds the sdist + wheel, runs `twine check --strict`, and uploads
+via `pypa/gh-action-pypi-publish@release/v1`.
