@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
-from threading import Lock
 from typing import Any
 
 import duckdb
@@ -36,35 +34,18 @@ from apple_health_mcp.server.tools import (
     query_records,
     run_custom_query,
 )
-
-# --- StubMCP -----------------------------------------------------------------
-
-
-class StubMCP:
-    """Capture the function decorated by ``@mcp.tool``."""
-
-    def __init__(self) -> None:
-        self.fn: Callable[..., Awaitable[str]] | None = None
-        self.description: str = ""
-
-    def tool(self, *, description: str = "") -> Callable[..., Any]:
-        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            self.fn = fn
-            self.description = description
-            return fn
-
-        return decorator
+from tests._helpers import bind_tool as _bind
 
 
-def _bind(module: Any, conn: duckdb.DuckDBPyConnection) -> Callable[..., Awaitable[str]]:
-    stub = StubMCP()
-    module.register(stub, conn, Lock())
-    assert stub.fn is not None
-    assert stub.description
-    return stub.fn
+def _call(fn: Any, **kwargs: Any) -> Any:
+    """Call a bound tool and decode its JSON return.
 
-
-def _call(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> Any:
+    Several tests intentionally exercise the validation-error path (where
+    the tool returns ``"Error: ..."`` instead of JSON); the shared
+    ``call_tool`` helper rejects that case, so this thin wrapper preserves
+    the suite's existing semantics. New code that does not need to inspect
+    error strings should use ``call_tool`` from ``tests/_helpers.py``.
+    """
     return json.loads(asyncio.run(fn(**kwargs)))
 
 
