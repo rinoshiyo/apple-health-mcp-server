@@ -96,6 +96,36 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 | メタデータ・運用 | `list_data_sources`, `get_import_history` |
 | エスケープハッチ | `run_custom_query`（読み取り専用の検証済み SQL） |
 
+## アップデート
+
+`uvx` は初回実行時にパッケージをキャッシュし、 以降はそのキャッシュを再利用
+するため、 新しいリリースを公開しても**自動では更新されません**。 用途に応
+じて以下のいずれかを選んでください。
+
+- **常に最新版を取得する** — 更新したいタイミングで `--refresh` を一度付け
+  て実行します。
+
+  ```bash
+  uvx --refresh apple-health-mcp-server serve
+  ```
+
+- **特定バージョンに固定する** — Claude Desktop / Codex / Cursor の設定で
+  バージョンを明記しておくと、 `uvx` のキャッシュが消えても固定版が維持さ
+  れます。
+
+  ```jsonc
+  {
+    "mcpServers": {
+      "apple-health": {
+        "command": "uvx",
+        "args": ["apple-health-mcp-server==0.1.0", "serve"]
+      }
+    }
+  }
+  ```
+
+リリースごとの変更点は [CHANGELOG.md](./CHANGELOG.md) を参照してください。
+
 ## 開発
 
 ```bash
