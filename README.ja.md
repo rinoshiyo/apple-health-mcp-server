@@ -202,6 +202,29 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 
 リリースごとの変更点は [CHANGELOG.md](./CHANGELOG.md) を参照してください。
 
+## トラブルシューティング
+
+**どのツールも `No Apple Health data has been imported yet.` を返す**
+
+ローカルの DuckDB ファイルが空でも MCP サーバーは起動するように
+なっており（クライアントから全ツールが見えるようにするため）、
+データが必要なツールはインポートが完了するまで上記の案内文を
+返します。 以下のコマンドでインポートを実行してください。
+
+```bash
+apple-health-mcp-server import /path/to/apple_health_export
+```
+
+インポート完了後は **MCP サーバーを再起動** してください
+（Claude Desktop / Claude Code / Codex を再起動するか、 `serve`
+プロセスを止めて再実行）。 サーバーはプロセス起動時に読み取り
+専用の DuckDB スナップショットを掴むため、 新しい行は再接続後
+にしか見えません。
+
+`get_import_history` は空 DB でも呼び出せる唯一のツールで、
+空配列を返します。 クライアント側から「まだインポートしていない」
+状態を確認する手段として機能します。
+
 ## 開発
 
 ```bash

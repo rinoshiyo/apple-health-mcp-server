@@ -125,7 +125,9 @@ def test_query_to_json_uses_lock_when_supplied() -> None:
 
 def test_run_query_returns_pretty_json() -> None:
     conn = duckdb.connect(":memory:")
-    out = run_query(conn, "SELECT 1 AS x")
+    # ``require_data=False`` so the wire-format assertion does not race the
+    # empty-DB gate (this test verifies pretty-printing, not the gate).
+    out = run_query(conn, "SELECT 1 AS x", require_data=False)
     assert "  " in out  # indented
     parsed = json.loads(out)
     assert parsed == [{"x": 1}]
@@ -133,7 +135,7 @@ def test_run_query_returns_pretty_json() -> None:
 
 def test_run_query_returns_error_string_on_failure() -> None:
     conn = duckdb.connect(":memory:")
-    out = run_query(conn, "SELECT * FROM does_not_exist")
+    out = run_query(conn, "SELECT * FROM does_not_exist", require_data=False)
     assert out.startswith("Error: ")
 
 

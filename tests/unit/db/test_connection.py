@@ -15,7 +15,6 @@ from apple_health_mcp.db.connection import (
     get_connection,
     get_in_memory_connection,
 )
-from apple_health_mcp.exceptions import DatabaseError
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -126,17 +125,56 @@ def test_get_connection_read_only_opens_existing_db(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_get_connection_read_only_raises_when_missing(tmp_path: Path) -> None:
-    """Read-only open against a missing path must raise without side effects.
+def test_get_connection_read_only_materialises_empty_db_when_missing(
+    tmp_path: Path,
+) -> None:
+    """Read-only open against a missing path bootstraps a schema-only DB.
 
-    Without this guard, ``serve`` invoked before ``import`` would silently
-    create the parent directory and then surface an opaque DuckDB error.
+    Before issue #38 this raised ``DatabaseError`` and ``serve`` exited, so
+    the MCP client saw no tools at all and could not even surface the
+    "run import first" guidance. Now we materialise an empty schema, open
+    read-only against it, and let each tool return ``IMPORT_REQUIRED_MESSAGE``
+    from a live MCP session.
     """
     db_path = tmp_path / "missing" / "ro.duckdb"
-    with pytest.raises(DatabaseError, match="cannot open read-only"):
-        get_connection(db_path, read_only=True)
-    # Parent dir must NOT have been created as a side effect.
-    assert not db_path.parent.exists()
+    conn = get_connection(db_path, read_only=True)
+    try:
+        # Parent dir auto-created during the bootstrap.
+        assert db_path.parent.is_dir()
+        assert db_path.exists()
+        # ``imports`` table exists (schema was applied) but is empty.
+        row = conn.execute("SELECT COUNT(*) FROM imports").fetchone()
+        assert row is not None
+        assert row[0] == 0
+        # The handle is genuinely read-only — writes still fail.
+        with pytest.raises(duckdb.Error):
+            conn.execute("INSERT INTO imports VALUES ('x', 'x', NULL, 0, 0, 0)")
+    finally:
+        conn.close()
+
+
+def test_get_connection_read_only_preserves_existing_data_after_bootstrap(
+    tmp_path: Path,
+) -> None:
+    """Bootstrap fires only when the file is missing — pre-existing rows survive."""
+    from apple_health_mcp.db.schema import ensure_schema
+
+    db_path = tmp_path / "ro.duckdb"
+    seeder = get_connection(db_path)
+    ensure_schema(seeder)
+    seeder.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 1, 0, 1)"
+    )
+    seeder.close()
+
+    conn = get_connection(db_path, read_only=True)
+    try:
+        row = conn.execute("SELECT import_id FROM imports").fetchone()
+        assert row is not None
+        assert row[0] == "imp1"
+    finally:
+        conn.close()
 
 
 def test_get_in_memory_connection() -> None:

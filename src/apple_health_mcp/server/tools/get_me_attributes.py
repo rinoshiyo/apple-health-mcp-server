@@ -18,7 +18,12 @@ import logging
 from threading import Lock
 from typing import TYPE_CHECKING
 
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import (
+    IMPORT_REQUIRED_MESSAGE,
+    imports_present,
+    query_to_json,
+    run_query_payload,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -55,6 +60,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_me_attributes() -> str:
         try:
+            if not imports_present(conn, lock=lock):
+                return IMPORT_REQUIRED_MESSAGE
             rows = query_to_json(conn, _SQL, lock=lock)
         except Exception as exc:
             # Match `server/query.py::run_query` observability: the wire

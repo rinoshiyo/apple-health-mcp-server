@@ -21,7 +21,7 @@ from pathlib import Path
 
 import duckdb
 
-from apple_health_mcp.exceptions import ConfigError, DatabaseError
+from apple_health_mcp.exceptions import ConfigError
 
 _logger = logging.getLogger(__name__)
 
@@ -105,10 +105,13 @@ def get_connection(
     resolved = db_path if db_path is not None else default_db_path()
     if read_only:
         if not resolved.exists():
-            raise DatabaseError(
-                f"cannot open read-only: database does not exist at {resolved} "
-                "(run `apple-health-mcp import` first)"
-            )
+            # A fresh install hasn't run `apple-health-mcp-server import`
+            # yet, but the MCP client still expects to connect and list
+            # tools. Materialise an empty schema-only DB so the read-only
+            # open below succeeds; the tools then return
+            # ``IMPORT_REQUIRED_MESSAGE`` because the ``imports`` table is
+            # empty (see ``server/query.py``).
+            _materialise_empty_db(resolved)
     else:
         _ensure_parent_dir(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
@@ -116,6 +119,25 @@ def get_connection(
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
     _apply_session_tz(conn)
     return conn
+
+
+def _materialise_empty_db(db_path: Path) -> None:
+    """Create ``db_path`` as a schema-only DuckDB file.
+
+    Imported lazily to avoid a top-level circular import between
+    ``db.connection`` and ``db.schema``. The writable connection is closed
+    immediately so the caller can re-open in read-only mode without DuckDB
+    rejecting the second handle as conflicting.
+    """
+    from apple_health_mcp.db.schema import ensure_schema
+
+    _ensure_parent_dir(db_path)
+    bootstrap = duckdb.connect(str(db_path), read_only=False)
+    try:
+        bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+        ensure_schema(bootstrap)
+    finally:
+        bootstrap.close()
 
 
 def get_in_memory_connection() -> duckdb.DuckDBPyConnection:

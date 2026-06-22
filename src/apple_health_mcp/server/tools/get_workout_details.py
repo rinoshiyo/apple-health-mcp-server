@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import (
+    IMPORT_REQUIRED_MESSAGE,
+    imports_present,
+    query_to_json,
+    run_query_payload,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -36,6 +41,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ],
     ) -> str:
         try:
+            if not imports_present(conn, lock=lock):
+                return IMPORT_REQUIRED_MESSAGE
             workout_rows = query_to_json(
                 conn,
                 "SELECT * FROM workouts WHERE workout_hash = ?",
