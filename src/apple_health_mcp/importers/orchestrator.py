@@ -62,6 +62,15 @@ def run_import(
     try:
         ensure_schema(conn)
 
+        # DuckDB defaults to preserving insertion order during checkpoint,
+        # which costs an extra sort over millions of imported rows. The
+        # bulk-load path (issue #41) is unordered by design — Appender / COPY
+        # FROM CSV both write in the order rows arrive at the buffer, and
+        # downstream queries always re-sort via ORDER BY anyway — so we tell
+        # DuckDB to skip the preservation work for this session. Session
+        # PRAGMA, so the override does not leak to other connections.
+        conn.execute("PRAGMA preserve_insertion_order = false;")
+
         _logger.info("Phase 1: Parsing export.xml")
         stats = import_xml(conn, export_dir / "export.xml", actual_import_id)
 
