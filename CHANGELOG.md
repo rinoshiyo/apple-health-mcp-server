@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`apple-health-mcp-server import` is dramatically faster** for real
+  exports. The XML / GPX / ECG importers now route their flush path
+  through DuckDB's `COPY FROM CSV` (via a per-batch tempfile) instead
+  of `executemany("INSERT INTO ... VALUES (?, ...)")`. Measured throughput
+  on a synthetic in-memory benchmark: ~325× speedup (~300 rows/s →
+  ~100 000 rows/s); on the maintainer's real ~1.2 GB `export.xml`, an
+  import that did not finish in 20 minutes under v0.1.2 now completes
+  in well under a minute. DuckDB's Python binding does not expose the
+  columnar Appender API the Rust reference uses, so `COPY FROM CSV` is
+  the fastest path available without adding pandas / pyarrow as
+  runtime dependencies. (#41)
+- `run_import` now issues `PRAGMA preserve_insertion_order = false`
+  for the import session — the bulk-load path is unordered by design
+  and downstream queries always `ORDER BY` anyway, so the per-row sort
+  during checkpoint is pure waste.
+
 ## [0.1.2] - 2026-06-22
 
 ### Fixed

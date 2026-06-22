@@ -15,6 +15,14 @@ Per-row state is built up while ``start`` events fire and committed at the
 matching ``end`` event (so a Workout that fails to close never leaks
 orphaned children into the database). Hashes match the Rust version
 byte-for-byte via :func:`apple_health_mcp.importers._hash.compute_hash`.
+
+Bulk-load policy (issue #41): every multi-row buffer flushes through
+:func:`apple_health_mcp.importers._bulk.bulk_load_via_csv` via the 12
+``_flush_*`` helpers below. The three singleton-row inserts (HealthData,
+ExportDate, Me) deliberately bypass the bulk helper — each fires at most
+once per import, so the tempfile+COPY overhead would dwarf a single
+``conn.execute("INSERT ...")``. Future contributors adding a per-import
+singleton row should follow the same direct-INSERT pattern.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ from typing import TYPE_CHECKING
 from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
+from apple_health_mcp.importers._bulk import bulk_load_via_csv
 from apple_health_mcp.importers._hash import compute_hash
 from apple_health_mcp.importers._tz import (
     normalize_apple_offset,
@@ -761,113 +770,60 @@ class _XmlImporter:
             self._flush_workout_metadata()
 
     # -- flush helpers ------------------------------------------------------
+    #
+    # Every flush routes the buffered batch through
+    # :func:`bulk_load_via_csv` (issue #41). The previous ``executemany``
+    # path dispatched per row through DuckDB's SQL planner at ~300 rows/s,
+    # so a real 1.2 GB ``export.xml`` never finished in 20 minutes. COPY
+    # FROM CSV is ~325x faster in the same harness (~100 000 rows/s) and
+    # needs no new runtime dependency.
 
     def _flush_records(self) -> None:
-        if not self._records:
-            return
-        self._conn.executemany(
-            "INSERT INTO records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._records,
-        )
+        bulk_load_via_csv(self._conn, "records", self._records)
         self._records.clear()
 
     def _flush_record_metadata(self) -> None:
-        if not self._record_metadata:
-            return
-        self._conn.executemany(
-            "INSERT INTO record_metadata VALUES (?, ?, ?)",
-            self._record_metadata,
-        )
+        bulk_load_via_csv(self._conn, "record_metadata", self._record_metadata)
         self._record_metadata.clear()
 
     def _flush_workouts(self) -> None:
-        if not self._workouts:
-            return
-        self._conn.executemany(
-            "INSERT INTO workouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._workouts,
-        )
+        bulk_load_via_csv(self._conn, "workouts", self._workouts)
         self._workouts.clear()
 
     def _flush_workout_events(self) -> None:
-        if not self._workout_events:
-            return
-        self._conn.executemany(
-            "INSERT INTO workout_events VALUES (?, ?, ?, ?, ?)",
-            self._workout_events,
-        )
+        bulk_load_via_csv(self._conn, "workout_events", self._workout_events)
         self._workout_events.clear()
 
     def _flush_workout_stats(self) -> None:
-        if not self._workout_stats:
-            return
-        self._conn.executemany(
-            "INSERT INTO workout_statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._workout_stats,
-        )
+        bulk_load_via_csv(self._conn, "workout_statistics", self._workout_stats)
         self._workout_stats.clear()
 
     def _flush_workout_metadata(self) -> None:
-        if not self._workout_metadata:
-            return
-        self._conn.executemany(
-            "INSERT INTO workout_metadata VALUES (?, ?, ?, ?)",
-            self._workout_metadata,
-        )
+        bulk_load_via_csv(self._conn, "workout_metadata", self._workout_metadata)
         self._workout_metadata.clear()
 
     def _flush_workout_routes(self) -> None:
-        if not self._workout_routes:
-            return
-        self._conn.executemany(
-            "INSERT INTO workout_routes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._workout_routes,
-        )
+        bulk_load_via_csv(self._conn, "workout_routes", self._workout_routes)
         self._workout_routes.clear()
 
     def _flush_activities(self) -> None:
-        if not self._activities:
-            return
-        self._conn.executemany(
-            "INSERT INTO activity_summaries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._activities,
-        )
+        bulk_load_via_csv(self._conn, "activity_summaries", self._activities)
         self._activities.clear()
 
     def _flush_heart_rate_samples(self) -> None:
-        if not self._heart_rate_samples:
-            return
-        self._conn.executemany(
-            "INSERT INTO heart_rate_samples VALUES (?, ?, ?, ?, ?)",
-            self._heart_rate_samples,
-        )
+        bulk_load_via_csv(self._conn, "heart_rate_samples", self._heart_rate_samples)
         self._heart_rate_samples.clear()
 
     def _flush_correlations(self) -> None:
-        if not self._correlations:
-            return
-        self._conn.executemany(
-            "INSERT INTO correlations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            self._correlations,
-        )
+        bulk_load_via_csv(self._conn, "correlations", self._correlations)
         self._correlations.clear()
 
     def _flush_correlation_members(self) -> None:
-        if not self._correlation_members:
-            return
-        self._conn.executemany(
-            "INSERT INTO correlation_members VALUES (?, ?, ?)",
-            self._correlation_members,
-        )
+        bulk_load_via_csv(self._conn, "correlation_members", self._correlation_members)
         self._correlation_members.clear()
 
     def _flush_state_of_mind(self) -> None:
-        if not self._state_of_mind:
-            return
-        self._conn.executemany(
-            "INSERT INTO state_of_mind VALUES (?, ?, ?, ?, ?, ?)",
-            self._state_of_mind,
-        )
+        bulk_load_via_csv(self._conn, "state_of_mind", self._state_of_mind)
         self._state_of_mind.clear()
 
     def _flush_all(self) -> None:
