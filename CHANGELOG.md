@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README "Updating" section (EN/JA) explaining how to refresh the
   `uvx`-cached package and how to pin a specific version in the Claude
   Desktop / Codex / Cursor configuration. (#33)
+- README install instructions (EN/JA) for **Claude Code** (`claude mcp
+  add` CLI + `.mcp.json` / `~/.claude.json` manual snippets) and
+  **Codex CLI** (TOML-based `~/.codex/config.toml`), each with the
+  reload semantics, scope notes, and an official-doc source URL with
+  fetch date. (#35)
 
 ### Changed
 

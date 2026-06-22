@@ -48,8 +48,12 @@ uvx apple-health-mcp-server --help
 
 ### Claude Desktop
 
-Add the following to `~/Library/Application Support/Claude/claude_desktop_config.json`
-(macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+Edit `claude_desktop_config.json`:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: Claude Desktop is not yet released on Linux; use **Claude Code**
+  below instead.
 
 ```json
 {
@@ -62,16 +66,89 @@ Add the following to `~/Library/Application Support/Claude/claude_desktop_config
 }
 ```
 
-Restart Claude Desktop. Before the tools return anything useful, import
-your data once:
+Then fully quit Claude Desktop and reopen — the config is only re-read
+at startup (closing the window is not enough).
+
+Source: <https://modelcontextprotocol.io/quickstart/user> (fetched
+2026-06-22).
+
+### Claude Code
+
+Easiest path is the CLI helper, which writes the entry into the right
+scope and survives future schema tweaks:
+
+```bash
+claude mcp add --transport stdio --scope user apple-health -- uvx apple-health-mcp-server serve
+```
+
+- `--scope user` registers the server for every project (writes to
+  `~/.claude.json`). Use `--scope project` to share via a
+  version-controlled `.mcp.json` at the repo root, or `--scope local`
+  (the default) for the current project only.
+- The `--` separator is mandatory when the server command takes its own
+  arguments — without it Claude Code would try to parse `serve` as one
+  of its own flags.
+
+Equivalent manual entry inside the chosen JSON file:
+
+```json
+{
+  "mcpServers": {
+    "apple-health": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["apple-health-mcp-server", "serve"],
+      "env": {}
+    }
+  }
+}
+```
+
+A running session does not auto-reload `.mcp.json` edits; restart
+Claude Code to pick them up. Stdio servers are not automatically
+reconnected after a crash either — restart the session if the server
+goes away mid-conversation.
+
+Source: <https://code.claude.com/docs/en/mcp> (fetched 2026-06-22).
+
+### Codex CLI
+
+Codex CLI stores MCP servers in **TOML**, not JSON. The simplest path
+is the helper command, which writes into `~/.codex/config.toml`:
+
+```bash
+codex mcp add apple-health -- uvx apple-health-mcp-server serve
+```
+
+Equivalent manual entry in `~/.codex/config.toml` (override the path
+with `CODEX_HOME=` if needed):
+
+```toml
+[mcp_servers.apple-health]
+command = "uvx"
+args = ["apple-health-mcp-server", "serve"]
+```
+
+Edits to `config.toml` take effect on the next `codex` invocation —
+restart any running session to apply them. The CLI also exposes
+`codex mcp list` / `codex mcp get <name>` / `codex mcp remove <name>`
+for inspection and cleanup.
+
+Source: <https://developers.openai.com/codex/mcp> (fetched 2026-06-22).
+
+### Importing your export
+
+Before any tool returns data you have to ingest your export once.
+Apple gives you a directory containing `export.xml`, an
+`electrocardiograms/` folder, and a `workout-routes/` folder; point
+the importer at the directory itself:
 
 ```bash
 uvx apple-health-mcp-server import /path/to/apple_health_export
 ```
 
-The expected directory is the one Apple Health unzips for you (it
-contains `export.xml`, an `electrocardiograms/` folder, and a
-`workout-routes/` folder).
+The import is idempotent — re-running it with a newer export merges
+the new rows into the existing database via the `import_id` column.
 
 ### Database location
 
