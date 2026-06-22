@@ -234,6 +234,12 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         # 15. get_import_history
         rows = call_tool(bind_tool(get_import_history, conn))
         assert any(r["import_id"] == "imp_smoke" for r in rows)
+        # Issue #44: the restored DEFAULT CURRENT_TIMESTAMP on
+        # ``imports.imported_at`` must actually fire on a real import.
+        # Prior to v0.1.4 ``deduplicate_tables`` stripped the default so
+        # this column wrote as NULL on every import.
+        smoke_row = next(r for r in rows if r["import_id"] == "imp_smoke")
+        assert smoke_row["imported_at"] is not None
 
         # 16. list_state_of_mind
         rows = call_tool(bind_tool(list_state_of_mind, conn))
