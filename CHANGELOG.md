@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `apple-health-mcp-server serve` now starts successfully against a
+  fresh machine that has never run `import` instead of exiting with
+  "database does not exist". The MCP client sees the full tool list as
+  usual, and every data-bearing tool returns a single guidance string —
+  exposed as `apple_health_mcp.server.query.IMPORT_REQUIRED_MESSAGE` —
+  pointing at the missing import step:
+
+  ```
+  Error: No Apple Health data has been imported yet.
+  Run `apple-health-mcp-server import <export-dir>` to ingest your
+  export, then restart this MCP server. See
+  https://github.com/rinoshiyo/apple-health-mcp-server#usage for details.
+  ```
+
+  `get_import_history` is the single exception and still returns an
+  empty list on an empty DB so callers can confirm the empty-DB state
+  from the client side. Consumers parsing tool errors should anchor on
+  the message prefix (the trailing URL may change between minor
+  versions). README EN/JA gain a Troubleshooting section documenting
+  the path. (#38)
+
 ## [0.1.1] - 2026-06-22
 
 ### Added

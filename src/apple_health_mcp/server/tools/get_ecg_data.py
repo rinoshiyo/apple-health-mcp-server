@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import (
+    query_to_json,
+    require_imports_or_message,
+    run_query_payload,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -55,6 +59,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     ) -> str:
         downsample = max(downsample_factor or 1, 1)
         include = bool(include_voltages)
+        if msg := require_imports_or_message(conn, lock=lock):
+            return msg
         try:
             metadata = query_to_json(
                 conn,

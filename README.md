@@ -206,6 +206,27 @@ automatically. Pick one:
 
 See [CHANGELOG.md](./CHANGELOG.md) for the per-release notes.
 
+## Troubleshooting
+
+**Every tool returns "No Apple Health data has been imported yet."**
+
+The MCP server boots even when the local DuckDB file is empty so the
+client still sees the full tool list, but every tool that needs data
+returns this guidance string until you run the importer:
+
+```bash
+apple-health-mcp-server import /path/to/apple_health_export
+```
+
+After the import finishes, **restart the MCP server** (quit and reopen
+Claude Desktop / Claude Code / Codex, or stop and re-run the `serve`
+process). The server keeps a read-only DuckDB snapshot for the lifetime
+of the process; new rows only become visible to a fresh connection.
+
+`get_import_history` is the one tool that stays callable on an empty
+DB — it returns an empty list, which is how you confirm "no imports
+yet" from the client side.
+
 ## Development
 
 ```bash

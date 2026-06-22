@@ -244,3 +244,39 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         payload = call_tool(bind_tool(get_me_attributes, conn))
         assert payload["date_of_birth"] == "1990-01-01"
         assert payload["biological_sex"] == "HKBiologicalSexNotSet"
+
+
+# --- fresh-install gate (issue #38) ------------------------------------------
+
+
+def test_fresh_install_serves_with_import_required_message(
+    tmp_path: Path,
+) -> None:
+    """``serve`` against a never-imported path boots and surfaces guidance.
+
+    End-to-end check of the path that used to crash before this fix:
+    point ``get_connection`` at a missing file, register a tool against
+    the read-only connection, and confirm the tool returns
+    ``IMPORT_REQUIRED_MESSAGE`` (so a fresh Claude Desktop install sees
+    "run the importer" instead of silently empty results).
+    """
+    import asyncio
+
+    from apple_health_mcp.db.connection import get_connection
+    from apple_health_mcp.server.query import IMPORT_REQUIRED_MESSAGE
+
+    db_path = tmp_path / "fresh" / "health.duckdb"
+    assert not db_path.exists()
+    conn = get_connection(db_path, read_only=True)
+    try:
+        # Bootstrap created the file + schema.
+        assert db_path.exists()
+        fn = bind_tool(list_record_types, conn)
+        out = asyncio.run(fn())
+        assert out == IMPORT_REQUIRED_MESSAGE
+        # ``get_import_history`` stays callable as the discovery path:
+        # an empty list is the canonical "no imports yet" signal.
+        rows = call_tool(bind_tool(get_import_history, conn))
+        assert rows == []
+    finally:
+        conn.close()

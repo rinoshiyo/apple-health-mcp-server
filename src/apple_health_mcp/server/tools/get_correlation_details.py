@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import (
+    query_to_json,
+    require_imports_or_message,
+    run_query_payload,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -32,6 +36,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             Field(description="The correlation hash identifier"),
         ],
     ) -> str:
+        if msg := require_imports_or_message(conn, lock=lock):
+            return msg
         try:
             correlation_rows = query_to_json(
                 conn,

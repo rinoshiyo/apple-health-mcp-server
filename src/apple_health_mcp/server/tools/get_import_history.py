@@ -23,4 +23,7 @@ _SQL = "SELECT * FROM imports ORDER BY imported_at DESC"
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_import_history() -> str:
-        return run_query(conn, _SQL, lock=lock)
+        # ``require_data=False`` because "list imports" is the canonical way
+        # to confirm the empty-DB state — returning the guidance message
+        # would make it impossible to ever observe the empty list.
+        return run_query(conn, _SQL, lock=lock, require_data=False)

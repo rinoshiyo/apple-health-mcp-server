@@ -50,4 +50,9 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         except QueryValidationError as exc:
             return f"Error: {exc}"
         sql = enforce_limit(stmt, MAX_CUSTOM_QUERY_ROWS)
-        return run_query(conn, sql, lock=lock)
+        # ``require_data=False`` because this is the read-only escape hatch
+        # an LLM uses to introspect schema or count rows — including the
+        # natural "SELECT COUNT(*) FROM imports" probe a client makes to
+        # confirm the empty-DB state. Gating it would hide the scaffold
+        # the bootstrap path just created.
+        return run_query(conn, sql, lock=lock, require_data=False)
