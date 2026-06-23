@@ -270,37 +270,30 @@ def test_import_xml_unrecoverable_syntax_error_raises(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An XMLSyntaxError raised mid-iteration is translated to HealthImportError."""
-    # lxml's recover mode swallows most malformed input, so simulate the
-    # unrecoverable case directly by patching iterparse to yield once and
-    # then raise XMLSyntaxError on the next pull.
+    """An XMLSyntaxError raised mid-parse is translated to HealthImportError.
+
+    The SAX target path's ``recover=True`` swallows most malformed input,
+    so simulate the unrecoverable case directly: stub
+    ``etree.XMLParser`` to return a parser whose ``feed()`` raises
+    ``XMLSyntaxError`` on the first chunk.
+    """
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <HealthData locale="en_US"/>"""
     path = _write_xml(tmp_path, xml)
 
     from apple_health_mcp.importers import xml as xml_module
 
-    class _BrokenIter:
-        def __init__(self) -> None:
-            self._yielded = False
-
-        def __iter__(self) -> _BrokenIter:
-            return self
-
-        def __next__(self) -> object:
-            if not self._yielded:
-                self._yielded = True
-                # iterparse yields (event, element); a HealthData element
-                # so the start handler runs cleanly the first time.
-                from lxml.etree import Element
-
-                return ("start", Element("HealthData"))
+    class _BrokenParser:
+        def feed(self, _chunk: bytes) -> None:
             raise etree.XMLSyntaxError("simulated", 0, 0, 0)
 
-    def fake_iterparse(*_args: object, **_kwargs: object) -> _BrokenIter:
-        return _BrokenIter()
+        def close(self) -> None:
+            return None
 
-    monkeypatch.setattr(xml_module.etree, "iterparse", fake_iterparse)
+    def fake_parser_ctor(*_args: object, **_kwargs: object) -> _BrokenParser:
+        return _BrokenParser()
+
+    monkeypatch.setattr(xml_module.etree, "XMLParser", fake_parser_ctor)
     with pytest.raises(HealthImportError, match="unrecoverable XML syntax error"):
         import_xml(conn, path, "imp_bad")
 
@@ -344,10 +337,11 @@ def test_import_xml_handler_error_aborts_above_threshold(
     """Exceed the consecutive-error budget and the importer must raise.
 
     The counter resets on any successful event (start OR end), so to trip
-    the abort we need both handlers to fail. We patch ``_XmlImporter._on_end``
-    to also raise, simulating a class of malformed elements that fail every
-    handler call. With both events failing per Record, 51 records produce
-    102 consecutive errors — above the 100 budget.
+    the abort we need both handlers to fail. Patch both
+    ``_on_start_sax`` and ``_on_end_sax`` to raise, simulating a class of
+    malformed elements that fail every handler call. With both events
+    failing per Record, 51 records produce 102 consecutive errors —
+    above the 100 budget.
     """
     body = "\n".join(
         '<Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" '
@@ -359,14 +353,14 @@ def test_import_xml_handler_error_aborts_above_threshold(
 
     from apple_health_mcp.importers import xml as xml_module
 
-    def always_fail_hash(parts: list[str]) -> str:
+    def always_fail_start(self: object, tag: str, attr: dict[str, str]) -> None:
         raise RuntimeError("synthetic start failure")
 
-    def always_fail_end(self: object, elem: object) -> None:
+    def always_fail_end(self: object, tag: str) -> None:
         raise RuntimeError("synthetic end failure")
 
-    monkeypatch.setattr(xml_module, "compute_hash", always_fail_hash)
-    monkeypatch.setattr(xml_module._XmlImporter, "_on_end", always_fail_end)
+    monkeypatch.setattr(xml_module._XmlImporter, "_on_start_sax", always_fail_start)
+    monkeypatch.setattr(xml_module._XmlImporter, "_on_end_sax", always_fail_end)
     with pytest.raises(HealthImportError, match="consecutive errors"):
         import_xml(conn, _write_xml(tmp_path, xml), "imp_die")
 
