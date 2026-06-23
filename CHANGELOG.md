@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Date-only `end_date` filters are now inclusive of the named day.**
+  All 5 date-filtered tools (`query_records`, `list_workouts`,
+  `list_ecg_readings`, `list_state_of_mind`, `list_correlations`)
+  previously cast a bare `YYYY-MM-DD` upper bound to `TIMESTAMPTZ` at
+  start-of-day, silently dropping every record that happened after
+  midnight on the named day. They now route the upper bound through a
+  shared `normalise_end_date` helper that expands a bare date to
+  `YYYY-MM-DD 23:59:59.999999` so the `<=` comparison includes the
+  whole day. Full ISO 8601 timestamps (`YYYY-MM-DDTHH:MM:SS+HH:MM`)
+  pass through unchanged so the caller's precision is respected.
+  User-visible effect: `query_records(record_type=…,
+  start_date='2026-06-22', end_date='2026-06-22')` now returns that
+  day's records instead of zero rows. Pre-existing since v0.1.0. (#49)
+
 ## [0.1.4] - 2026-06-23
 
 ### Fixed

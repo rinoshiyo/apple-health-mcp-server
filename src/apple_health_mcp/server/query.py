@@ -41,6 +41,30 @@ IMPORT_REQUIRED_MESSAGE = (
 )
 
 
+def normalise_end_date(value: str) -> str:
+    """Expand a date-only upper bound to end-of-day for ``<=`` comparisons.
+
+    DuckDB casts a bare ``YYYY-MM-DD`` string to a ``TIMESTAMPTZ`` at
+    start-of-day, so an SQL filter ``end_date <= 'YYYY-MM-DD'`` silently
+    drops every record that happened later than midnight on the named
+    day. Callers passing date-only filters intuitively expect the named
+    day to be included, so this helper rewrites the value to
+    ``'YYYY-MM-DD 23:59:59.999999'`` -- DuckDB then parses it at the
+    last representable microsecond of the day, which the ``<=`` filter
+    correctly includes.
+
+    Strings that carry their own time component (e.g.
+    ``'2026-06-22T10:00:00+09:00'``) are passed through unchanged so the
+    caller's precision is respected.
+
+    ``start_date`` does not need a sibling helper -- start-of-day is the
+    natural interpretation of the lower bound and matches caller intent.
+    """
+    if len(value) == 10 and value[4] == "-" and value[7] == "-":
+        return f"{value} 23:59:59.999999"
+    return value
+
+
 def imports_present(
     conn: duckdb.DuckDBPyConnection,
     *,
