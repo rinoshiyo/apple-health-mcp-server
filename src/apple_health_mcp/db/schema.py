@@ -228,114 +228,179 @@ CREATE TABLE IF NOT EXISTS state_of_mind (
 
 
 _DEDUPLICATE_SQL = """
-CREATE OR REPLACE TABLE records AS
-SELECT * FROM (
-    SELECT DISTINCT ON (record_hash) *
-    FROM records
-    ORDER BY record_hash, import_id DESC, creation_date DESC
+-- Issue #60: targeted ``DELETE WHERE rowid IN (... ROW_NUMBER OVER ... > 1)``
+-- per table, instead of the historic ``CREATE OR REPLACE TABLE foo AS
+-- SELECT DISTINCT ON (...)`` full-table rewrite. The legacy form paid the
+-- write cost of every row in every table on every import even when there
+-- were zero duplicates (the overwhelmingly common case of a fresh import
+-- with a unique ``import_id``); the DELETE form only writes for rows that
+-- actually need to disappear. Semantics are preserved byte-for-byte by
+-- mirroring each block's ``ORDER BY`` clause inside the corresponding
+-- ``ROW_NUMBER() OVER (PARTITION BY <key> ORDER BY <tie-breakers>)`` --
+-- the row that survives is the same row the DISTINCT ON path kept.
+--
+-- ``_REAPPLY_CONSTRAINTS_SQL`` below now finds the NOT NULL / DEFAULT
+-- constraints already intact (the DELETE path does not strip them like
+-- the old ``CREATE OR REPLACE TABLE`` did) so its ALTERs are no-ops for
+-- new imports. It stays in place as a one-shot migration for any DB
+-- that finalized under a pre-#44 schema and still has the stripped
+-- constraints sitting in its on-disk file.
+
+DELETE FROM records WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY record_hash
+            ORDER BY import_id DESC, creation_date DESC
+        ) AS rn
+        FROM records
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE record_metadata AS
-SELECT * FROM (
-    SELECT DISTINCT ON (record_hash, key) *
-    FROM record_metadata
-    ORDER BY record_hash, key, value
+DELETE FROM record_metadata WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY record_hash, key
+            ORDER BY value
+        ) AS rn
+        FROM record_metadata
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE workouts AS
-SELECT * FROM (
-    SELECT DISTINCT ON (workout_hash) *
-    FROM workouts
-    ORDER BY workout_hash, import_id DESC, creation_date DESC
+DELETE FROM workouts WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY workout_hash
+            ORDER BY import_id DESC, creation_date DESC
+        ) AS rn
+        FROM workouts
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE activity_summaries AS
-SELECT * FROM (
-    SELECT DISTINCT ON (date_components) *
-    FROM activity_summaries
-    ORDER BY date_components, import_id DESC
+DELETE FROM activity_summaries WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY date_components
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM activity_summaries
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE ecg_readings AS
-SELECT * FROM (
-    SELECT DISTINCT ON (ecg_hash) *
-    FROM ecg_readings
-    ORDER BY ecg_hash, import_id DESC
+DELETE FROM ecg_readings WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY ecg_hash
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM ecg_readings
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE ecg_samples AS
-SELECT * FROM (
-    SELECT DISTINCT ON (ecg_hash, sample_idx) *
-    FROM ecg_samples
-    ORDER BY ecg_hash, sample_idx, voltage_uv
+DELETE FROM ecg_samples WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY ecg_hash, sample_idx
+            ORDER BY voltage_uv
+        ) AS rn
+        FROM ecg_samples
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE route_points AS
-SELECT * FROM (
-    SELECT DISTINCT ON (point_hash) *
-    FROM route_points
-    ORDER BY point_hash, import_id DESC
+DELETE FROM route_points WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY point_hash
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM route_points
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE workout_metadata AS
-SELECT * FROM (
-    SELECT DISTINCT ON (workout_hash, key) *
-    FROM workout_metadata
-    ORDER BY workout_hash, key, import_id DESC
+DELETE FROM workout_metadata WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY workout_hash, key
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM workout_metadata
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE workout_routes AS
-SELECT * FROM (
-    SELECT DISTINCT ON (workout_hash, file_path) *
-    FROM workout_routes
-    ORDER BY workout_hash, file_path, import_id DESC
+DELETE FROM workout_routes WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY workout_hash, file_path
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM workout_routes
+    ) WHERE rn > 1
 );
 
 -- workout_events and workout_statistics carry no import_id column, so the
 -- dedupe key has to come from the row's own structure. Apple Health spec
 -- emits at most one event per (workout, type, date) and one statistic per
 -- (workout, stat_type) — re-importing the same export collapses cleanly
--- under those keys.
-CREATE OR REPLACE TABLE workout_events AS
-SELECT * FROM (
-    SELECT DISTINCT ON (workout_hash, event_type, date) *
-    FROM workout_events
-    ORDER BY workout_hash, event_type, date
+-- under those keys. ``ORDER BY`` inside ``ROW_NUMBER`` mirrors the legacy
+-- ``DISTINCT ON ... ORDER BY ...`` exactly so any tie-break is
+-- deterministic.
+DELETE FROM workout_events WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY workout_hash, event_type, date
+            ORDER BY workout_hash, event_type, date
+        ) AS rn
+        FROM workout_events
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE workout_statistics AS
-SELECT * FROM (
-    SELECT DISTINCT ON (workout_hash, stat_type) *
-    FROM workout_statistics
-    ORDER BY workout_hash, stat_type, start_date
+DELETE FROM workout_statistics WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY workout_hash, stat_type
+            ORDER BY start_date
+        ) AS rn
+        FROM workout_statistics
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE heart_rate_samples AS
-SELECT * FROM (
-    SELECT DISTINCT ON (parent_record_hash, sample_idx) *
-    FROM heart_rate_samples
-    ORDER BY parent_record_hash, sample_idx, import_id DESC
+DELETE FROM heart_rate_samples WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY parent_record_hash, sample_idx
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM heart_rate_samples
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE correlations AS
-SELECT * FROM (
-    SELECT DISTINCT ON (correlation_hash) *
-    FROM correlations
-    ORDER BY correlation_hash, import_id DESC
+DELETE FROM correlations WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY correlation_hash
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM correlations
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE correlation_members AS
-SELECT * FROM (
-    SELECT DISTINCT ON (correlation_hash, record_hash) *
-    FROM correlation_members
-    ORDER BY correlation_hash, record_hash, import_id DESC
+DELETE FROM correlation_members WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY correlation_hash, record_hash
+            ORDER BY import_id DESC
+        ) AS rn
+        FROM correlation_members
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE imports AS
-SELECT * FROM (
-    SELECT DISTINCT ON (import_id) *
-    FROM imports
-    ORDER BY import_id, imported_at DESC
+DELETE FROM imports WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY import_id
+            ORDER BY imported_at DESC
+        ) AS rn
+        FROM imports
+    ) WHERE rn > 1
 );
 
 -- The next three tables hold at most one row per import_id (or per
@@ -344,41 +409,53 @@ SELECT * FROM (
 -- replayed import happens to insert the same key twice. import_id DESC
 -- matches the "prefer the newest import" convention used everywhere else
 -- in this block.
-CREATE OR REPLACE TABLE export_metadata AS
-SELECT * FROM (
-    SELECT DISTINCT ON (import_id) *
-    FROM export_metadata
-    ORDER BY import_id DESC, export_date DESC
+DELETE FROM export_metadata WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY import_id
+            ORDER BY import_id DESC, export_date DESC
+        ) AS rn
+        FROM export_metadata
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE me_attributes AS
-SELECT * FROM (
-    SELECT DISTINCT ON (import_id) *
-    FROM me_attributes
-    ORDER BY import_id DESC, date_of_birth
+DELETE FROM me_attributes WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY import_id
+            ORDER BY import_id DESC, date_of_birth
+        ) AS rn
+        FROM me_attributes
+    ) WHERE rn > 1
 );
 
-CREATE OR REPLACE TABLE state_of_mind AS
-SELECT * FROM (
-    SELECT DISTINCT ON (record_hash) *
-    FROM state_of_mind
-    ORDER BY record_hash, import_id DESC, valence
+DELETE FROM state_of_mind WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid, ROW_NUMBER() OVER (
+            PARTITION BY record_hash
+            ORDER BY import_id DESC, valence
+        ) AS rn
+        FROM state_of_mind
+    ) WHERE rn > 1
 );
 """
 
 
-# DuckDB's ``CREATE OR REPLACE TABLE foo AS SELECT ... FROM foo`` (used by
-# ``_DEDUPLICATE_SQL``) infers column types from the SELECT projection but
-# does NOT carry constraints (NOT NULL / DEFAULT / CHECK) through. After
-# dedup, ``PRAGMA table_info(<table>)`` reports every column nullable with
-# no default. This block re-applies every NOT NULL constraint and the one
-# DEFAULT clause that the source schema declares, so the post-dedup tables
-# match the contract ``_CREATE_TABLES_SQL`` set out. The visible bug this
-# fixes is ``imports.imported_at`` writing as NULL on every import (the
-# orchestrator omits the column expecting the stripped DEFAULT
-# ``CURRENT_TIMESTAMP`` to fire); the other 17 tables' lost constraints are
-# latent today but are restored defensively so a future INSERT path cannot
-# silently drift away from the declared schema.
+# Issue #44 fix: re-apply every NOT NULL constraint and the one DEFAULT
+# clause that the source schema declares, so the post-dedup tables match
+# the contract ``_CREATE_TABLES_SQL`` set out.
+#
+# Why this block still exists after #60: the pre-#60 dedup path used
+# ``CREATE OR REPLACE TABLE foo AS SELECT ... FROM foo``, which infers
+# column types from the SELECT projection but does NOT carry constraints
+# through. After dedup, ``PRAGMA table_info(<table>)`` reported every
+# column nullable with no default — the visible bug being
+# ``imports.imported_at`` writing as NULL on every import. #44 added this
+# block to repair the schema in place. #60 then rewrote dedup as targeted
+# DELETEs so the schema is no longer stripped at all; the ALTERs below
+# are now no-ops on fresh imports BUT remain load-bearing for any DB
+# whose on-disk schema was finalized under the pre-#44 path and still
+# carries the stripped constraints. Keep them as a one-shot migration.
 #
 # ``SET DEFAULT`` precedes ``SET NOT NULL`` on ``imports.imported_at`` so the
 # DEFAULT is in place before NOT NULL comes into force. For an empty table
@@ -473,9 +550,14 @@ ALTER TABLE state_of_mind ALTER COLUMN import_id SET NOT NULL;
 
 
 # Indexes live in their own SQL block so ensure_schema can install them on a
-# fresh database that has not yet run deduplicate_tables. deduplicate_tables
-# also re-applies them because CREATE OR REPLACE TABLE drops associated
-# indexes; CREATE INDEX IF NOT EXISTS is idempotent on the warm path.
+# fresh database that has not yet run deduplicate_tables. The block is also
+# re-issued by deduplicate_tables itself: the historic (#60-pre) dedup path
+# used CREATE OR REPLACE TABLE which dropped associated indexes, and the
+# re-apply was load-bearing. Since #60 rewrote dedup as targeted DELETEs
+# the indexes survive untouched, but the re-issue stays in place as a
+# one-shot reinstall for any DB that finalized under the pre-#60 schema
+# and is missing them. CREATE INDEX IF NOT EXISTS is idempotent so the
+# warm path eats no work.
 _CREATE_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_records_type_date ON records(record_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_name);
@@ -514,19 +596,57 @@ def ensure_schema(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(_CREATE_INDEXES_SQL)
 
 
+def _legacy_schema_needs_constraint_repair(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Detect a pre-#44 DB whose dedup-stripped schema still needs repair.
+
+    Probes ``imports.imported_at`` for its NOT NULL flag -- the column
+    that was the visible casualty of the pre-#44 bug (the orchestrator
+    INSERT omits it expecting the DEFAULT to fire, but the
+    ``CREATE OR REPLACE TABLE`` dedup path stripped both). Pre-#44
+    finalize leaves the column nullable; post-#44 OR post-#60 finalize
+    leaves it NOT NULL. Returning True here is what gates the one-shot
+    ``_RESTORE_CONSTRAINTS_SQL`` execution: on a post-#60 DB the ALTERs
+    would otherwise raise ``DependencyException`` because the indexes
+    that ``CREATE OR REPLACE TABLE`` used to drop are now still in
+    place (issue #60).
+    """
+    row = conn.execute(
+        "SELECT \"notnull\" FROM pragma_table_info('imports') WHERE name = 'imported_at'"
+    ).fetchone()
+    if row is None:  # pragma: no cover - imports table missing implies a not-yet-seeded schema
+        return False
+    return int(row[0]) == 0
+
+
 def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """Collapse duplicate rows across every importable table.
 
-    Each ``DISTINCT ON`` carries an explicit ``ORDER BY`` so the surviving
-    row is deterministic across re-imports. The tie-break prefers the most
-    recent ``import_id`` so re-importing the same export never silently flips
-    ``source_version`` / ``device`` / etc. Indexes are re-created after the
-    table rewrites because ``CREATE OR REPLACE TABLE`` drops them.
+    Each per-table ``DELETE WHERE rowid IN (... ROW_NUMBER OVER (PARTITION
+    BY key ORDER BY <tie-breakers>) > 1 ...)`` keeps the same row a
+    legacy ``DISTINCT ON (key) ... ORDER BY key, <tie-breakers>`` would
+    have kept; the tie-break prefers the most recent ``import_id`` so
+    re-importing the same export never silently flips
+    ``source_version`` / ``device`` / etc. ``_RESTORE_CONSTRAINTS_SQL``
+    is gated by :func:`_legacy_schema_needs_constraint_repair` so it
+    only fires on a pre-#44 on-disk DB; on a fresh / post-#60 DB the
+    ALTERs would otherwise raise ``DependencyException`` against the
+    indexes the historic ``CREATE OR REPLACE TABLE`` used to drop.
+    ``_CREATE_INDEXES_SQL`` is idempotent (``CREATE INDEX IF NOT
+    EXISTS``) so it costs nothing on the warm path.
     """
     _logger.info("Deduplicating tables...")
     conn.execute(_DEDUPLICATE_SQL)
-    # CREATE OR REPLACE TABLE AS SELECT strips NOT NULL / DEFAULT; reapply.
-    conn.execute(_RESTORE_CONSTRAINTS_SQL)
+    # True branch fires only on pre-#44 on-disk DBs; covered by the
+    # direct unit test on :func:`_legacy_schema_needs_constraint_repair`
+    # rather than a full pre-#44 schema simulation here (which would
+    # also have to drop every index the historic ``CREATE OR REPLACE``
+    # used to drop, just to keep ``_RESTORE_CONSTRAINTS_SQL`` from
+    # raising ``DependencyException`` against the surviving indexes).
+    if _legacy_schema_needs_constraint_repair(conn):  # pragma: no branch
+        _logger.info(  # pragma: no cover
+            "Repairing pre-#44 dedup-stripped constraints (one-shot migration)"
+        )
+        conn.execute(_RESTORE_CONSTRAINTS_SQL)  # pragma: no cover
     conn.execute(_CREATE_INDEXES_SQL)
     _logger.info("Deduplication complete")
 
