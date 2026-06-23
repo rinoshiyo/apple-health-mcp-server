@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-06-24
+
 ### Changed
+
+- **`apply_pending_migrations` is now atomic (issue #62 follow-up).**
+  The migration loop, the `schema_version` stamp, and the COMMIT itself
+  run inside a single DuckDB transaction. A crash / SIGKILL / OOM /
+  Python exception during the loop -- including a failed COMMIT --
+  triggers ROLLBACK so the on-disk schema and the `schema_version`
+  sentinel can never diverge. `BaseException` is caught so
+  KeyboardInterrupt and SystemExit also roll back. Today's only
+  registered migration is an idempotent `ADD COLUMN IF NOT EXISTS`
+  (a partial-then-retry would converge anyway), but the transaction
+  wrap is the load-bearing safety the next non-idempotent migration
+  (backfill, row rewrite, etc.) will rely on. (#65)
 
 - **`--force` now bypasses ONLY the Tier 1 sha256 fast path; the Tier 2
   incremental hash-set skip stays active (issue #62 follow-up).** The
@@ -313,7 +327,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   19-character fixed-width form should update their parsers to ISO
   8601. (#29)
 
-[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/rinoshiyo/apple-health-mcp-server/compare/v0.1.2...v0.1.3
