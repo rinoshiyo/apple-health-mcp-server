@@ -42,13 +42,19 @@ def normalize_apple_offset(raw: str) -> str:
     # anything else so the original behaviour (trailing whitespace,
     # offset without leading space, etc.) stays intact.
     n = len(raw)
+    # Each fast-path branch additionally requires the character preceding
+    # the single leading space to NOT be whitespace itself — the fallback
+    # regex's ``\s*`` absorbs an arbitrary run of whitespace, so collapsing
+    # only one would leave surplus whitespace in the output and diverge
+    # from the regex semantics. When a longer whitespace run is present
+    # we fall through to ``_OFFSET_TAIL_RE`` for the regex's behaviour.
     if n >= 7 and raw[-7] == " " and raw[-6] in "+-" and raw[-3] == ":":
         tail = raw[-6:]
-        if tail[1:3].isdigit() and tail[4:6].isdigit():
+        if tail[1:3].isdigit() and tail[4:6].isdigit() and (n == 7 or not raw[-8].isspace()):
             return raw[:-7] + tail
     if n >= 6 and raw[-6] == " " and raw[-5] in "+-":
         tail = raw[-5:]
-        if tail[1:3].isdigit() and tail[3:5].isdigit():
+        if tail[1:3].isdigit() and tail[3:5].isdigit() and (n == 6 or not raw[-7].isspace()):
             return raw[:-6] + tail[:3] + ":" + tail[3:]
     return _OFFSET_TAIL_RE.sub(r"\1\2:\3", raw)
 

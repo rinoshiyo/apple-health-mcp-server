@@ -75,6 +75,37 @@ def test_normalize_apple_offset_fallback_handles_trailing_whitespace() -> None:
     assert normalize_apple_offset("2024-01-01 10:00:00 +0900   ") == "2024-01-01 10:00:00+09:00"
 
 
+def test_normalize_apple_offset_falls_back_on_multi_leading_whitespace_hhmm() -> None:
+    """Two spaces before a +HHMM offset must fall through to the regex.
+
+    The fast path only collapses a single leading space; without the
+    guard it would leave surplus whitespace in the output and diverge
+    from the regex's ``\\s*`` semantics. The regex strips every
+    leading whitespace character.
+    """
+    assert normalize_apple_offset("2024-01-01 10:00:00  +0900") == "2024-01-01 10:00:00+09:00"
+
+
+def test_normalize_apple_offset_falls_back_on_multi_leading_whitespace_hh_colon_mm() -> None:
+    """Two spaces before a +HH:MM offset must also fall through to the regex."""
+    assert normalize_apple_offset("2024-01-01 10:00:00  +09:00") == "2024-01-01 10:00:00+09:00"
+
+
+def test_normalize_apple_offset_falls_back_on_tab_leading_whitespace() -> None:
+    """A tab before the offset is whitespace too; the regex's ``\\s`` absorbs it."""
+    assert normalize_apple_offset("2024-01-01 10:00:00\t+0900") == "2024-01-01 10:00:00+09:00"
+
+
+def test_normalize_apple_offset_fast_path_at_minimum_lengths() -> None:
+    """The ``n == 7`` / ``n == 6`` short-circuit lets the fast path fire on
+    bare offsets (`" +HH:MM"` / `" +HHMM"`) without checking the would-be
+    out-of-range ``raw[-8]`` / ``raw[-7]`` position. These inputs are
+    pathological in production but the branches must stay covered.
+    """
+    assert normalize_apple_offset(" +09:00") == "+09:00"
+    assert normalize_apple_offset(" +0900") == "+09:00"
+
+
 def test_normalize_apple_offset_empty_string_passes_through() -> None:
     """Empty input returns empty (both fast-path checks short-circuit on length)."""
     assert normalize_apple_offset("") == ""
