@@ -481,6 +481,12 @@ class _XmlImporter:
     #   * ActivitySummary:               daily activity goals (standalone)
     #   * Correlation context:           Correlation (parent of nested
     #                                    correlation-child Records)
+    #
+    # NOTE: end-of-element cleanup for every tracked element is dispatched
+    # in :meth:`_on_end_sax` (Record / WorkoutRoute / Workout / Correlation
+    # end events), NOT inside the per-element handler section below. When
+    # tracing one element's full lifecycle, read its `_handle_*` here AND
+    # the matching branch in `_on_end_sax` above.
 
     # -- handlers: Singleton root-level elements (once per import) ----------
 
@@ -810,7 +816,7 @@ class _XmlImporter:
         if path is not None:
             self._current_workout_route["file_path"] = path
 
-    # -- handlers: HeartRate samples (nested in Record) --------------------
+    # -- handlers: HeartRate samples (nested in HR or HRV Record) ----------
 
     def _handle_instantaneous_bpm(self, attr: dict[str, str]) -> None:
         # Emitted as a child of either an HR record or an HRV record wrapped

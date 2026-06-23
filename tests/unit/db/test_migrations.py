@@ -160,12 +160,11 @@ def test_apply_pending_migrations_rolls_back_on_migration_failure(
     ``ADD COLUMN IF NOT EXISTS`` but data-corrupting under any non-
     idempotent step (e.g. a backfill that reads-then-writes a column).
     """
-    import duckdb as _duckdb
 
-    def _step_one(conn: _duckdb.DuckDBPyConnection) -> None:
+    def _step_one(conn: object) -> None:
         # Make a real schema change BEFORE raising so we can verify the
         # rollback also undoes the ALTER, not just the version stamp.
-        conn.execute("CREATE TABLE _migration_smoke (x INTEGER)")
+        conn.execute("CREATE TABLE _migration_smoke (x INTEGER)")  # type: ignore[attr-defined]
         raise RuntimeError("simulated migration crash")
 
     monkeypatch.setattr(migrations_module, "MIGRATIONS", ((2, _step_one),))
@@ -183,5 +182,13 @@ def test_apply_pending_migrations_rolls_back_on_migration_failure(
             "SELECT 1 FROM duckdb_tables() WHERE table_name = '_migration_smoke' LIMIT 1"
         ).fetchone()
         assert row is None
+
+        # The connection must remain usable after rollback -- a future
+        # refactor that leaves the connection in an aborted-transaction
+        # state would silently break the next call. Swap MIGRATIONS to an
+        # empty tuple and re-invoke; if the connection is poisoned the
+        # inner BEGIN raises.
+        monkeypatch.setattr(migrations_module, "MIGRATIONS", ())
+        assert apply_pending_migrations(conn) == 2
     finally:
         conn.close()
