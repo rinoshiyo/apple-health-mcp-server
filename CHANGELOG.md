@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`--force` now bypasses ONLY the Tier 1 sha256 fast path; the Tier 2
+  incremental hash-set skip stays active (issue #62 follow-up).** The
+  initial #62 implementation had `--force` bypass both tiers, which made
+  the flag re-import every row through the legacy Phase 4 dedup pipeline
+  and reintroduced the DuckDB MVCC tombstone balloon on the on-disk file.
+  There was no useful reading of "re-import this data but pay the
+  on-disk tombstone cost"; the right semantic is "the file is byte-
+  identical but I want to re-run the importer anyway". With the new
+  scope the `--force` re-import on the maintainer's 1.2 GB export drops
+  from ~142 s + 1.2 GB on disk to ~90 s (Phase 1 still parses every
+  Record, but every hash hits the existing-set so INSERTs ~0 and Phase
+  4 auto-skips). The fresh-import path is unchanged: an empty
+  ``imports`` table still leaves ``existing = None`` so the legacy
+  full-insert + Phase 4 dedup branch runs (no-op dedup, but the same
+  code path).
+
 ### Added
 
 - **Incremental re-import via `export.xml` sha256 fast path and an
@@ -20,8 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Skipping import: export.xml is byte-identical ...` and exits in
     roughly one disk-read of wall-clock without parsing the file or
     touching the DB. `--force` on the `import` subcommand bypasses
-    the check (and also disables Tier 2 so the legacy full-insert +
-    Phase 4 dedup path runs unchanged).
+    ONLY this check (see the Changed entry above for the final
+    `--force` scope).
   - **Tier 2** loads every dedup-keyed hash currently on disk
     (`record_hash`, `workout_hash`, `point_hash`, `ecg_hash`,
     `correlation_hash`, and the `activity_summaries.date_components`

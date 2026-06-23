@@ -9,10 +9,14 @@ Covers the two tiers together because they are intentionally complementary:
   skips ``deduplicate_tables`` when the snapshot was active (so the
   DuckDB MVCC tombstone balloon described in the issue body disappears).
 
-The legacy ``--force`` path -- sha256 ignored, no snapshot, Phase 4
-dedup runs -- is exercised under :func:`test_force_runs_legacy_dedup`
-and :func:`test_force_bypasses_sha256_fast_path` so the regression
-guard for the v0.1.5 behaviour stays explicit.
+``--force`` bypasses ONLY the Tier 1 sha256 short-circuit (PR #64
+narrowed the scope from "bypass both tiers"). The Tier 2 snapshot
+still loads and the staging buffers still skip on-disk hashes, so a
+forced re-import of a byte-identical export stays cheap and the
+on-disk DB does not balloon. The legacy full-insert + Phase 4 dedup
+branch is still exercised on fresh empty-DB imports -- see
+:func:`test_fresh_import_runs_legacy_phase4_dedup` for the explicit
+coverage pin.
 """
 
 from __future__ import annotations
@@ -411,15 +415,24 @@ def test_reimport_with_identical_xml_skips_via_sha256_fast_path(
 
 
 def test_force_bypasses_sha256_fast_path(tmp_path: Path) -> None:
-    """``force=True`` re-runs the full pipeline even on a byte-identical export."""
+    """``force=True`` re-runs the pipeline even on a byte-identical export.
+
+    The Tier 2 incremental snapshot is still active under ``--force``
+    (it bypasses ONLY the Tier 1 sha256 bail-out), so the re-import
+    contributes zero new rows when every hash matches the on-disk DB.
+    What we verify here is that the pipeline ran at all -- the
+    ``imports`` table gets a second row -- which proves the sha256
+    fast path did NOT short-circuit it.
+    """
     export_dir = _materialise_export(tmp_path)
     db = tmp_path / "h.duckdb"
     run_import(export_dir, db, import_id="imp_first")
 
     stats = run_import(export_dir, db, import_id="imp_forced", force=True)
-    # Full pipeline ran; the forced re-import re-parsed every row.
-    assert stats.records >= 1
-    # The new imports row landed too.
+    # Tier 2 skipped every row (all hashes already on disk) so stats are
+    # zero -- but the pipeline DID run end-to-end and stamped an imports
+    # row, which is what differentiates ``--force`` from the Tier 1 skip.
+    assert stats.records == 0
     conn = duckdb.connect(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM imports").fetchone()
@@ -475,13 +488,13 @@ def test_incremental_reimport_only_adds_new_record(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_force_reimport_runs_legacy_dedup_and_keeps_one_row(tmp_path: Path) -> None:
-    """``force=True`` re-imports every row and relies on Phase 4 dedup to collapse.
+def test_force_reimport_keeps_one_row_via_tier_2_skip(tmp_path: Path) -> None:
+    """``force=True`` runs the pipeline but Tier 2 skip keeps every table at 1 row.
 
-    The post-import row count for each dedup-keyed table is the same as
-    fresh-import / incremental-reimport -- proving the legacy path still
-    converges. The point of the test is to exercise the dedup-runs branch
-    inside ``finalize_import`` so the v0.1.5 contract stays alive.
+    The Tier 2 incremental snapshot is active under ``--force`` (only
+    the Tier 1 sha256 bail-out is bypassed), so every hash-keyed table
+    stays at one row because every parsed element hits the existing-set.
+    Phase 4 dedup auto-skips so no MVCC tombstones are emitted.
     """
     export_dir = _materialise_export(tmp_path)
     db = tmp_path / "h.duckdb"
@@ -497,6 +510,44 @@ def test_force_reimport_runs_legacy_dedup_and_keeps_one_row(tmp_path: Path) -> N
         row = conn.execute("SELECT COUNT(*) FROM correlations").fetchone()
         assert row is not None and int(row[0]) == 1
         row = conn.execute("SELECT COUNT(*) FROM activity_summaries").fetchone()
+        assert row is not None and int(row[0]) == 1
+    finally:
+        conn.close()
+
+
+def test_fresh_import_runs_legacy_phase4_dedup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A fresh empty DB still exercises the legacy Phase 4 dedup branch.
+
+    Tier 2 skip is gated on ``_has_prior_imports(conn)``; an empty
+    ``imports`` table leaves ``existing = None`` and ``finalize_import``
+    runs the full ``deduplicate_tables`` pass. The dedup is a no-op in
+    practice (every hash is unique on a fresh import) but this test
+    pins the legacy path coverage so a future change that tries to
+    skip dedup unconditionally has to update the test.
+
+    The caplog assertion pins the actual branch -- ``finalize_import``
+    logs distinct INFO lines for ``skip_dedup=True`` vs ``False`` -- so
+    a counting-only assertion (every hash unique on a fresh import →
+    row count would be 1 either way) cannot pass under a future
+    ``skip_dedup=True`` regression.
+    """
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO, logger="apple_health_mcp.importers.dedup")
+    export_dir = _materialise_export(tmp_path)
+    db = tmp_path / "h.duckdb"
+    run_import(export_dir, db, import_id="imp_first")
+
+    assert any(
+        "Finalizing import: deduplicate -> backfill -> daily stats" in rec.message
+        for rec in caplog.records
+    ), "expected the legacy Phase 4 dedup log line on a fresh import"
+
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
         assert row is not None and int(row[0]) == 1
     finally:
         conn.close()
