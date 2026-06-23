@@ -1,6 +1,6 @@
 [project]
 name = "apple-health-mcp-server"
-version = "0.1.4"
+version = "0.1.5"
 description = "Probably the most complete Apple Health MCP server"
 readme = "README.md"
 requires-python = ">=3.12"
