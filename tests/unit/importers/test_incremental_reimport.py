@@ -9,10 +9,14 @@ Covers the two tiers together because they are intentionally complementary:
   skips ``deduplicate_tables`` when the snapshot was active (so the
   DuckDB MVCC tombstone balloon described in the issue body disappears).
 
-The legacy ``--force`` path -- sha256 ignored, no snapshot, Phase 4
-dedup runs -- is exercised under :func:`test_force_runs_legacy_dedup`
-and :func:`test_force_bypasses_sha256_fast_path` so the regression
-guard for the v0.1.5 behaviour stays explicit.
+``--force`` bypasses ONLY the Tier 1 sha256 short-circuit (PR #64
+narrowed the scope from "bypass both tiers"). The Tier 2 snapshot
+still loads and the staging buffers still skip on-disk hashes, so a
+forced re-import of a byte-identical export stays cheap and the
+on-disk DB does not balloon. The legacy full-insert + Phase 4 dedup
+branch is still exercised on fresh empty-DB imports -- see
+:func:`test_fresh_import_runs_legacy_phase4_dedup` for the explicit
+coverage pin.
 """
 
 from __future__ import annotations
@@ -511,19 +515,36 @@ def test_force_reimport_keeps_one_row_via_tier_2_skip(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_fresh_import_runs_legacy_phase4_dedup(tmp_path: Path) -> None:
+def test_fresh_import_runs_legacy_phase4_dedup(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A fresh empty DB still exercises the legacy Phase 4 dedup branch.
 
     Tier 2 skip is gated on ``_has_prior_imports(conn)``; an empty
     ``imports`` table leaves ``existing = None`` and ``finalize_import``
     runs the full ``deduplicate_tables`` pass. The dedup is a no-op in
     practice (every hash is unique on a fresh import) but this test
-    pins the legacy path coverage so future changes that try to skip
-    dedup unconditionally would have to update the test.
+    pins the legacy path coverage so a future change that tries to
+    skip dedup unconditionally has to update the test.
+
+    The caplog assertion pins the actual branch -- ``finalize_import``
+    logs distinct INFO lines for ``skip_dedup=True`` vs ``False`` -- so
+    a counting-only assertion (every hash unique on a fresh import →
+    row count would be 1 either way) cannot pass under a future
+    ``skip_dedup=True`` regression.
     """
+    import logging as _logging
+
+    caplog.set_level(_logging.INFO, logger="apple_health_mcp.importers.dedup")
     export_dir = _materialise_export(tmp_path)
     db = tmp_path / "h.duckdb"
     run_import(export_dir, db, import_id="imp_first")
+
+    assert any(
+        "Finalizing import: deduplicate -> backfill -> daily stats" in rec.message
+        for rec in caplog.records
+    ), "expected the legacy Phase 4 dedup log line on a fresh import"
+
     conn = duckdb.connect(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM records").fetchone()

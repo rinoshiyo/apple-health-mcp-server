@@ -38,8 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Skipping import: export.xml is byte-identical ...` and exits in
     roughly one disk-read of wall-clock without parsing the file or
     touching the DB. `--force` on the `import` subcommand bypasses
-    the check (and also disables Tier 2 so the legacy full-insert +
-    Phase 4 dedup path runs unchanged).
+    ONLY this check (see the Changed entry above for the final
+    `--force` scope).
   - **Tier 2** loads every dedup-keyed hash currently on disk
     (`record_hash`, `workout_hash`, `point_hash`, `ecg_hash`,
     `correlation_hash`, and the `activity_summaries.date_components`

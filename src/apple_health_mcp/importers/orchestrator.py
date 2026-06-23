@@ -90,7 +90,10 @@ def run_import(
     import (e.g. after deleting some rows from the DB by hand, or to
     verify the importer still produces the same row counts). The hash
     skip in Tier 2 still keeps the re-import cheap; only the sha256
-    bail-out is bypassed.
+    bail-out is bypassed. On a modified ``export.xml`` (sha256 misses
+    the prior row anyway), ``force=True`` is functionally equivalent
+    to no flag at all -- adding it to every command "just to be safe"
+    has no effect on a changed file.
     """
     start = time.monotonic()
     actual_import_id = import_id or make_import_id()
@@ -110,8 +113,10 @@ def run_import(
 
         # Tier 1: sha256 fast path. Skip the whole import when the
         # incoming export.xml is byte-identical to the last successful
-        # one. ``--force`` bypasses; a missing ``export.xml`` falls
-        # through so import_xml below can raise the proper error.
+        # one. ``--force`` bypasses this check only -- the Tier 2
+        # block below stays active regardless (see the comment there
+        # for the full ``--force`` semantic). A missing ``export.xml``
+        # falls through so import_xml below can raise the proper error.
         if not force and export_sha is not None and _sha256_matches_prior(conn, export_sha):
             _logger.info(
                 "Skipping import: export.xml is byte-identical to the most recent "
