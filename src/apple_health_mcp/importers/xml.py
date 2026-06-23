@@ -65,8 +65,16 @@ _logger = logging.getLogger(__name__)
 
 
 # Records flushed in chunks so an interrupted import never holds more than
-# this many rows in memory. The Rust version used 100_000; we keep that.
+# this many rows in memory. The Rust version used 100_000; we keep that
+# as the default for the low-volume tables.
 _BATCH_SIZE = 100_000
+
+# High-volume tables (records, record_metadata, heart_rate_samples) account
+# for ~99% of the flushed rows on a typical 1.2 GB export, so flushing them
+# less often saves DuckDB INSERT round-trip overhead (issue #56). Peak
+# Python RSS rises by ~150 MB during the records run, well under the
+# importer's 1 GB budget on the 16 GB development target.
+_BATCH_SIZE_HOT = 250_000
 
 # Match the Rust safeguard: bail out if the parser hits this many
 # consecutive errors so a corrupt-stream loop cannot spin forever.
@@ -498,12 +506,16 @@ class _XmlImporter:
         self._stats.me_rows += 1
 
     def _handle_record(self, elem: etree._Element) -> None:
-        record_type = elem.get("type", "")
-        source_name = elem.get("sourceName", "")
-        start_date = _clean_date(elem.get("startDate", ""))
-        end_date = _clean_date(elem.get("endDate", ""))
-        value_str = elem.get("value")
-        unit = elem.get("unit")
+        # Snapshot the attribute mapping once per element so the per-key
+        # lookups below stay on the Python dict side instead of crossing
+        # back into the lxml C boundary 8-15 times per record (issue #56).
+        attr = elem.attrib
+        record_type = attr.get("type", "")
+        source_name = attr.get("sourceName", "")
+        start_date = _clean_date(attr.get("startDate", ""))
+        end_date = _clean_date(attr.get("endDate", ""))
+        value_str = attr.get("value")
+        unit = attr.get("unit")
         value = _parse_opt_float(value_str)
         # Preserve categorical / non-numeric values (e.g. sleep stages) that
         # do not parse as float, so downstream consumers can still read them.
@@ -530,9 +542,9 @@ class _XmlImporter:
                 text_value,
                 unit,
                 source_name,
-                elem.get("sourceVersion"),
-                elem.get("device"),
-                _clean_date_opt(elem.get("creationDate")),
+                attr.get("sourceVersion"),
+                attr.get("device"),
+                _clean_date_opt(attr.get("creationDate")),
                 start_date,
                 end_date,
                 self._import_id,
@@ -554,22 +566,25 @@ class _XmlImporter:
             }
         else:
             self._current_state_of_mind = None
-        if len(self._records) >= _BATCH_SIZE:
+        if len(self._records) >= _BATCH_SIZE_HOT:
             self._flush_records()
 
     def _handle_correlation_record(self, elem: etree._Element) -> None:
         # The child's own row is taken care of by the top-level pass (Apple
         # Health duplicates correlation members at the top level by spec);
         # we only record the linkage here. The hash must mirror the
-        # top-level Record handler exactly so the join key matches.
+        # top-level Record handler exactly so the join key matches (same
+        # attribute read order, same string trimming) — keep this in lockstep
+        # with :meth:`_handle_record`.
         if self._current_correlation_hash is None:  # pragma: no cover - defensive
             return
-        record_type = elem.get("type", "")
-        source_name = elem.get("sourceName", "")
-        start_date = _clean_date(elem.get("startDate", ""))
-        end_date = _clean_date(elem.get("endDate", ""))
-        value_str = elem.get("value")
-        unit = elem.get("unit")
+        attr = elem.attrib
+        record_type = attr.get("type", "")
+        source_name = attr.get("sourceName", "")
+        start_date = _clean_date(attr.get("startDate", ""))
+        end_date = _clean_date(attr.get("endDate", ""))
+        value_str = attr.get("value")
+        unit = attr.get("unit")
         child_hash = compute_hash(
             [record_type, source_name, start_date, end_date, value_str or "", unit or ""]
         )
@@ -581,8 +596,9 @@ class _XmlImporter:
             self._flush_correlation_members()
 
     def _handle_metadata_entry(self, elem: etree._Element) -> None:
-        key = elem.get("key", "")
-        value = elem.get("value", "")
+        attr = elem.attrib
+        key = attr.get("key", "")
+        value = attr.get("value", "")
         # Inner-most context wins: a <Record> nested inside a <Workout>
         # (e.g. InstantaneousBeatsPerMinute samples or HK plain Records under
         # a Workout block) must route its MetadataEntry to record_metadata,
@@ -592,7 +608,7 @@ class _XmlImporter:
             self._record_metadata.append((self._current_record_hash, key, value))
             self._stats.metadata_entries += 1
             self._capture_state_of_mind_metadata(key, value)
-            if len(self._record_metadata) >= _BATCH_SIZE:
+            if len(self._record_metadata) >= _BATCH_SIZE_HOT:
                 self._flush_record_metadata()
         elif self._in_workout:
             # _in_workout is only set alongside _current_workout_hash, so the
@@ -605,11 +621,12 @@ class _XmlImporter:
 
     def _handle_workout_start(self, elem: etree._Element) -> None:
         self._in_workout = True
-        activity_type = elem.get("workoutActivityType", "")
-        source_name = elem.get("sourceName", "")
-        start_date = _clean_date(elem.get("startDate", ""))
-        end_date = _clean_date(elem.get("endDate", ""))
-        duration_str = elem.get("duration")
+        attr = elem.attrib
+        activity_type = attr.get("workoutActivityType", "")
+        source_name = attr.get("sourceName", "")
+        start_date = _clean_date(attr.get("startDate", ""))
+        end_date = _clean_date(attr.get("endDate", ""))
+        duration_str = attr.get("duration")
         duration = _parse_opt_float(duration_str)
 
         workout_hash = compute_hash(
@@ -620,15 +637,15 @@ class _XmlImporter:
             workout_hash,
             activity_type,
             duration,
-            elem.get("durationUnit"),
-            _parse_opt_float(elem.get("totalDistance")),
-            elem.get("totalDistanceUnit"),
-            _parse_opt_float(elem.get("totalEnergyBurned")),
-            elem.get("totalEnergyBurnedUnit"),
+            attr.get("durationUnit"),
+            _parse_opt_float(attr.get("totalDistance")),
+            attr.get("totalDistanceUnit"),
+            _parse_opt_float(attr.get("totalEnergyBurned")),
+            attr.get("totalEnergyBurnedUnit"),
             source_name,
-            elem.get("sourceVersion"),
-            elem.get("device"),
-            _clean_date_opt(elem.get("creationDate")),
+            attr.get("sourceVersion"),
+            attr.get("device"),
+            _clean_date_opt(attr.get("creationDate")),
             start_date,
             end_date,
             self._import_id,
@@ -642,30 +659,32 @@ class _XmlImporter:
     def _handle_workout_event(self, elem: etree._Element) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
+        attr = elem.attrib
         self._current_workout_events.append(
             (
                 self._current_workout_hash,
-                elem.get("type", ""),
-                _clean_date_opt(elem.get("date")),
-                _parse_opt_float(elem.get("duration")),
-                elem.get("durationUnit"),
+                attr.get("type", ""),
+                _clean_date_opt(attr.get("date")),
+                _parse_opt_float(attr.get("duration")),
+                attr.get("durationUnit"),
             )
         )
 
     def _handle_workout_stat(self, elem: etree._Element) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
+        attr = elem.attrib
         self._current_workout_stats.append(
             (
                 self._current_workout_hash,
-                elem.get("type", ""),
-                _clean_date_opt(elem.get("startDate")),
-                _clean_date_opt(elem.get("endDate")),
-                _parse_opt_float(elem.get("average")),
-                _parse_opt_float(elem.get("minimum")),
-                _parse_opt_float(elem.get("maximum")),
-                _parse_opt_float(elem.get("sum")),
-                elem.get("unit"),
+                attr.get("type", ""),
+                _clean_date_opt(attr.get("startDate")),
+                _clean_date_opt(attr.get("endDate")),
+                _parse_opt_float(attr.get("average")),
+                _parse_opt_float(attr.get("minimum")),
+                _parse_opt_float(attr.get("maximum")),
+                _parse_opt_float(attr.get("sum")),
+                attr.get("unit"),
             )
         )
 
@@ -673,18 +692,19 @@ class _XmlImporter:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
         self._in_workout_route = True
+        attr = elem.attrib
         self._current_workout_route = {
             "workout_hash": self._current_workout_hash,
             "file_path": "",
-            "source_name": elem.get("sourceName"),
-            "source_version": elem.get("sourceVersion"),
+            "source_name": attr.get("sourceName"),
+            "source_version": attr.get("sourceVersion"),
             # Captured even though the Rust version dropped it -- per
             # project_data_audit_2026_06_21 the device attribute on
             # WorkoutRoute carries useful provenance.
-            "device": elem.get("device"),
-            "creation_date": _clean_date_opt(elem.get("creationDate")),
-            "start_date": _clean_date_opt(elem.get("startDate")),
-            "end_date": _clean_date_opt(elem.get("endDate")),
+            "device": attr.get("device"),
+            "creation_date": _clean_date_opt(attr.get("creationDate")),
+            "start_date": _clean_date_opt(attr.get("startDate")),
+            "end_date": _clean_date_opt(attr.get("endDate")),
             "import_id": self._import_id,
         }
 
@@ -701,8 +721,9 @@ class _XmlImporter:
         # heart_rate_samples keyed by the parent record's hash.
         if self._current_record_hash is None:
             return
-        bpm = _parse_opt_float(elem.get("bpm"))
-        sample_time = elem.get("time")
+        attr = elem.attrib
+        bpm = _parse_opt_float(attr.get("bpm"))
+        sample_time = attr.get("time")
         self._heart_rate_samples.append(
             (
                 self._current_record_hash,
@@ -714,22 +735,23 @@ class _XmlImporter:
         )
         self._current_hr_sample_idx += 1
         self._stats.heart_rate_samples += 1
-        if len(self._heart_rate_samples) >= _BATCH_SIZE:
+        if len(self._heart_rate_samples) >= _BATCH_SIZE_HOT:
             self._flush_heart_rate_samples()
 
     def _handle_activity_summary(self, elem: etree._Element) -> None:
+        attr = elem.attrib
         self._activities.append(
             (
-                elem.get("dateComponents", ""),
-                _parse_opt_float(elem.get("activeEnergyBurned")),
-                _parse_opt_float(elem.get("activeEnergyBurnedGoal")),
-                elem.get("activeEnergyBurnedUnit"),
-                _parse_opt_float(elem.get("appleMoveTime")),
-                _parse_opt_float(elem.get("appleMoveTimeGoal")),
-                _parse_opt_float(elem.get("appleExerciseTime")),
-                _parse_opt_float(elem.get("appleExerciseTimeGoal")),
-                _parse_opt_float(elem.get("appleStandHours")),
-                _parse_opt_float(elem.get("appleStandHoursGoal")),
+                attr.get("dateComponents", ""),
+                _parse_opt_float(attr.get("activeEnergyBurned")),
+                _parse_opt_float(attr.get("activeEnergyBurnedGoal")),
+                attr.get("activeEnergyBurnedUnit"),
+                _parse_opt_float(attr.get("appleMoveTime")),
+                _parse_opt_float(attr.get("appleMoveTimeGoal")),
+                _parse_opt_float(attr.get("appleExerciseTime")),
+                _parse_opt_float(attr.get("appleExerciseTimeGoal")),
+                _parse_opt_float(attr.get("appleStandHours")),
+                _parse_opt_float(attr.get("appleStandHoursGoal")),
                 self._import_id,
             )
         )
@@ -740,19 +762,20 @@ class _XmlImporter:
     def _handle_correlation_start(self, elem: etree._Element) -> None:
         self._in_correlation = True
         self._stats.correlations += 1
-        correlation_type = elem.get("type", "")
-        source_name = elem.get("sourceName", "")
-        start_date = _clean_date(elem.get("startDate", ""))
-        end_date = _clean_date(elem.get("endDate", ""))
+        attr = elem.attrib
+        correlation_type = attr.get("type", "")
+        source_name = attr.get("sourceName", "")
+        start_date = _clean_date(attr.get("startDate", ""))
+        end_date = _clean_date(attr.get("endDate", ""))
         correlation_hash = compute_hash([correlation_type, source_name, start_date, end_date])
         self._correlations.append(
             (
                 correlation_hash,
                 correlation_type,
                 source_name,
-                elem.get("sourceVersion"),
-                elem.get("device"),
-                _clean_date_opt(elem.get("creationDate")),
+                attr.get("sourceVersion"),
+                attr.get("device"),
+                _clean_date_opt(attr.get("creationDate")),
                 start_date,
                 end_date,
                 self._import_id,
