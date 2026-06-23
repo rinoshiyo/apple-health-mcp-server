@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`apple-health-mcp-server import` is dramatically faster on real
+  exports.** The XML / GPX / ECG importer flush path now routes
+  batches through a registered `pyarrow.Table` (issue #50). The
+  previous v0.1.3-era `COPY FROM CSV` tempfile path threw away every
+  cycle on per-row `csv.writer.writerow` calls, `NamedTemporaryFile`
+  writes, and DuckDB's CSV auto-detector. The Arrow path builds the
+  columnar buffer once per batch and hands DuckDB the same shape its
+  internal storage uses, so the per-batch CSV serialise + tempfile +
+  COPY round-trip the legacy helper paid is gone. PyArrow is added
+  as a runtime dependency (~30 MB wheel); a unit test guards that
+  it stays out of the `serve` import graph so MCP startup latency
+  is unaffected. The Arrow path also drops the historical
+  `_NULL_SENTINEL` collision check -- Arrow distinguishes `null`
+  from the literal string `"\N"` natively. (#50)
+
+### Added
+
+- **Phase-1 progress log lines during `import`.** A streaming agent
+  or human watching `apple-health-mcp-server import …` no longer
+  sees a multi-minute silent stretch during the XML parse. Every
+  10 seconds (configurable via `APPLE_HEALTH_IMPORT_PROGRESS_SECS`,
+  clamped to 1..600) the importer emits a single newline-terminated
+  `INFO  progress: xml NN% (X / Y MB, ~Z min remaining)` line on
+  stderr. No `\r` carriage return, no ANSI cursor escapes, so the
+  output stays readable when piped through `tee`, captured by CI,
+  or buffered by an LLM agent. Sub-megabyte exports skip the
+  emitter -- the phase markers already announce start + completion
+  in that regime. (#51)
+
 ### Fixed
 
 - **Date-only `end_date` filters are now inclusive of the named day.**

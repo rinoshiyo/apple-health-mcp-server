@@ -16,19 +16,34 @@ matching ``end`` event (so a Workout that fails to close never leaks
 orphaned children into the database). Hashes match the Rust version
 byte-for-byte via :func:`apple_health_mcp.importers._hash.compute_hash`.
 
-Bulk-load policy (issue #41): every multi-row buffer flushes through
-:func:`apple_health_mcp.importers._bulk.bulk_load_via_csv` via the 12
-``_flush_*`` helpers below. The three singleton-row inserts (HealthData,
-ExportDate, Me) deliberately bypass the bulk helper — each fires at most
-once per import, so the tempfile+COPY overhead would dwarf a single
-``conn.execute("INSERT ...")``. Future contributors adding a per-import
-singleton row should follow the same direct-INSERT pattern.
+Bulk-load policy (issues #41 / #50): every multi-row buffer flushes
+through :func:`apple_health_mcp.importers._bulk_arrow.bulk_load_via_arrow`
+via the 12 ``_flush_*`` helpers below. v0.1.5 replaced the v0.1.3-era
+``COPY FROM CSV`` tempfile path with a PyArrow ``Table`` registered
+against DuckDB -- the columnar buffer hands DuckDB the same shape its
+internal storage uses, so the per-batch CSV serialise + tempfile +
+COPY round-trip the legacy helper paid is gone. The three
+singleton-row inserts (HealthData, ExportDate, Me) deliberately bypass
+the bulk helper -- each fires at most once per import, so even the
+trimmed Arrow overhead would dwarf a single ``conn.execute("INSERT ...")``.
+Future contributors adding a per-import singleton row should follow
+the same direct-INSERT pattern.
+
+Phase 1 progress (issue #51): the iterparse loop emits a single-line
+``progress: xml NN% (X / Y MB, ~Z min remaining)`` log entry every
+``APPLE_HEALTH_IMPORT_PROGRESS_SECS`` seconds (default 10, clamped to
+1..600) so a streaming agent or human can confirm forward motion
+during the multi-minute parse. The cadence is non-TTY-safe (no ``\\r``,
+no ANSI cursor games) so the output survives ``tee``, CI capture, and
+LLM-agent stdout buffers.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,7 +51,7 @@ from typing import TYPE_CHECKING
 from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
-from apple_health_mcp.importers._bulk import bulk_load_via_csv
+from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
 from apple_health_mcp.importers._hash import compute_hash
 from apple_health_mcp.importers._tz import (
     normalize_apple_offset,
@@ -56,6 +71,46 @@ _BATCH_SIZE = 100_000
 # Match the Rust safeguard: bail out if the parser hits this many
 # consecutive errors so a corrupt-stream loop cannot spin forever.
 _MAX_CONSECUTIVE_PARSE_ERRORS = 100
+
+# Default cadence and bounds for the Phase-1 progress emitter (issue #51).
+# Overridable per-run via ``APPLE_HEALTH_IMPORT_PROGRESS_SECS``; values
+# outside the bounds are clamped (rather than rejected) so a typo at the
+# command line never crashes the import.
+_PROGRESS_INTERVAL_DEFAULT_SECS = 10
+_PROGRESS_INTERVAL_MIN_SECS = 1
+_PROGRESS_INTERVAL_MAX_SECS = 600
+# Imports smaller than this skip the progress emitter entirely: the
+# enclosing phase markers already announce start + completion, and the
+# CI smoke fixtures are sub-second so an emitted line would be noise.
+_PROGRESS_MIN_BYTES = 1_000_000
+
+
+def _resolve_progress_interval() -> int:
+    """Return the configured Phase-1 progress cadence in seconds.
+
+    Reads ``APPLE_HEALTH_IMPORT_PROGRESS_SECS`` lazily so unit tests can
+    monkeypatch the env var per call. A non-integer / out-of-bounds
+    value falls back to the default with a single WARNING; the import
+    must not crash because of a typo at the command line.
+    """
+    raw = os.environ.get("APPLE_HEALTH_IMPORT_PROGRESS_SECS")
+    if raw is None or raw == "":
+        return _PROGRESS_INTERVAL_DEFAULT_SECS
+    try:
+        value = int(raw)
+    except ValueError:
+        _logger.warning(
+            "APPLE_HEALTH_IMPORT_PROGRESS_SECS=%r is not an integer; falling back to default %d",
+            raw,
+            _PROGRESS_INTERVAL_DEFAULT_SECS,
+        )
+        return _PROGRESS_INTERVAL_DEFAULT_SECS
+    if value < _PROGRESS_INTERVAL_MIN_SECS:
+        return _PROGRESS_INTERVAL_MIN_SECS
+    if value > _PROGRESS_INTERVAL_MAX_SECS:
+        return _PROGRESS_INTERVAL_MAX_SECS
+    return value
+
 
 # iOS 17+ State of Mind records are emitted as Category records of this type.
 # The XML importer breaks them out into the dedicated ``state_of_mind`` table
@@ -187,48 +242,74 @@ class _XmlImporter:
     # -- public entry --------------------------------------------------------
 
     def run(self, xml_path: Path) -> ImportStats:
+        # Open the file ourselves (rather than letting lxml open by path)
+        # so the progress emitter can ask ``.tell()`` for the byte
+        # position. ``rb`` matches the XML transport (lxml parses bytes,
+        # not decoded text); ``huge_tree=True`` matches the original call.
+        try:
+            fp = xml_path.open("rb")
+        except OSError as exc:
+            raise HealthImportError(f"failed to open export.xml at {xml_path}: {exc}") from exc
+
+        try:
+            total_bytes = xml_path.stat().st_size
+        except OSError as exc:  # pragma: no cover - already-open file rarely fails stat
+            fp.close()
+            raise HealthImportError(f"failed to open export.xml at {xml_path}: {exc}") from exc
+
         try:
             context = etree.iterparse(
-                str(xml_path),
+                fp,
                 events=("start", "end"),
                 recover=True,
                 huge_tree=True,
             )
-        except OSError as exc:
-            raise HealthImportError(f"failed to open export.xml at {xml_path}: {exc}") from exc
 
-        consecutive_errors = 0
-        try:
-            for event, elem in context:
-                handler_failed = False
-                try:
-                    if event == "start":
-                        self._on_start(elem)
-                    else:
-                        self._on_end(elem)
-                except Exception as exc:
-                    handler_failed = True
-                    consecutive_errors += 1
-                    _logger.warning(
-                        "XML element handler error (%d/%d): %s",
-                        consecutive_errors,
-                        _MAX_CONSECUTIVE_PARSE_ERRORS,
-                        exc,
-                    )
-                    if consecutive_errors > _MAX_CONSECUTIVE_PARSE_ERRORS:
-                        raise HealthImportError(
-                            f"aborting XML import after {consecutive_errors} consecutive errors"
-                        ) from exc
-                # Reset the counter on any successful event (start OR end).
-                # The Rust reference resets after every successful event for
-                # the same reason: with iterparse firing roughly equal
-                # numbers of start and end events, gating the reset on
-                # `start` only would halve the effective budget and cause
-                # sparse-but-non-consecutive failures to trip the abort.
-                if not handler_failed:
-                    consecutive_errors = 0
-        except etree.XMLSyntaxError as exc:
-            raise HealthImportError(f"unrecoverable XML syntax error: {exc}") from exc
+            interval = _resolve_progress_interval()
+            emit_progress = total_bytes >= _PROGRESS_MIN_BYTES
+            start_ts = time.monotonic()
+            last_log = start_ts
+
+            consecutive_errors = 0
+            try:
+                for event, elem in context:
+                    handler_failed = False
+                    try:
+                        if event == "start":
+                            self._on_start(elem)
+                        else:
+                            self._on_end(elem)
+                    except Exception as exc:
+                        handler_failed = True
+                        consecutive_errors += 1
+                        _logger.warning(
+                            "XML element handler error (%d/%d): %s",
+                            consecutive_errors,
+                            _MAX_CONSECUTIVE_PARSE_ERRORS,
+                            exc,
+                        )
+                        if consecutive_errors > _MAX_CONSECUTIVE_PARSE_ERRORS:
+                            raise HealthImportError(
+                                f"aborting XML import after {consecutive_errors} consecutive errors"
+                            ) from exc
+                    # Reset the counter on any successful event (start OR
+                    # end). The Rust reference resets after every
+                    # successful event for the same reason: with iterparse
+                    # firing roughly equal numbers of start and end events,
+                    # gating the reset on `start` only would halve the
+                    # effective budget and cause sparse-but-non-consecutive
+                    # failures to trip the abort.
+                    if not handler_failed:
+                        consecutive_errors = 0
+                    if emit_progress:
+                        now = time.monotonic()
+                        if now - last_log >= interval:
+                            self._emit_progress(fp, total_bytes, start_ts, now)
+                            last_log = now
+            except etree.XMLSyntaxError as exc:
+                raise HealthImportError(f"unrecoverable XML syntax error: {exc}") from exc
+        finally:
+            fp.close()
 
         self._flush_all()
         _logger.info(
@@ -244,6 +325,53 @@ class _XmlImporter:
             self._stats.heart_rate_samples,
         )
         return self._stats
+
+    # -- progress emitter ---------------------------------------------------
+
+    def _emit_progress(
+        self,
+        fp: object,
+        total_bytes: int,
+        start_ts: float,
+        now: float,
+    ) -> None:
+        """Emit one Phase-1 progress line (issue #51).
+
+        Single newline-terminated INFO record on stderr (the only stream
+        the importer logger writes to); no ``\\r`` and no ANSI cursor
+        escapes so the output stays sane through ``tee``, CI capture, and
+        LLM-agent stdout buffers. ``fp`` is annotated as ``object`` only
+        so the call site can pass the binary file handle without
+        triggering a circular import on lxml's IO protocols; the real
+        contract is that ``.tell()`` returns the byte position.
+        """
+        # ``tell`` shadows ``getattr`` here so mypy stops worrying about
+        # the file-handle protocol; production callers pass a binary
+        # file opened by :meth:`run`, but unit tests can pass a stub.
+        tell = getattr(fp, "tell", None)
+        if tell is None:  # pragma: no cover - defensive
+            return
+        consumed = int(tell())
+        # ``total_bytes`` is guaranteed > 0 by the caller (we only enter
+        # this branch when ``total_bytes >= _PROGRESS_MIN_BYTES``).
+        pct_float = 100 * consumed / total_bytes
+        pct = round(pct_float)
+        elapsed = now - start_ts
+        if pct_float > 0:
+            eta_secs = elapsed * (100 - pct_float) / pct_float
+            eta_min = eta_secs / 60
+            eta_text = f"~{eta_min:.1f} min remaining"
+        else:  # pragma: no cover - the first emission lands well after 0%
+            eta_text = "ETA unknown"
+        consumed_mb = consumed / (1024 * 1024)
+        total_mb = total_bytes / (1024 * 1024)
+        _logger.info(
+            "progress: xml %d%% (%.0f / %.0f MB, %s)",
+            pct,
+            consumed_mb,
+            total_mb,
+            eta_text,
+        )
 
     # -- event dispatch ------------------------------------------------------
 
@@ -772,58 +900,60 @@ class _XmlImporter:
     # -- flush helpers ------------------------------------------------------
     #
     # Every flush routes the buffered batch through
-    # :func:`bulk_load_via_csv` (issue #41). The previous ``executemany``
-    # path dispatched per row through DuckDB's SQL planner at ~300 rows/s,
-    # so a real 1.2 GB ``export.xml`` never finished in 20 minutes. COPY
-    # FROM CSV is ~325x faster in the same harness (~100 000 rows/s) and
-    # needs no new runtime dependency.
+    # :func:`bulk_load_via_arrow` (issue #50). The v0.1.3-era CSV path
+    # (issue #41) flushed at ~100k rows/s, bottlenecked by the per-row
+    # csv.writer.writerow call + tempfile write + COPY auto-detect. The
+    # Arrow path builds a columnar buffer once per batch and hands
+    # DuckDB the same shape its internal storage uses, lifting the
+    # measured throughput on the maintainer's real 1.2 GB export above
+    # the ≥ 250 k rows/s target.
 
     def _flush_records(self) -> None:
-        bulk_load_via_csv(self._conn, "records", self._records)
+        bulk_load_via_arrow(self._conn, "records", self._records)
         self._records.clear()
 
     def _flush_record_metadata(self) -> None:
-        bulk_load_via_csv(self._conn, "record_metadata", self._record_metadata)
+        bulk_load_via_arrow(self._conn, "record_metadata", self._record_metadata)
         self._record_metadata.clear()
 
     def _flush_workouts(self) -> None:
-        bulk_load_via_csv(self._conn, "workouts", self._workouts)
+        bulk_load_via_arrow(self._conn, "workouts", self._workouts)
         self._workouts.clear()
 
     def _flush_workout_events(self) -> None:
-        bulk_load_via_csv(self._conn, "workout_events", self._workout_events)
+        bulk_load_via_arrow(self._conn, "workout_events", self._workout_events)
         self._workout_events.clear()
 
     def _flush_workout_stats(self) -> None:
-        bulk_load_via_csv(self._conn, "workout_statistics", self._workout_stats)
+        bulk_load_via_arrow(self._conn, "workout_statistics", self._workout_stats)
         self._workout_stats.clear()
 
     def _flush_workout_metadata(self) -> None:
-        bulk_load_via_csv(self._conn, "workout_metadata", self._workout_metadata)
+        bulk_load_via_arrow(self._conn, "workout_metadata", self._workout_metadata)
         self._workout_metadata.clear()
 
     def _flush_workout_routes(self) -> None:
-        bulk_load_via_csv(self._conn, "workout_routes", self._workout_routes)
+        bulk_load_via_arrow(self._conn, "workout_routes", self._workout_routes)
         self._workout_routes.clear()
 
     def _flush_activities(self) -> None:
-        bulk_load_via_csv(self._conn, "activity_summaries", self._activities)
+        bulk_load_via_arrow(self._conn, "activity_summaries", self._activities)
         self._activities.clear()
 
     def _flush_heart_rate_samples(self) -> None:
-        bulk_load_via_csv(self._conn, "heart_rate_samples", self._heart_rate_samples)
+        bulk_load_via_arrow(self._conn, "heart_rate_samples", self._heart_rate_samples)
         self._heart_rate_samples.clear()
 
     def _flush_correlations(self) -> None:
-        bulk_load_via_csv(self._conn, "correlations", self._correlations)
+        bulk_load_via_arrow(self._conn, "correlations", self._correlations)
         self._correlations.clear()
 
     def _flush_correlation_members(self) -> None:
-        bulk_load_via_csv(self._conn, "correlation_members", self._correlation_members)
+        bulk_load_via_arrow(self._conn, "correlation_members", self._correlation_members)
         self._correlation_members.clear()
 
     def _flush_state_of_mind(self) -> None:
-        bulk_load_via_csv(self._conn, "state_of_mind", self._state_of_mind)
+        bulk_load_via_arrow(self._conn, "state_of_mind", self._state_of_mind)
         self._state_of_mind.clear()
 
     def _flush_all(self) -> None:

@@ -133,3 +133,34 @@ def test_run_server_dispatches_http(
     )
     asyncio.run(run_server(db_path, "http", host="127.0.0.1", port=18080))
     assert calls == ["http"]
+
+
+def test_server_module_does_not_import_pyarrow() -> None:
+    """``serve`` must not pull pyarrow (~30 MB wheel) into its import graph.
+
+    Issue #50 added pyarrow as a runtime dependency for the importer
+    bulk-load path. The serve path has no business touching it -- it
+    only reads from DuckDB. A fresh subprocess imports the server
+    entry point and asserts ``pyarrow`` is not in ``sys.modules``
+    afterwards, guarding the boundary against an accidental import.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, apple_health_mcp.server.server, "
+            "apple_health_mcp.server.tools; "
+            "import apple_health_mcp.server as _s; "
+            "print('pyarrow' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "False", (
+        f"pyarrow should not be imported by server.server (stdout: {proc.stdout!r}, "
+        f"stderr: {proc.stderr!r})"
+    )
