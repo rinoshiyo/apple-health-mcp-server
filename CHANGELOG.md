@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Phase 4 dedup avoids the full-table rewrite (issue #60).** The
+  18 `_DEDUPLICATE_SQL` blocks in `db/schema.py` were rewritten from
+  `CREATE OR REPLACE TABLE foo AS SELECT DISTINCT ON (key) * FROM foo`
+  (which copied every row of every table on every import, even when
+  duplicates were zero) to a targeted
+  `DELETE FROM foo WHERE rowid IN (... ROW_NUMBER() OVER (PARTITION BY
+  key ORDER BY <same tie-breakers>) > 1 ...)` per table. Surviving-row
+  semantics are preserved byte-for-byte (the partition + tie-breaker
+  ordering mirrors each block's legacy `ORDER BY`). On a fresh import
+  with a unique `import_id` the DELETE writes nothing -- only a
+  partition scan -- where the legacy form paid the cost of a full
+  rewrite of every table. The constraint-repair block
+  (`_RESTORE_CONSTRAINTS_SQL`, issue #44) is now gated by
+  `_legacy_schema_needs_constraint_repair` so it only fires as a
+  one-shot migration on a pre-#44 on-disk DB; on a post-#60 DB the
+  ALTERs would otherwise raise `DependencyException` against the
+  indexes the historic `CREATE OR REPLACE TABLE` used to drop.
+
 - **XML parse switches to `lxml.etree.XMLParser(target=...)` SAX target
   (issue #57, middle tier of #55).** The old `iterparse(events=("start",
   "end"))` pass built an `Element` for every one of the ~8 M element

@@ -481,6 +481,34 @@ def test_deduplicate_restores_imports_imported_at_default(
     assert row[0] is not None
 
 
+def test_legacy_schema_needs_constraint_repair_false_on_fresh_schema(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A freshly ``ensure_schema``-ed DB already has the NOT NULL on
+    ``imports.imported_at`` so the gate returns False and the one-shot
+    constraint-repair block stays skipped (DuckDB would raise
+    ``DependencyException`` against the indexes otherwise).
+    """
+    from apple_health_mcp.db.schema import _legacy_schema_needs_constraint_repair
+
+    assert _legacy_schema_needs_constraint_repair(conn) is False
+
+
+def test_legacy_schema_needs_constraint_repair_true_when_imported_at_nullable(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Simulate a pre-#44 finalize by dropping the NOT NULL flag on
+    ``imports.imported_at`` and assert the gate flips to True so the
+    one-shot ``_RESTORE_CONSTRAINTS_SQL`` migration would fire on the
+    next ``deduplicate_tables`` call. PRAGMA ``notnull`` is the proxy
+    column the gate inspects.
+    """
+    from apple_health_mcp.db.schema import _legacy_schema_needs_constraint_repair
+
+    conn.execute("ALTER TABLE imports ALTER COLUMN imported_at DROP NOT NULL")
+    assert _legacy_schema_needs_constraint_repair(conn) is True
+
+
 def test_rebuild_daily_stats(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
