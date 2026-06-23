@@ -1,10 +1,17 @@
 """Streaming importer for Apple Health ``export.xml``.
 
-Mirrors the Rust implementation in ``rust/src/import/xml.rs``: a single
-lxml ``iterparse`` pass with ``elem.clear()`` on every ``end`` event so the
-parser never accumulates the full document tree in memory. The Python
-implementation additionally captures elements the Rust version dropped on
-the floor (per ``project_data_audit_2026_06_21``):
+Parses with ``lxml.etree.XMLParser(target=...)`` -- the SAX-style target
+API hands the importer ``start(tag, attrib)`` / ``end(tag)`` callbacks
+directly and never materialises any ``Element`` objects (no
+intermediate tree, no per-element ``elem.clear()``, no prev-sibling
+drop loop, no ``elem.attrib`` snapshot crossing the lxml C boundary).
+A previous ``iterparse(events=("start","end"))`` pass paid those costs
+on every one of the ~8 M element events a 1.2 GB export generates;
+``parser_bench.py`` measured the SAX target at ~1.57x of iterparse on
+that workload (issue #57).
+
+The Python implementation additionally captures elements the Rust
+version dropped on the floor (per ``project_data_audit_2026_06_21``):
 
 * ``HealthData[@locale]`` -> ``export_metadata.locale``
 * ``ExportDate[@value]`` -> ``export_metadata.export_date``
@@ -79,6 +86,11 @@ _BATCH_SIZE_HOT = 250_000
 # Match the Rust safeguard: bail out if the parser hits this many
 # consecutive errors so a corrupt-stream loop cannot spin forever.
 _MAX_CONSECUTIVE_PARSE_ERRORS = 100
+
+# SAX target chunk size. 1 MB strikes the balance between syscall cost
+# (smaller chunks → more reads, more time.monotonic calls) and parser
+# pause latency (larger chunks → fewer chances to emit progress).
+_READ_CHUNK_BYTES = 1 << 20
 
 # Default cadence and bounds for the Phase-1 progress emitter (issue #51).
 # Overridable per-run via ``APPLE_HEALTH_IMPORT_PROGRESS_SECS``; values
@@ -250,10 +262,13 @@ class _XmlImporter:
     # -- public entry --------------------------------------------------------
 
     def run(self, xml_path: Path) -> ImportStats:
-        # Open the file ourselves (rather than letting lxml open by path)
-        # so the progress emitter can ask ``.tell()`` for the byte
-        # position. ``rb`` matches the XML transport (lxml parses bytes,
-        # not decoded text); ``huge_tree=True`` matches the original call.
+        # Open the file ourselves so the progress emitter can ask
+        # ``.tell()`` for the byte position; ``rb`` matches the XML
+        # transport (lxml parses bytes, not decoded text). The SAX
+        # target reads the file in 1 MB chunks so progress lands on
+        # chunk boundaries -- roughly every 1 MB rather than every
+        # element event, which kept ``time.monotonic`` out of the
+        # ~8 M-call hot path.
         try:
             fp = xml_path.open("rb")
         except OSError as exc:
@@ -265,57 +280,35 @@ class _XmlImporter:
             fp.close()
             raise HealthImportError(f"failed to open export.xml at {xml_path}: {exc}") from exc
 
+        interval = _resolve_progress_interval()
+        emit_progress = total_bytes >= _PROGRESS_MIN_BYTES
+        start_ts = time.monotonic()
+        last_log = start_ts
+
+        target = _SaxTarget(self)
+        # ``target=`` widens to ``ParserTarget | None`` whose protocol
+        # signatures are ``str | bytes`` for tag / attrib / data; our
+        # adapter handles ``str`` only (Apple Health has no namespaces)
+        # so the protocol mismatch is benign in practice.
+        parser = etree.XMLParser(target=target, recover=True, huge_tree=True)  # type: ignore[arg-type]
         try:
-            context = etree.iterparse(
-                fp,
-                events=("start", "end"),
-                recover=True,
-                huge_tree=True,
-            )
-
-            interval = _resolve_progress_interval()
-            emit_progress = total_bytes >= _PROGRESS_MIN_BYTES
-            start_ts = time.monotonic()
-            last_log = start_ts
-
-            consecutive_errors = 0
             try:
-                for event, elem in context:
-                    handler_failed = False
-                    try:
-                        if event == "start":
-                            self._on_start(elem)
-                        else:
-                            self._on_end(elem)
-                    except Exception as exc:
-                        handler_failed = True
-                        consecutive_errors += 1
-                        _logger.warning(
-                            "XML element handler error (%d/%d): %s",
-                            consecutive_errors,
-                            _MAX_CONSECUTIVE_PARSE_ERRORS,
-                            exc,
-                        )
-                        if consecutive_errors > _MAX_CONSECUTIVE_PARSE_ERRORS:
-                            raise HealthImportError(
-                                f"aborting XML import after {consecutive_errors} consecutive errors"
-                            ) from exc
-                    # Reset the counter on any successful event (start OR
-                    # end). The Rust reference resets after every
-                    # successful event for the same reason: with iterparse
-                    # firing roughly equal numbers of start and end events,
-                    # gating the reset on `start` only would halve the
-                    # effective budget and cause sparse-but-non-consecutive
-                    # failures to trip the abort.
-                    if not handler_failed:
-                        consecutive_errors = 0
+                while chunk := fp.read(_READ_CHUNK_BYTES):
+                    parser.feed(chunk)
                     if emit_progress:
                         now = time.monotonic()
                         if now - last_log >= interval:
                             self._emit_progress(fp, total_bytes, start_ts, now)
                             last_log = now
+                parser.close()
             except etree.XMLSyntaxError as exc:
                 raise HealthImportError(f"unrecoverable XML syntax error: {exc}") from exc
+            except HealthImportError:
+                # The consecutive-error budget translation already wrapped
+                # the underlying exception; let it propagate untouched so
+                # the caller sees the original "aborting XML import after
+                # N consecutive errors" message.
+                raise
         finally:
             fp.close()
 
@@ -382,41 +375,47 @@ class _XmlImporter:
         )
 
     # -- event dispatch ------------------------------------------------------
+    #
+    # ``_on_start_sax`` and ``_on_end_sax`` are the dispatchers the SAX
+    # target adapter calls. The SAX target API passes ``tag`` and the
+    # attribute mapping directly, so no ``elem.attrib`` snapshot crosses
+    # the lxml C boundary and no ``Element`` object is built. End-event
+    # cleanup that the old iterparse path needed (``elem.clear()`` +
+    # prev-sibling drop) is gone because the SAX target never builds a
+    # tree to clear.
 
-    def _on_start(self, elem: etree._Element) -> None:
-        tag = elem.tag
-        if tag == "HealthData":
-            self._handle_health_data(elem)
-        elif tag == "ExportDate":
-            self._handle_export_date(elem)
-        elif tag == "Me":
-            self._handle_me(elem)
-        elif tag == "Record":
+    def _on_start_sax(self, tag: str, attr: dict[str, str]) -> None:
+        if tag == "Record":
             if self._in_correlation:
-                self._handle_correlation_record(elem)
+                self._handle_correlation_record(attr)
             else:
-                self._handle_record(elem)
+                self._handle_record(attr)
         elif tag == "MetadataEntry":
-            self._handle_metadata_entry(elem)
+            self._handle_metadata_entry(attr)
         elif tag == "Workout":
-            self._handle_workout_start(elem)
+            self._handle_workout_start(attr)
         elif tag == "WorkoutEvent" and self._in_workout:
-            self._handle_workout_event(elem)
+            self._handle_workout_event(attr)
         elif tag == "WorkoutStatistics" and self._in_workout:
-            self._handle_workout_stat(elem)
+            self._handle_workout_stat(attr)
         elif tag == "WorkoutRoute" and self._in_workout:
-            self._handle_workout_route_start(elem)
+            self._handle_workout_route_start(attr)
         elif tag == "FileReference" and self._in_workout_route:
-            self._handle_file_reference(elem)
+            self._handle_file_reference(attr)
         elif tag == "InstantaneousBeatsPerMinute":
-            self._handle_instantaneous_bpm(elem)
+            self._handle_instantaneous_bpm(attr)
         elif tag == "ActivitySummary":
-            self._handle_activity_summary(elem)
+            self._handle_activity_summary(attr)
         elif tag == "Correlation":
-            self._handle_correlation_start(elem)
+            self._handle_correlation_start(attr)
+        elif tag == "HealthData":
+            self._handle_health_data(attr)
+        elif tag == "ExportDate":
+            self._handle_export_date(attr)
+        elif tag == "Me":
+            self._handle_me(attr)
 
-    def _on_end(self, elem: etree._Element) -> None:
-        tag = elem.tag
+    def _on_end_sax(self, tag: str) -> None:
         if tag == "Record":
             self._finalize_state_of_mind()
             self._in_record = False
@@ -428,37 +427,22 @@ class _XmlImporter:
         elif tag == "Correlation":
             self._in_correlation = False
             self._current_correlation_hash = None
-        # Free memory: clear the element after every end event, then drop
-        # any preceding siblings still attached to the parent. Without the
-        # sibling drop the root element accumulates one (empty) child per
-        # processed top-level node and the document-end memory cost is
-        # O(number-of-records) instead of O(1). HealthData is the only
-        # context where this matters in practice (millions of <Record>
-        # children); inside small subtrees the prev-sibling loop is a no-op.
-        elem.clear()
-        prev = elem.getprevious()
-        while prev is not None:
-            parent = prev.getparent()
-            if parent is None:  # pragma: no cover - prev was returned from a sibling lookup
-                break
-            parent.remove(prev)
-            prev = elem.getprevious()
 
     # -- handlers ------------------------------------------------------------
 
-    def _handle_health_data(self, elem: etree._Element) -> None:
+    def _handle_health_data(self, attr: dict[str, str]) -> None:
         # HealthData fires exactly once at the document root; insert
         # whatever locale is present (the column is nullable so a missing
         # attribute still records the row).
-        locale = elem.get("locale")
+        locale = attr.get("locale")
         self._conn.execute(
             "INSERT INTO export_metadata (import_id, export_date, locale) VALUES (?, NULL, ?)",
             [self._import_id, locale],
         )
         self._stats.export_metadata_rows += 1
 
-    def _handle_export_date(self, elem: etree._Element) -> None:
-        value = _clean_date_opt(elem.get("value"))
+    def _handle_export_date(self, attr: dict[str, str]) -> None:
+        value = _clean_date_opt(attr.get("value"))
         # ExportDate normally appears AFTER HealthData (which inserted the
         # row), so a plain UPDATE works. But if HealthData failed (caught by
         # the per-event consecutive-error budget) or is missing in a
@@ -486,7 +470,7 @@ class _XmlImporter:
                 [value, self._import_id],
             )
 
-    def _handle_me(self, elem: etree._Element) -> None:
+    def _handle_me(self, attr: dict[str, str]) -> None:
         self._conn.execute(
             """
             INSERT INTO me_attributes (
@@ -496,20 +480,20 @@ class _XmlImporter:
             """,
             [
                 self._import_id,
-                elem.get("HKCharacteristicTypeIdentifierDateOfBirth"),
-                elem.get("HKCharacteristicTypeIdentifierBiologicalSex"),
-                elem.get("HKCharacteristicTypeIdentifierBloodType"),
-                elem.get("HKCharacteristicTypeIdentifierFitzpatrickSkinType"),
-                elem.get("HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse"),
+                attr.get("HKCharacteristicTypeIdentifierDateOfBirth"),
+                attr.get("HKCharacteristicTypeIdentifierBiologicalSex"),
+                attr.get("HKCharacteristicTypeIdentifierBloodType"),
+                attr.get("HKCharacteristicTypeIdentifierFitzpatrickSkinType"),
+                attr.get("HKCharacteristicTypeIdentifierCardioFitnessMedicationsUse"),
             ],
         )
         self._stats.me_rows += 1
 
-    def _handle_record(self, elem: etree._Element) -> None:
-        # Snapshot the attribute mapping once per element so the per-key
-        # lookups below stay on the Python dict side instead of crossing
-        # back into the lxml C boundary 8-15 times per record (issue #56).
-        attr = elem.attrib
+    def _handle_record(self, attr: dict[str, str]) -> None:
+        # The SAX target hands us the attribute dict directly -- no
+        # ``elem.attrib`` snapshot needed; the lxml C boundary is no
+        # longer crossed on per-key reads (issue #57 collapses what
+        # was the issue #56 attrib snapshot helper).
         record_type = attr.get("type", "")
         source_name = attr.get("sourceName", "")
         start_date = _clean_date(attr.get("startDate", ""))
@@ -569,7 +553,7 @@ class _XmlImporter:
         if len(self._records) >= _BATCH_SIZE_HOT:
             self._flush_records()
 
-    def _handle_correlation_record(self, elem: etree._Element) -> None:
+    def _handle_correlation_record(self, attr: dict[str, str]) -> None:
         # The child's own row is taken care of by the top-level pass (Apple
         # Health duplicates correlation members at the top level by spec);
         # we only record the linkage here. The hash must mirror the
@@ -578,7 +562,6 @@ class _XmlImporter:
         # with :meth:`_handle_record`.
         if self._current_correlation_hash is None:  # pragma: no cover - defensive
             return
-        attr = elem.attrib
         record_type = attr.get("type", "")
         source_name = attr.get("sourceName", "")
         start_date = _clean_date(attr.get("startDate", ""))
@@ -595,8 +578,7 @@ class _XmlImporter:
         if len(self._correlation_members) >= _BATCH_SIZE:
             self._flush_correlation_members()
 
-    def _handle_metadata_entry(self, elem: etree._Element) -> None:
-        attr = elem.attrib
+    def _handle_metadata_entry(self, attr: dict[str, str]) -> None:
         key = attr.get("key", "")
         value = attr.get("value", "")
         # Inner-most context wins: a <Record> nested inside a <Workout>
@@ -619,9 +601,8 @@ class _XmlImporter:
                     (self._current_workout_hash, key, value, self._import_id)
                 )
 
-    def _handle_workout_start(self, elem: etree._Element) -> None:
+    def _handle_workout_start(self, attr: dict[str, str]) -> None:
         self._in_workout = True
-        attr = elem.attrib
         activity_type = attr.get("workoutActivityType", "")
         source_name = attr.get("sourceName", "")
         start_date = _clean_date(attr.get("startDate", ""))
@@ -656,10 +637,9 @@ class _XmlImporter:
         self._current_workout_route = None
         self._in_workout_route = False
 
-    def _handle_workout_event(self, elem: etree._Element) -> None:
+    def _handle_workout_event(self, attr: dict[str, str]) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
-        attr = elem.attrib
         self._current_workout_events.append(
             (
                 self._current_workout_hash,
@@ -670,10 +650,9 @@ class _XmlImporter:
             )
         )
 
-    def _handle_workout_stat(self, elem: etree._Element) -> None:
+    def _handle_workout_stat(self, attr: dict[str, str]) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
-        attr = elem.attrib
         self._current_workout_stats.append(
             (
                 self._current_workout_hash,
@@ -688,11 +667,10 @@ class _XmlImporter:
             )
         )
 
-    def _handle_workout_route_start(self, elem: etree._Element) -> None:
+    def _handle_workout_route_start(self, attr: dict[str, str]) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
             return
         self._in_workout_route = True
-        attr = elem.attrib
         self._current_workout_route = {
             "workout_hash": self._current_workout_hash,
             "file_path": "",
@@ -708,20 +686,19 @@ class _XmlImporter:
             "import_id": self._import_id,
         }
 
-    def _handle_file_reference(self, elem: etree._Element) -> None:
+    def _handle_file_reference(self, attr: dict[str, str]) -> None:
         if self._current_workout_route is None:  # pragma: no cover - defensive
             return
-        path = elem.get("path")
+        path = attr.get("path")
         if path is not None:
             self._current_workout_route["file_path"] = path
 
-    def _handle_instantaneous_bpm(self, elem: etree._Element) -> None:
+    def _handle_instantaneous_bpm(self, attr: dict[str, str]) -> None:
         # Emitted as a child of either an HR record or an HRV record wrapped
         # in HeartRateVariabilityMetadataList. Both flatten into
         # heart_rate_samples keyed by the parent record's hash.
         if self._current_record_hash is None:
             return
-        attr = elem.attrib
         bpm = _parse_opt_float(attr.get("bpm"))
         sample_time = attr.get("time")
         self._heart_rate_samples.append(
@@ -738,8 +715,7 @@ class _XmlImporter:
         if len(self._heart_rate_samples) >= _BATCH_SIZE_HOT:
             self._flush_heart_rate_samples()
 
-    def _handle_activity_summary(self, elem: etree._Element) -> None:
-        attr = elem.attrib
+    def _handle_activity_summary(self, attr: dict[str, str]) -> None:
         self._activities.append(
             (
                 attr.get("dateComponents", ""),
@@ -759,10 +735,9 @@ class _XmlImporter:
         if len(self._activities) >= _BATCH_SIZE:
             self._flush_activities()
 
-    def _handle_correlation_start(self, elem: etree._Element) -> None:
+    def _handle_correlation_start(self, attr: dict[str, str]) -> None:
         self._in_correlation = True
         self._stats.correlations += 1
-        attr = elem.attrib
         correlation_type = attr.get("type", "")
         source_name = attr.get("sourceName", "")
         start_date = _clean_date(attr.get("startDate", ""))
@@ -994,12 +969,89 @@ class _XmlImporter:
         self._flush_state_of_mind()
 
 
+class _SaxTarget:
+    """``etree.XMLParser`` target adapter that dispatches into a ``_XmlImporter``.
+
+    lxml's SAX target protocol calls ``start(tag, attrib)`` /
+    ``end(tag)`` / ``data(...)`` / ``close()`` for every parse event
+    and never builds an ``Element`` -- which is the whole point of
+    issue #57. The adapter forwards start / end into the importer's
+    SAX dispatchers and wraps every handler call in the same
+    consecutive-error budget the legacy iterparse loop enforced.
+
+    The ``data()`` and ``close()`` hooks are kept as required by the
+    target protocol; Apple Health's tracked elements carry their data
+    in attributes, not text children, so ``data()`` is a no-op.
+    """
+
+    __slots__ = ("_consecutive_errors", "_importer")
+
+    def __init__(self, importer: _XmlImporter) -> None:
+        self._importer = importer
+        self._consecutive_errors = 0
+
+    # lxml's ``ParserTarget`` protocol widens ``tag`` / ``attrib`` /
+    # ``data`` / ``comment`` to ``str | bytes`` to cover namespaced
+    # parsers; for non-namespaced input (Apple Health emits no
+    # namespaces) the parser hands us ``str`` and we treat it as such
+    # throughout. The protocol mismatch is suppressed at the
+    # ``XMLParser(target=...)`` call site so the dispatcher signatures
+    # stay readable.
+
+    def start(self, tag: str, attrib: dict[str, str]) -> None:
+        try:
+            self._importer._on_start_sax(tag, attrib)
+        except Exception as exc:
+            self._note_error(exc)
+            return
+        self._consecutive_errors = 0
+
+    def end(self, tag: str) -> None:
+        try:
+            self._importer._on_end_sax(tag)
+        except Exception as exc:
+            self._note_error(exc)
+            return
+        self._consecutive_errors = 0
+
+    def data(self, _data: str) -> None:
+        # Apple Health's tracked elements carry payload in attributes;
+        # element text content is ignored.
+        return None
+
+    def comment(self, _text: str) -> None:
+        # Comments are ignored; required by the ParserTarget protocol.
+        return None
+
+    def close(self) -> None:
+        # ``parser.close()`` propagates the return value back to the
+        # caller; the importer's stats are owned by ``_XmlImporter`` so
+        # we have nothing meaningful to return here.
+        return None
+
+    def _note_error(self, exc: BaseException) -> None:
+        self._consecutive_errors += 1
+        _logger.warning(
+            "XML element handler error (%d/%d): %s",
+            self._consecutive_errors,
+            _MAX_CONSECUTIVE_PARSE_ERRORS,
+            exc,
+        )
+        if self._consecutive_errors > _MAX_CONSECUTIVE_PARSE_ERRORS:
+            raise HealthImportError(
+                f"aborting XML import after {self._consecutive_errors} consecutive errors"
+            ) from exc
+
+
 def import_xml(conn: duckdb.DuckDBPyConnection, xml_path: Path, import_id: str) -> ImportStats:
     """Parse Apple Health ``export.xml`` and bulk-load it into ``conn``.
 
-    Streams through the file with ``lxml.iterparse`` so memory stays bounded
-    even on multi-gigabyte exports. Returns an :class:`ImportStats` with row
-    counts plus the route / offset lookup maps the GPX importer needs.
+    Streams through the file with ``lxml.etree.XMLParser(target=...)`` so
+    memory stays bounded even on multi-gigabyte exports -- the SAX target
+    receives ``start(tag, attrib)`` / ``end(tag)`` callbacks and never
+    materialises an ``Element``, so the parser never accumulates the
+    document tree. Returns an :class:`ImportStats` with row counts plus
+    the route / offset lookup maps the GPX importer needs.
     """
     importer = _XmlImporter(conn, import_id)
     return importer.run(xml_path)

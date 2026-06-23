@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **XML parse switches to `lxml.etree.XMLParser(target=...)` SAX target
+  (issue #57, middle tier of #55).** The old `iterparse(events=("start",
+  "end"))` pass built an `Element` for every one of the ~8 M element
+  events a 1.2 GB export generates, then immediately tore it down with
+  `elem.clear()` + a prev-sibling drop loop. The SAX target hands the
+  importer `start(tag, attrib)` / `end(tag)` callbacks directly and
+  never materialises any `Element` -- no tree, no clear, no sibling
+  drop, no `elem.attrib` snapshot crossing the lxml C boundary.
+  `parser_bench.py` measured the SAX target at ~1.57x of iterparse on
+  the maintainer's real export. The Phase-1 progress emitter moved
+  from per-event cadence to per-chunk cadence (1 MB chunks); the
+  consecutive-error budget that the iterparse loop enforced is now
+  enforced inside the SAX target adapter (`_SaxTarget._note_error`).
+
 - **Faster XML import on real exports (issue #56, minimal tier of #55).**
   Four mechanical wins on the XML hot path with no architectural
   rewrite and no new runtime dependency:
