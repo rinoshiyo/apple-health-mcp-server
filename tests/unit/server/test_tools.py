@@ -531,6 +531,80 @@ def test_get_import_history_returns_empty_list_on_empty_db(
     assert rows == []
 
 
+# --- Issue #49: date-only end_date inclusive ---------------------------------
+#
+# DuckDB casts a bare ``YYYY-MM-DD`` to ``TIMESTAMPTZ`` at start-of-day, so
+# ``end_date <= ?`` historically dropped every record that happened later
+# than midnight on the named day. The 5 tools below now route the upper
+# bound through :func:`apple_health_mcp.server.query.normalise_end_date`
+# which expands a date-only value to end-of-day; the parametrised test
+# guards the named-day inclusion across all 5 tools.
+
+
+def test_query_records_end_date_date_only_includes_named_day(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(query_records, seeded_conn)
+    # 2024-01-01 holds 2 HR rows at 08:00 / 09:00. Without the fix,
+    # ``end_date='2024-01-01'`` cast to 00:00:00 and dropped both.
+    rows = _call(
+        fn,
+        record_type="HKQuantityTypeIdentifierHeartRate",
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+    )
+    assert len(rows) == 2
+
+
+def test_query_records_end_date_full_timestamp_unchanged(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A full ISO 8601 timestamp respects the caller's precision."""
+    fn = _bind(query_records, seeded_conn)
+    rows = _call(
+        fn,
+        record_type="HKQuantityTypeIdentifierHeartRate",
+        start_date="2024-01-01",
+        # 08:30 sits between the two HR rows (08:00 and 09:00) so a
+        # date-only expansion would have grabbed both; the explicit
+        # time bound must keep only the earlier one.
+        end_date="2024-01-01T08:30:00+00:00",
+    )
+    assert len(rows) == 1
+
+
+def test_list_workouts_end_date_date_only_includes_named_day(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(list_workouts, seeded_conn)
+    rows = _call(fn, start_date="2024-01-01", end_date="2024-01-01")
+    assert len(rows) == 1
+
+
+def test_list_ecg_readings_end_date_date_only_includes_named_day(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(list_ecg_readings, seeded_conn)
+    rows = _call(fn, start_date="2024-01-01", end_date="2024-01-01")
+    assert len(rows) == 1
+
+
+def test_list_state_of_mind_end_date_date_only_includes_named_day(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(list_state_of_mind, seeded_conn)
+    rows = _call(fn, start_date="2024-01-03", end_date="2024-01-03")
+    assert len(rows) == 1
+
+
+def test_list_correlations_end_date_date_only_includes_named_day(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    fn = _bind(list_correlations, seeded_conn)
+    rows = _call(fn, start_date="2024-01-02", end_date="2024-01-02")
+    assert len(rows) == 1
+
+
 def test_run_custom_query_runs_on_empty_db(empty_conn: duckdb.DuckDBPyConnection) -> None:
     """``run_custom_query`` opts out so LLMs can introspect the empty scaffold.
 

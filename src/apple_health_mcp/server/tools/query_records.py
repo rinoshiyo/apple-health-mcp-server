@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import run_query
+from apple_health_mcp.server.query import normalise_end_date, run_query
 
 if TYPE_CHECKING:
     import duckdb
@@ -67,7 +67,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             params.append(start_date)
         if end_date is not None:
             sql_parts.append("AND end_date <= ?")
-            params.append(end_date)
+            params.append(normalise_end_date(end_date))
         if source_name is not None:
             sql_parts.append("AND source_name = ?")
             params.append(source_name)

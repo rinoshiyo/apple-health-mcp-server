@@ -252,6 +252,40 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         assert payload["biological_sex"] == "HKBiologicalSexNotSet"
 
 
+# --- date-only end_date inclusive smoke (issue #49) --------------------------
+
+
+def test_query_records_date_only_end_date_includes_named_day(
+    imported_db: ImportedFixture,
+) -> None:
+    """A date-only ``end_date`` on ``query_records`` returns rows from that day.
+
+    Before #49, DuckDB cast a bare ``YYYY-MM-DD`` to ``TIMESTAMPTZ`` at
+    00:00:00, so ``end_date <= 'YYYY-MM-DD'`` silently dropped every
+    record on the named day. This smoke confirms the fix end-to-end:
+    the fixture's HR samples land on a specific day, and asking
+    ``end_date=<that day>`` must return them rather than zero rows.
+    """
+    with _open_db(imported_db.db_path) as conn:
+        # Discover the day the fixture's HR samples land on so the
+        # assertion does not depend on the fixture's calendar choices.
+        hr_day = _scalar(
+            conn,
+            "SELECT strftime(start_date, '%Y-%m-%d') FROM records "
+            "WHERE record_type = 'HKQuantityTypeIdentifierHeartRate' "
+            "ORDER BY start_date LIMIT 1",
+        )
+        rows = call_tool(
+            bind_tool(query_records, conn),
+            record_type="HKQuantityTypeIdentifierHeartRate",
+            start_date=hr_day,
+            end_date=hr_day,
+        )
+        # Without the fix this would be zero; the fixture seeds 2 HR
+        # samples on the same day, so both must survive the upper bound.
+        assert len(rows) >= 1
+
+
 # --- fresh-install gate (issue #38) ------------------------------------------
 
 

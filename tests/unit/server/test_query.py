@@ -15,6 +15,7 @@ from apple_health_mcp.server.query import (
     IMPORT_REQUIRED_MESSAGE,
     _coerce,
     imports_present,
+    normalise_end_date,
     query_to_json,
     require_imports_or_message,
     run_query,
@@ -153,6 +154,34 @@ def test_query_to_json_int_types(v: int) -> None:
     conn = duckdb.connect(":memory:")
     rows = query_to_json(conn, f"SELECT CAST({v} AS BIGINT) AS x")
     assert rows == [{"x": v}]
+
+
+def test_normalise_end_date_expands_date_only() -> None:
+    """A bare ``YYYY-MM-DD`` becomes end-of-day microsecond precision."""
+    assert normalise_end_date("2026-06-22") == "2026-06-22 23:59:59.999999"
+
+
+def test_normalise_end_date_passes_iso_timestamp_through() -> None:
+    """ISO 8601 timestamps with a time component are untouched."""
+    full = "2026-06-22T10:00:00+09:00"
+    assert normalise_end_date(full) == full
+
+
+def test_normalise_end_date_passes_other_lengths_through() -> None:
+    """Strings the heuristic cannot recognise round-trip unchanged.
+
+    DuckDB will reject them at bind time with its own diagnostic; we
+    intentionally do not pre-validate so the surface error stays the
+    same as without the helper.
+    """
+    assert normalise_end_date("not-a-date") == "not-a-date"
+
+
+def test_normalise_end_date_requires_dashes_at_positions_4_and_7() -> None:
+    """A 10-char string without the date shape stays unchanged."""
+    # Same length as YYYY-MM-DD but the separators are colons -- not a
+    # date, so the helper does not expand it.
+    assert normalise_end_date("12:34:56XY") == "12:34:56XY"
 
 
 def test_imports_present_returns_false_when_imports_table_missing() -> None:
