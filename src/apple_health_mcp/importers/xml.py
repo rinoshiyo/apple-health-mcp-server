@@ -1046,9 +1046,12 @@ class _SaxTarget:
 def import_xml(conn: duckdb.DuckDBPyConnection, xml_path: Path, import_id: str) -> ImportStats:
     """Parse Apple Health ``export.xml`` and bulk-load it into ``conn``.
 
-    Streams through the file with ``lxml.iterparse`` so memory stays bounded
-    even on multi-gigabyte exports. Returns an :class:`ImportStats` with row
-    counts plus the route / offset lookup maps the GPX importer needs.
+    Streams through the file with ``lxml.etree.XMLParser(target=...)`` so
+    memory stays bounded even on multi-gigabyte exports -- the SAX target
+    receives ``start(tag, attrib)`` / ``end(tag)`` callbacks and never
+    materialises an ``Element``, so the parser never accumulates the
+    document tree. Returns an :class:`ImportStats` with row counts plus
+    the route / offset lookup maps the GPX importer needs.
     """
     importer = _XmlImporter(conn, import_id)
     return importer.run(xml_path)
