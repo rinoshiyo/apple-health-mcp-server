@@ -77,10 +77,12 @@ def import_cmd(
         False,
         "--force",
         help=(
-            "Bypass the export.xml sha256 fast path and the incremental "
-            "hash-set skip; re-parse and re-insert every row, then run the "
-            "legacy Phase 4 dedup pass to collapse duplicates. Use when you "
-            "suspect on-disk drift that the incremental path would miss."
+            "Bypass the export.xml sha256 fast path so the importer still "
+            "runs even when the file is byte-identical to the last import. "
+            "The incremental hash-set skip (Tier 2) remains active, so the "
+            "re-import stays cheap and the DB does not balloon with "
+            "tombstones. Use when you need to re-verify the importer "
+            "against an unchanged export."
         ),
     ),
 ) -> None:

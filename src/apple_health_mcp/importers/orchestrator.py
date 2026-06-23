@@ -73,21 +73,24 @@ def run_import(
       ``export.xml`` once and compares it against the most recent
       ``imports.export_xml_sha256`` row. A byte-identical export exits
       in roughly one disk-read of wall-clock without parsing the file.
-      ``force=True`` bypasses the check.
+      ``force=True`` bypasses ONLY this check -- the Tier 2 snapshot
+      still loads and the handlers still skip on-disk hashes.
     * **Tier 2 incremental hash sets.** When the destination DB already
-      holds prior import data (and ``force`` is False), every dedup hash
-      currently on disk is snapshotted into Python sets and threaded
-      into the XML / GPX / ECG handlers. Each handler checks the
-      freshly-computed hash before staging the row, so a re-import
-      contributes only genuinely-new rows. Phase 4 dedup auto-skips
-      because the bulk staging buffers carry no duplicates -- this
-      avoids the DuckDB MVCC tombstones that would otherwise balloon
-      the on-disk file on every re-import.
+      holds prior import data, every dedup hash currently on disk is
+      snapshotted into Python sets and threaded into the XML / GPX /
+      ECG handlers. Each handler checks the freshly-computed hash
+      before staging the row, so a re-import contributes only
+      genuinely-new rows. Phase 4 dedup auto-skips because the bulk
+      staging buffers carry no duplicates -- this avoids the DuckDB
+      MVCC tombstones that would otherwise balloon the on-disk file
+      on every re-import.
 
-    ``force=True`` falls back to the legacy full-insert + Phase 4 dedup
-    path (the same code v0.1.5 took unconditionally) so a user who
-    suspects on-disk drift can re-import from scratch over the existing
-    DB without first deleting it.
+    ``force=True`` is the right call when the on-disk export.xml is
+    byte-identical to a prior import BUT the user wants to re-run the
+    import (e.g. after deleting some rows from the DB by hand, or to
+    verify the importer still produces the same row counts). The hash
+    skip in Tier 2 still keeps the re-import cheap; only the sha256
+    bail-out is bypassed.
     """
     start = time.monotonic()
     actual_import_id = import_id or make_import_id()
@@ -118,12 +121,15 @@ def run_import(
             return ImportStats()
 
         # Tier 2: load every dedup-keyed hash currently on disk into Python
-        # sets if the DB already holds prior import data AND --force is not
-        # set. A fresh-install / empty DB skips this and runs the legacy
-        # full-insert + Phase 4 dedup path; ``--force`` does the same so a
-        # user can re-run the dedup pass over an existing DB.
+        # sets if the DB already holds prior import data. ``--force`` only
+        # bypasses the Tier 1 sha256 fast path -- it does NOT disable the
+        # incremental hash sets, because there is no useful interpretation
+        # of "re-import this data, but pay the on-disk tombstone cost of
+        # full Phase 4 dedup". The fresh-install / empty DB case still
+        # falls through to the legacy full-insert + Phase 4 dedup path
+        # (existing stays ``None`` because the imports table is empty).
         existing: ExistingHashes | None = None
-        if not force and _has_prior_imports(conn):
+        if _has_prior_imports(conn):
             existing = load_existing_hashes(conn)
 
         # DuckDB defaults to preserving insertion order during checkpoint,
