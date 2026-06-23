@@ -146,6 +146,14 @@ uvx apple-health-mcp-server import /path/to/apple_health_export
 インポートは冪等です。新しいエクスポートで再実行すると、`import_id`
 列により既存データベースに追記される形で統合されます。
 
+Phase 1（XML パース）では 10 秒ごとに進捗ログを 1 行
+出力します（`INFO progress: xml NN% (X / Y MB, ~Z min remaining)`）。
+ストリーミングで監視している AI エージェントや人間が、数分におよぶ
+パース中も処理が進んでいることを確認できます。間隔は環境変数
+`APPLE_HEALTH_IMPORT_PROGRESS_SECS`（正の整数、1..600 にクランプ）で
+変更でき、静かに走らせたいときは `60`、デバッグ時は `1` などに設定し
+ます。1 MB 未満のエクスポートでは進捗行を出力しません。
+
 ### データベースの場所
 
 既定では XDG 準拠のデータディレクトリに格納されます。

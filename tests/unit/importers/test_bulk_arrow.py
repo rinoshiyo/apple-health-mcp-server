@@ -199,6 +199,25 @@ def test_bulk_load_rejects_arity_mismatch(
         )
 
 
+def test_bulk_load_rejects_ragged_rows(
+    conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Mid-batch arity mismatch surfaces with the table name, not IndexError.
+
+    The zip(*rows, strict=True) transpose validates every row's arity
+    in the same pass; a ragged buffer whose first row matches the schema
+    but a later row is short would otherwise fall through into an opaque
+    iterator-length error mid-transpose.
+    """
+    # Row 0 matches the 4-column schema; row 1 is short by one column.
+    rows: list[tuple[object, ...]] = [
+        ("k1", "v1", 1.0, "2024-01-01 10:00:00+0900"),
+        ("k2", "v2", 2.0),
+    ]
+    with pytest.raises(HealthImportError, match="row arity"):
+        bulk_load_via_arrow(conn, "t", rows)
+
+
 def test_bulk_load_unregisters_after_failure(
     conn: duckdb.DuckDBPyConnection,
 ) -> None:
