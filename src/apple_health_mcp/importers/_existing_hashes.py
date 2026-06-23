@@ -93,11 +93,21 @@ def load_existing_hashes(conn: duckdb.DuckDBPyConnection) -> ExistingHashes:
             "SELECT DISTINCT correlation_hash FROM correlations WHERE correlation_hash IS NOT NULL"
         ).fetchall()
     }
+    # Empty ``date_components`` strings are filtered out as well as NULLs
+    # because :meth:`_handle_activity_summary` defaults a missing
+    # ``dateComponents`` attribute to ``""``. A stale on-disk row with
+    # ``date_components = ''`` from a pre-#62 malformed import would
+    # otherwise populate the set with ``""`` and the next import would
+    # silently skip every ActivitySummary whose ``dateComponents``
+    # attribute Apple happens to drop (an edge seen on iCloud-restored
+    # devices). Hash columns can't be empty -- ``compute_hash`` always
+    # returns 64-char hex -- so the analogous defense isn't needed for
+    # the other five sets.
     hashes.activity_summaries = {
         row[0]
         for row in conn.execute(
             "SELECT DISTINCT date_components FROM activity_summaries "
-            "WHERE date_components IS NOT NULL"
+            "WHERE date_components IS NOT NULL AND date_components != ''"
         ).fetchall()
     }
     _logger.info(

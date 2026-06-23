@@ -26,18 +26,18 @@ from apple_health_mcp.importers._existing_hashes import (
 from apple_health_mcp.importers.dedup import finalize_import
 from apple_health_mcp.importers.ecg import import_ecg_files
 from apple_health_mcp.importers.gpx import import_gpx_files
-from apple_health_mcp.importers.xml import ImportStats, import_xml
+from apple_health_mcp.importers.xml import _READ_CHUNK_BYTES, ImportStats, import_xml
 
 if TYPE_CHECKING:
     import duckdb
 
 _logger = logging.getLogger(__name__)
 
-# Chunk size for the sha256 streaming hash (issue #62 Tier 1). 1 MB
-# is the same value the XML SAX target reads in, so the OS page
-# cache stays warm if the importer goes on to parse the file
-# immediately after hashing it.
-_SHA256_READ_CHUNK_BYTES = 1 << 20
+# Re-use the XML SAX target's 1 MB read chunk size for the sha256
+# streaming hash (issue #62 Tier 1). Sharing the constant keeps the
+# 'sha256 read keeps the OS page cache warm for the immediately-
+# following XML parse' invariant alive across future tuning changes.
+_SHA256_READ_CHUNK_BYTES = _READ_CHUNK_BYTES
 
 
 def make_import_id(now: datetime | None = None) -> str:
@@ -182,14 +182,23 @@ def run_import(
         )
 
         _logger.info("Import complete in %.1fs", duration_secs)
+        # On a Tier 2 incremental re-import these stats report rows
+        # NEWLY INSERTED in this run, not total rows present on disk -- a
+        # no-change re-import legitimately reads "0 records, 0 workouts,
+        # ..." even though the database still holds the full history.
+        # The "Newly inserted" label keeps that distinction visible so a
+        # user does not mistake the summary for missing data.
+        label = "Newly inserted" if existing is not None else "Imported"
         _logger.info(
-            "  Records: %d, Workouts: %d, Activity Summaries: %d",
+            "  %s: %d records, %d workouts, %d activity summaries",
+            label,
             stats.records,
             stats.workouts,
             stats.activity_summaries,
         )
         _logger.info(
-            "  ECG readings: %d, Route points: %d, Metadata entries: %d",
+            "  %s: %d ECG readings, %d route points, %d metadata entries",
+            label,
             stats.ecg_readings,
             stats.route_points,
             stats.metadata_entries,
@@ -202,12 +211,14 @@ def run_import(
 def _compute_file_sha256(path: Path) -> str | None:
     """Stream sha256 over ``path``; return the hex digest or ``None`` if absent.
 
-    ``None`` signals "no sha256 to record / compare" so the Tier 1 fast
-    path falls through and the regular ``import_xml`` call surfaces the
-    missing-file error with its normal message. Any other OSError
-    (permission denied, mid-read I/O failure) also produces ``None``
-    rather than crashing the import here -- the downstream parse will
-    hit the same fault and report it in context.
+    Returns ``None`` and lets the downstream ``import_xml`` call surface
+    the missing-file error in its normal context. Other OSError flavors
+    (permission denied, mid-read EIO from a flaky disk) also return
+    ``None`` so the orchestrator does not crash here, but the importer
+    logs a WARNING in those cases -- a silent fall-through would stamp
+    NULL into ``imports.export_xml_sha256`` and the next byte-identical
+    re-import could no longer fast-path-skip, masquerading as a
+    perf regression.
     """
     try:
         hasher = hashlib.sha256()
@@ -215,23 +226,38 @@ def _compute_file_sha256(path: Path) -> str | None:
             for chunk in iter(lambda: fp.read(_SHA256_READ_CHUNK_BYTES), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
-    except OSError:
+    except FileNotFoundError:
+        # Expected and handled by ``import_xml`` below; no log needed.
+        return None
+    except OSError as exc:
+        # Anything other than "file absent" is a surprise; log so the
+        # next maintainer can see why ``imports.export_xml_sha256``
+        # landed NULL on an import that otherwise succeeded.
+        _logger.warning(
+            "failed to compute sha256 of %s for the Tier 1 fast path "
+            "(import will proceed but the fast path is bypassed): %s",
+            path,
+            exc,
+        )
         return None
 
 
 def _sha256_matches_prior(conn: duckdb.DuckDBPyConnection, export_sha: str) -> bool:
     """Return True when the most recent recorded sha256 matches ``export_sha``.
 
-    ``ORDER BY imported_at DESC`` reflects the issue #44 fix that made
-    ``imported_at`` consistently populated; the column was sometimes
-    NULL on pre-#44 DBs but the migration that landed alongside this
-    function repairs that schema in place so the ordering remains
-    well-defined across upgrade paths.
+    ``ORDER BY imported_at DESC, import_id DESC`` makes the ordering
+    total even when two imports stamp the same wall-clock second (and
+    therefore the same ``CURRENT_TIMESTAMP`` default). ``make_import_id``
+    includes microseconds, so the secondary sort breaks every realistic
+    tie. The ``imported_at`` field can still be NULL on a pre-#44 DB
+    before :func:`repair_legacy_constraints_if_needed` runs; ``DESC``
+    sorts NULLs last in DuckDB so the most recent populated row wins
+    until the repair fires on the next finalize pass.
     """
     row = conn.execute(
         "SELECT export_xml_sha256 FROM imports "
         "WHERE export_xml_sha256 IS NOT NULL "
-        "ORDER BY imported_at DESC LIMIT 1"
+        "ORDER BY imported_at DESC, import_id DESC LIMIT 1"
     ).fetchone()
     return row is not None and row[0] == export_sha
 

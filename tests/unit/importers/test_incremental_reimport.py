@@ -227,6 +227,43 @@ def test_compute_file_sha256_missing_file_returns_none(tmp_path: Path) -> None:
     assert _compute_file_sha256(tmp_path / "absent.xml") is None
 
 
+def test_compute_file_sha256_non_missing_oserror_logs_warning_and_returns_none(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-FileNotFoundError OSError (e.g. mid-read EIO) is logged so it does not silently stamp NULL.
+
+    Regression guard for the code-review finding: ``_compute_file_sha256``
+    used to swallow every OSError silently, so a flaky disk that hit
+    EIO mid-read produced a NULL ``imports.export_xml_sha256`` row with
+    no log trace, masquerading as a perf regression on the next
+    re-import (NULL row never matches the Tier 1 fast path).
+    """
+    import logging as _logging
+
+    path = tmp_path / "x.bin"
+    path.write_bytes(b"abc")
+
+    real_open = Path.open
+
+    def boom(
+        self: Path, *args: object, **kwargs: object
+    ) -> object:  # pragma: no cover - signature placeholder
+        if self == path:
+            raise PermissionError("simulated permission denied")
+        return real_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", boom)
+    caplog.set_level(_logging.WARNING, logger="apple_health_mcp.importers.orchestrator")
+    result = _compute_file_sha256(path)
+    assert result is None
+    assert any(
+        "failed to compute sha256" in rec.message and "Tier 1" in rec.message
+        for rec in caplog.records
+    )
+
+
 def test_sha256_matches_prior_returns_false_on_empty_imports_table(
     fresh_conn: duckdb.DuckDBPyConnection,
 ) -> None:
@@ -652,6 +689,72 @@ def test_incremental_metadata_does_not_route_to_workout_when_record_skipped(
             "SELECT COUNT(*) FROM workout_metadata WHERE key = 'HKMetadataKeyHeartRateMotionContext'"
         ).fetchone()
         # The skipped record's metadata must NOT leak into workout_metadata.
+        assert row is not None and int(row[0]) == 0
+    finally:
+        conn.close()
+
+
+def test_incremental_fresh_record_nested_in_skipped_workout_keeps_metadata(
+    tmp_path: Path,
+) -> None:
+    """A new Record inside a skipped Workout must still route its MetadataEntry to record_metadata.
+
+    Regression guard for the issue #62 code-review finding: the original
+    ``if _skipping_record or _skipping_workout: return`` guard at the top
+    of ``_handle_metadata_entry`` fired before the ``_in_record`` priority
+    branch, so a fresh nested Record inside a skipped Workout silently
+    lost every MetadataEntry. The fix routes on ``_in_record`` first.
+    """
+    # First import: one Workout with one nested Record (no metadata).
+    first_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2024-01-01 10:00:00 +0000" endDate="2024-01-01 10:30:00 +0000">
+  <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="150" startDate="2024-01-01 10:00:00 +0000" endDate="2024-01-01 10:01:00 +0000"/>
+ </Workout>
+</HealthData>"""
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(first_xml, encoding="utf-8")
+    db = tmp_path / "h.duckdb"
+    run_import(export_dir, db, import_id="imp_first")
+
+    # Second import: SAME Workout (hash hits), SAME Record (hash hits)
+    # BUT a NEW Record nested inside the workout that carries a
+    # MetadataEntry. The new Record's record_hash misses
+    # existing.records so it must be inserted; its MetadataEntry must
+    # land in record_metadata (NOT silently dropped because the outer
+    # Workout was skipped).
+    second_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" sourceName="Apple Watch" startDate="2024-01-01 10:00:00 +0000" endDate="2024-01-01 10:30:00 +0000">
+  <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="150" startDate="2024-01-01 10:00:00 +0000" endDate="2024-01-01 10:01:00 +0000"/>
+  <Record type="HKQuantityTypeIdentifierActiveEnergyBurned" sourceName="Apple Watch" unit="kcal" value="42" startDate="2024-01-01 10:05:00 +0000" endDate="2024-01-01 10:06:00 +0000">
+   <MetadataEntry key="HKMetadataKeyMetabolicEquivalentTask" value="6.5"/>
+  </Record>
+ </Workout>
+</HealthData>"""
+    (export_dir / "export.xml").write_text(second_xml, encoding="utf-8")
+    run_import(export_dir, db, import_id="imp_second")
+
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        # The new Record landed.
+        row = conn.execute(
+            "SELECT COUNT(*) FROM records "
+            "WHERE record_type = 'HKQuantityTypeIdentifierActiveEnergyBurned'"
+        ).fetchone()
+        assert row is not None and int(row[0]) == 1
+        # The new Record's MetadataEntry landed in record_metadata,
+        # NOT in workout_metadata.
+        row = conn.execute(
+            "SELECT COUNT(*) FROM record_metadata "
+            "WHERE key = 'HKMetadataKeyMetabolicEquivalentTask'"
+        ).fetchone()
+        assert row is not None and int(row[0]) == 1
+        row = conn.execute(
+            "SELECT COUNT(*) FROM workout_metadata "
+            "WHERE key = 'HKMetadataKeyMetabolicEquivalentTask'"
+        ).fetchone()
         assert row is not None and int(row[0]) == 0
     finally:
         conn.close()

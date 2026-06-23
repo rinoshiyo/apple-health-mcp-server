@@ -223,6 +223,24 @@ class _XmlImporter:
         # the row is staged for the Arrow flush buffer; when None the
         # importer keeps the legacy full-insert behavior.
         self._existing = existing
+        # Bind the per-table sets (or empty frozensets when no snapshot)
+        # once so the hot-path handlers don't pay an ``is not None`` check
+        # per element. On a 2.65 M-record fresh import the hoist saves
+        # ~10 M attribute lookups + None comparisons across the four
+        # handlers below.
+        _empty: frozenset[str] = frozenset()
+        self._existing_records: set[str] | frozenset[str] = (
+            existing.records if existing is not None else _empty
+        )
+        self._existing_workouts: set[str] | frozenset[str] = (
+            existing.workouts if existing is not None else _empty
+        )
+        self._existing_correlations: set[str] | frozenset[str] = (
+            existing.correlations if existing is not None else _empty
+        )
+        self._existing_activity_summaries: set[str] | frozenset[str] = (
+            existing.activity_summaries if existing is not None else _empty
+        )
 
         # Batch buffers; each entry is a tuple matching the appender column
         # order declared in `_flush_*` helpers below.
@@ -255,13 +273,16 @@ class _XmlImporter:
         self._current_record_hash: str | None = None
         self._current_hr_sample_idx = 0
 
-        # Tier 2 skip flags (issue #62). ``_skipping_record`` is set when the
-        # current Record's hash hit ``existing.records``; we keep ``_in_record``
-        # True so the SAX end event balances the stack, but route nested
-        # MetadataEntry / InstantaneousBeatsPerMinute / StateOfMind to no-op
-        # via the flag. ``_skipping_workout`` does the same job for Workout.
-        # Reset at the matching end event (Record / Workout).
-        self._skipping_record = False
+        # Tier 2 skip flag (issue #62). ``_skipping_workout`` is set when the
+        # current Workout's hash hit ``existing.workouts``; we keep
+        # ``_in_workout`` True so the SAX end event balances the stack, but
+        # route the Workout's own direct children (events, stats, direct
+        # metadata) to no-op via the flag. A skipped Record needs no
+        # parallel flag: ``_current_record_hash = None`` is the sentinel
+        # every nested handler keys off, and ``_handle_metadata_entry``
+        # checks ``_in_record`` BEFORE falling through to the workout
+        # branch so a fresh nested Record inside a skipped Workout still
+        # routes its metadata to ``record_metadata`` (issue #62 review).
         self._skipping_workout = False
 
         # Per-StateOfMind-record staging. Populated only when the current
@@ -435,7 +456,6 @@ class _XmlImporter:
         if tag == "Record":
             self._finalize_state_of_mind()
             self._in_record = False
-            self._skipping_record = False
             self._current_record_hash = None
         elif tag == "WorkoutRoute":
             self._finalize_workout_route()
@@ -539,14 +559,12 @@ class _XmlImporter:
         # disk, skip the row AND every nested child (metadata, instantaneous
         # BPM, state-of-mind metadata). ``_in_record`` stays True so the
         # SAX end event balances the stack; ``_current_record_hash = None``
-        # is what every nested handler keys off to short-circuit. The
-        # ``_skipping_record`` flag covers the one case None alone cannot:
-        # ``_handle_metadata_entry`` falls through to the ``_in_workout``
-        # branch when record_hash is None, which would mis-route the
-        # skipped record's metadata into ``workout_metadata``.
-        if self._existing is not None and record_hash in self._existing.records:
+        # is the sentinel every nested handler keys off to short-circuit.
+        # ``_handle_metadata_entry`` checks ``_in_record`` BEFORE falling
+        # through to the workout branch, so the None sentinel alone is
+        # enough -- no second flag needed.
+        if record_hash in self._existing_records:
             self._in_record = True
-            self._skipping_record = True
             self._current_record_hash = None
             self._current_state_of_mind = None
             self._current_hr_sample_idx = 0
@@ -570,7 +588,6 @@ class _XmlImporter:
         )
         self._stats.records += 1
         self._in_record = True
-        self._skipping_record = False
         self._current_record_hash = record_hash
         self._current_hr_sample_idx = 0
         if record_type == _STATE_OF_MIND_RECORD_TYPE:
@@ -618,30 +635,38 @@ class _XmlImporter:
             self._flush_correlation_members()
 
     def _handle_metadata_entry(self, attr: dict[str, str]) -> None:
-        # Tier 2 incremental skip (issue #62). When the enclosing Record /
-        # Workout was found in ``existing``, its metadata already exists on
-        # disk too -- a Record nested inside a Workout block would otherwise
-        # fall through to the ``_in_workout`` branch below and mis-route the
-        # skipped record's metadata into ``workout_metadata``.
-        if self._skipping_record or self._skipping_workout:
-            return
         key = attr.get("key", "")
         value = attr.get("value", "")
         # Inner-most context wins: a <Record> nested inside a <Workout>
-        # (e.g. InstantaneousBeatsPerMinute samples or HK plain Records under
-        # a Workout block) must route its MetadataEntry to record_metadata,
-        # not workout_metadata. Checking _in_record first ensures the inner
-        # context takes priority over the enclosing Workout.
-        if self._in_record and self._current_record_hash is not None:
+        # (e.g. InstantaneousBeatsPerMinute samples or HK plain Records
+        # under a Workout block) must route its MetadataEntry to
+        # record_metadata, not workout_metadata. The branch order is
+        # load-bearing for Tier 2 (issue #62): a fresh Record nested
+        # inside a SKIPPED Workout has ``_current_record_hash`` set to a
+        # real hash and ``_skipping_workout`` True -- routing on
+        # ``_in_record`` FIRST means the inner-Record metadata still
+        # lands in ``record_metadata`` instead of being dropped by the
+        # outer-Workout skip.
+        if self._in_record:
+            # ``_current_record_hash is None`` means the Record itself was
+            # a Tier 2 hash hit (skip path in ``_handle_record``); its
+            # metadata already exists on disk too.
+            if self._current_record_hash is None:
+                return
             self._record_metadata.append((self._current_record_hash, key, value))
             self._stats.metadata_entries += 1
             self._capture_state_of_mind_metadata(key, value)
             if len(self._record_metadata) >= _BATCH_SIZE_HOT:
                 self._flush_record_metadata()
         elif self._in_workout:
-            # _in_workout is only set alongside _current_workout_hash, so the
-            # None branch is unreachable in practice; keep the guard for
-            # type-narrowing and tolerance to future refactors.
+            if self._skipping_workout:
+                # Tier 2: workout_metadata for the skipped workout already
+                # exists on disk; this is a Workout-direct MetadataEntry,
+                # not a child of an inner Record.
+                return
+            # _in_workout is only set alongside _current_workout_hash, so
+            # the None branch is unreachable in practice; keep the guard
+            # for type-narrowing and tolerance to future refactors.
             if self._current_workout_hash is not None:  # pragma: no branch
                 self._current_workout_metadata.append(
                     (self._current_workout_hash, key, value, self._import_id)
@@ -672,7 +697,7 @@ class _XmlImporter:
         self._current_workout_metadata.clear()
         self._current_workout_route = None
         self._in_workout_route = False
-        if self._existing is not None and workout_hash in self._existing.workouts:
+        if workout_hash in self._existing_workouts:
             self._skipping_workout = True
             # ``_finalize_workout`` bails on a None ``_current_workout`` so
             # no workout / events / stats / metadata rows are committed; the
@@ -786,7 +811,7 @@ class _XmlImporter:
 
     def _handle_activity_summary(self, attr: dict[str, str]) -> None:
         date_components = attr.get("dateComponents", "")
-        if self._existing is not None and date_components in self._existing.activity_summaries:
+        if date_components in self._existing_activity_summaries:
             # Tier 2 skip: activity_summaries is keyed by date_components,
             # not a hash. The (PARTITION BY date_components) tie-break in
             # ``_DEDUPLICATE_SQL`` is the legacy collapse rule we are
@@ -823,7 +848,7 @@ class _XmlImporter:
         # ``correlation_members`` linkage already exist; set
         # ``_current_correlation_hash = None`` so the inner-Record handler
         # (_handle_correlation_record) short-circuits on every child.
-        if self._existing is not None and correlation_hash in self._existing.correlations:
+        if correlation_hash in self._existing_correlations:
             self._current_correlation_hash = None
             return
         self._stats.correlations += 1

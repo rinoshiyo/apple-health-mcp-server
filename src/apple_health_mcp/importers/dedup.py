@@ -15,6 +15,7 @@ from apple_health_mcp.db.schema import (
     deduplicate_tables,
     populate_workout_vestigial_columns,
     rebuild_daily_stats,
+    repair_legacy_constraints_if_needed,
 )
 
 if TYPE_CHECKING:
@@ -41,6 +42,15 @@ def finalize_import(conn: duckdb.DuckDBPyConnection, *, skip_dedup: bool = False
     and daily-stats rebuild still run because they materialise per-row
     derived columns that need the newly-added rows.
     """
+    # Repair the pre-#44 dedup-stripped NOT NULL / DEFAULT constraints
+    # FIRST -- before the orchestrator's ``INSERT INTO imports (...)``
+    # relies on the ``imported_at`` DEFAULT firing. The probe inside
+    # ``repair_legacy_constraints_if_needed`` skips a no-op for fresh /
+    # post-#44 DBs, so the warm path costs only one PRAGMA query.
+    # Running this regardless of ``skip_dedup`` is what stops the Tier 2
+    # incremental path (issue #62) from silently regressing the v0.1.4
+    # ``imports.imported_at NULL`` bug fix on a pre-#44 on-disk DB.
+    repair_legacy_constraints_if_needed(conn)
     if skip_dedup:
         _logger.info("Finalizing import: skip dedup (incremental) -> backfill -> daily stats")
     else:

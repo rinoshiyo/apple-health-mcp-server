@@ -46,8 +46,14 @@ def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
     state. We skip the ALTER instead of failing in that case; the next
     ensure_schema call creates ``imports`` with the column already present.
     """
+    # The schema_name filter keeps a connection with attached databases
+    # or user-created schemas from passing this probe on the basis of an
+    # unrelated ``imports`` table -- the unqualified ALTER below targets
+    # ``main.imports`` and would otherwise raise on a fresh DB whose
+    # ``ensure_schema`` has not yet run.
     row = conn.execute(
-        "SELECT 1 FROM duckdb_tables() WHERE table_name = 'imports' LIMIT 1"
+        "SELECT 1 FROM duckdb_tables() "
+        "WHERE table_name = 'imports' AND schema_name = 'main' LIMIT 1"
     ).fetchone()
     if row is None:
         return
