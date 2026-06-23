@@ -213,11 +213,12 @@ def test_import_gpx_files_handles_per_file_error(
         path: Path,
         import_id: str,
         workout_hash: str | None,
+        **kwargs: object,
     ) -> int:
         state["n"] += 1
         if state["n"] == 1:
             raise HealthImportError("boom")
-        return real(conn, path, import_id, workout_hash)
+        return real(conn, path, import_id, workout_hash, **kwargs)
 
     monkeypatch.setattr(gpx_module, "import_single_gpx", flaky)
     total = import_gpx_files(conn, d, "imp", {})

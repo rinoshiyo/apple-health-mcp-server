@@ -24,10 +24,43 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 Migration = Callable[["duckdb.DuckDBPyConnection"], None]
-MIGRATIONS: Sequence[tuple[int, Migration]] = ()
+
+
+def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
+    """Add ``imports.export_xml_sha256`` to a pre-#62 on-disk database.
+
+    ``ADD COLUMN IF NOT EXISTS`` makes the step idempotent: a fresh DB built
+    by :func:`schema.ensure_schema` already has the column (the canonical
+    SQL declares it), so the migration runs after ensure_schema and is a
+    no-op on first install. Existing rows backfill ``NULL``; the
+    orchestrator's sha256 fast path filters for ``IS NOT NULL`` so pre-#62
+    rows are skipped over and the next import stamps a real hash.
+
+    The empty-DB guard exists because the migration registry can be invoked
+    on a connection whose :func:`schema.ensure_schema` has not yet run --
+    the version sentinel only needs the ``schema_version`` table, not the
+    full canonical schema, so apply_pending_migrations is callable in that
+    state. We skip the ALTER instead of failing in that case; the next
+    ensure_schema call creates ``imports`` with the column already present.
+    """
+    # The schema_name filter keeps a connection with attached databases
+    # or user-created schemas from passing this probe on the basis of an
+    # unrelated ``imports`` table -- the unqualified ALTER below targets
+    # ``main.imports`` and would otherwise raise on a fresh DB whose
+    # ``ensure_schema`` has not yet run.
+    row = conn.execute(
+        "SELECT 1 FROM duckdb_tables() "
+        "WHERE table_name = 'imports' AND schema_name = 'main' LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return
+    conn.execute("ALTER TABLE imports ADD COLUMN IF NOT EXISTS export_xml_sha256 VARCHAR;")
+
+
+MIGRATIONS: Sequence[tuple[int, Migration]] = ((2, _add_export_xml_sha256_column),)
 
 
 def _ensure_version_table(conn: duckdb.DuckDBPyConnection) -> None:

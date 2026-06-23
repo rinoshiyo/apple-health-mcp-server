@@ -185,12 +185,17 @@ CREATE TABLE IF NOT EXISTS correlation_members (
 );
 
 CREATE TABLE IF NOT EXISTS imports (
-    import_id     VARCHAR,
-    export_dir    VARCHAR NOT NULL,
-    imported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    record_count  BIGINT,
-    workout_count BIGINT,
-    duration_secs DOUBLE
+    import_id          VARCHAR,
+    export_dir         VARCHAR NOT NULL,
+    imported_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    record_count       BIGINT,
+    workout_count      BIGINT,
+    duration_secs      DOUBLE,
+    -- Hex sha256 of the source export.xml. NULL on rows finalized before
+    -- the column was introduced (#62); a fresh import always stamps it so
+    -- the orchestrator can match a subsequent re-import against the most
+    -- recent stamped row and exit early when the file is byte-identical.
+    export_xml_sha256  VARCHAR
 );
 
 -- Captures the root <HealthData locale="..."> attribute and the
@@ -618,6 +623,28 @@ def _legacy_schema_needs_constraint_repair(conn: duckdb.DuckDBPyConnection) -> b
     return int(row[0]) == 0
 
 
+def repair_legacy_constraints_if_needed(conn: duckdb.DuckDBPyConnection) -> None:
+    """Restore the NOT NULL / DEFAULT constraints stripped by pre-#44 dedup.
+
+    Extracted from :func:`deduplicate_tables` (#62 follow-up) so the
+    incremental re-import path (which auto-skips dedup) still repairs
+    a pre-#44 on-disk DB. Without this gate firing, the first Tier 2
+    re-import would skip ``deduplicate_tables`` -- the only historic
+    caller of the repair -- and the orchestrator's
+    ``INSERT INTO imports (...)`` would land ``imported_at = NULL``
+    again, silently regressing the v0.1.4 user-visible bug fix.
+
+    The ``_legacy_schema_needs_constraint_repair`` probe keeps this a
+    one-shot migration: post-#44 DBs report the constraint as already
+    NOT NULL and the ALTERs are skipped, so the warm path eats no work.
+    """
+    if _legacy_schema_needs_constraint_repair(conn):  # pragma: no branch
+        _logger.info(  # pragma: no cover
+            "Repairing pre-#44 dedup-stripped constraints (one-shot migration)"
+        )
+        conn.execute(_RESTORE_CONSTRAINTS_SQL)  # pragma: no cover
+
+
 def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """Collapse duplicate rows across every importable table.
 
@@ -626,27 +653,17 @@ def deduplicate_tables(conn: duckdb.DuckDBPyConnection) -> None:
     legacy ``DISTINCT ON (key) ... ORDER BY key, <tie-breakers>`` would
     have kept; the tie-break prefers the most recent ``import_id`` so
     re-importing the same export never silently flips
-    ``source_version`` / ``device`` / etc. ``_RESTORE_CONSTRAINTS_SQL``
-    is gated by :func:`_legacy_schema_needs_constraint_repair` so it
-    only fires on a pre-#44 on-disk DB; on a fresh / post-#60 DB the
-    ALTERs would otherwise raise ``DependencyException`` against the
-    indexes the historic ``CREATE OR REPLACE TABLE`` used to drop.
-    ``_CREATE_INDEXES_SQL`` is idempotent (``CREATE INDEX IF NOT
-    EXISTS``) so it costs nothing on the warm path.
+    ``source_version`` / ``device`` / etc. ``_CREATE_INDEXES_SQL`` is
+    idempotent (``CREATE INDEX IF NOT EXISTS``) so it costs nothing on
+    the warm path.
+
+    The pre-#44 constraint repair pass is no longer chained from here;
+    it lives in :func:`repair_legacy_constraints_if_needed` and the
+    orchestrator runs it unconditionally so the Tier 2 incremental path
+    still benefits.
     """
     _logger.info("Deduplicating tables...")
     conn.execute(_DEDUPLICATE_SQL)
-    # True branch fires only on pre-#44 on-disk DBs; covered by the
-    # direct unit test on :func:`_legacy_schema_needs_constraint_repair`
-    # rather than a full pre-#44 schema simulation here (which would
-    # also have to drop every index the historic ``CREATE OR REPLACE``
-    # used to drop, just to keep ``_RESTORE_CONSTRAINTS_SQL`` from
-    # raising ``DependencyException`` against the surviving indexes).
-    if _legacy_schema_needs_constraint_repair(conn):  # pragma: no branch
-        _logger.info(  # pragma: no cover
-            "Repairing pre-#44 dedup-stripped constraints (one-shot migration)"
-        )
-        conn.execute(_RESTORE_CONSTRAINTS_SQL)  # pragma: no cover
     conn.execute(_CREATE_INDEXES_SQL)
     _logger.info("Deduplication complete")
 

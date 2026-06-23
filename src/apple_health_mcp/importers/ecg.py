@@ -20,6 +20,7 @@ import chardet
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
+from apple_health_mcp.importers._existing_hashes import ExistingHashes
 from apple_health_mcp.importers._hash import compute_hash
 from apple_health_mcp.importers._tz import normalize_apple_offset
 
@@ -173,12 +174,23 @@ def _read_text(path: Path) -> str:
         return raw.decode("utf-8", errors="replace")
 
 
-def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: str) -> None:
-    """Parse one ECG CSV at ``path`` and insert into ``conn``.
+def import_single_ecg(
+    conn: duckdb.DuckDBPyConnection,
+    path: Path,
+    import_id: str,
+    *,
+    existing: ExistingHashes | None = None,
+) -> bool:
+    """Parse one ECG CSV at ``path`` and insert into ``conn``; return whether a row landed.
 
     Raises :class:`HealthImportError` when no recorded-date label is present
     (the file is not a valid ECG export). The caller in :func:`import_ecg_files`
     catches and logs that so a single bad CSV does not abort the batch.
+
+    ``existing`` enables the Tier 2 incremental skip (issue #62): a CSV
+    whose ``ecg_hash`` is already on disk is dropped before INSERT and
+    its voltage samples are not parsed. Returns ``False`` in that case so
+    the caller can keep its "ECG files actually imported" count accurate.
     """
     text = _strip_bom(_read_text(path))
     lines = text.splitlines()
@@ -241,6 +253,14 @@ def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: st
 
     ecg_hash = compute_hash([recorded_date, device or ""])
 
+    # Tier 2 incremental skip (issue #62). When the ecg_hash is already on
+    # disk, skip the row AND every voltage sample below. We bail BEFORE
+    # parsing the voltage section so the skip path also dodges the per-line
+    # ``float`` cost (typical ECG carries ~15 000 voltage samples).
+    if existing is not None and ecg_hash in existing.ecg_readings:
+        _logger.debug("Skipping ECG %s: already on disk", path.name)
+        return False
+
     conn.execute(
         """
         INSERT INTO ecg_readings (
@@ -286,14 +306,27 @@ def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: st
     # through bulk_load_via_arrow (issues #41 / #50) for the same perf
     # reason the XML importer does.
     bulk_load_via_arrow(conn, "ecg_samples", samples)
+    return True
 
 
-def import_ecg_files(conn: duckdb.DuckDBPyConnection, ecg_dir: Path, import_id: str) -> int:
+def import_ecg_files(
+    conn: duckdb.DuckDBPyConnection,
+    ecg_dir: Path,
+    import_id: str,
+    *,
+    existing: ExistingHashes | None = None,
+) -> int:
     """Import every ``*.csv`` under ``ecg_dir``; return the number imported.
 
     A missing directory is not an error -- many exports lack ECG data
     entirely. Individual file failures are logged and skipped so one bad
     CSV does not abort the import.
+
+    The returned count tracks ECG rows actually INSERTed -- a CSV whose
+    ``ecg_hash`` is already on disk (Tier 2 incremental re-import, issue
+    #62) does not contribute to the count. The total skipped count is
+    surfaced via the same ``Imported N (skipped M)`` log line so the
+    caller can see whether the re-import contributed any new readings.
     """
     if not ecg_dir.exists():
         _logger.info("No electrocardiograms directory found, skipping ECG import")
@@ -301,14 +334,21 @@ def import_ecg_files(conn: duckdb.DuckDBPyConnection, ecg_dir: Path, import_id: 
 
     entries = sorted(p for p in ecg_dir.iterdir() if p.suffix.lower() == ".csv")
     count = 0
+    skipped = 0
     for path in entries:
         try:
-            import_single_ecg(conn, path, import_id)
+            inserted = import_single_ecg(conn, path, import_id, existing=existing)
         except HealthImportError as exc:
             _logger.warning("Failed to import ECG file %s: %s", path, exc)
         except OSError as exc:
             _logger.warning("Failed to read ECG file %s: %s", path, exc)
         else:
-            count += 1
-    _logger.info("Imported %d ECG recordings", count)
+            if inserted:
+                count += 1
+            else:
+                skipped += 1
+    if skipped:
+        _logger.info("Imported %d ECG recordings (skipped %d already on disk)", count, skipped)
+    else:
+        _logger.info("Imported %d ECG recordings", count)
     return count

@@ -27,6 +27,7 @@ from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
+from apple_health_mcp.importers._existing_hashes import ExistingHashes
 from apple_health_mcp.importers._hash import compute_hash
 
 if TYPE_CHECKING:
@@ -50,8 +51,16 @@ def import_single_gpx(
     path: Path,
     import_id: str,
     workout_hash: str | None,
+    *,
+    existing: ExistingHashes | None = None,
 ) -> int:
-    """Parse one GPX file and insert its track points; return the count."""
+    """Parse one GPX file and insert its track points; return the count.
+
+    ``existing`` enables the Tier 2 incremental skip (issue #62): every
+    point's ``point_hash`` is checked against the snapshot before being
+    staged for insert. Points already on disk are dropped from the batch
+    so the new import contributes only genuinely-new track points.
+    """
     try:
         context = etree.iterparse(
             str(path),
@@ -107,21 +116,27 @@ def import_single_gpx(
                             point_hash = compute_hash(
                                 [wh, timestamp, _rust_float_repr(lat), _rust_float_repr(lon)]
                             )
-                            rows.append(
-                                (
-                                    point_hash,
-                                    workout_hash,
-                                    lat,
-                                    lon,
-                                    ele,
-                                    timestamp,
-                                    speed,
-                                    course,
-                                    h_acc,
-                                    v_acc,
-                                    import_id,
+                            # Tier 2 incremental skip (issue #62): a point
+                            # whose hash is already on disk is dropped from
+                            # the batch BEFORE staging, so the re-import
+                            # adds only the new points (typical week-on-week
+                            # tail is dozens to hundreds, not the full GPX).
+                            if existing is None or point_hash not in existing.route_points:
+                                rows.append(
+                                    (
+                                        point_hash,
+                                        workout_hash,
+                                        lat,
+                                        lon,
+                                        ele,
+                                        timestamp,
+                                        speed,
+                                        course,
+                                        h_acc,
+                                        v_acc,
+                                        import_id,
+                                    )
                                 )
-                            )
                         in_trkpt = False
                 elem.clear()
     except etree.XMLSyntaxError as exc:
@@ -167,11 +182,15 @@ def import_gpx_files(
     routes_dir: Path,
     import_id: str,
     workout_route_map: dict[str, str],
+    *,
+    existing: ExistingHashes | None = None,
 ) -> int:
     """Import every ``*.gpx`` under ``routes_dir``; return total point count.
 
     A missing directory is not an error. Individual file failures are
     logged and skipped so one corrupt GPX cannot abort the batch.
+
+    ``existing`` enables Tier 2 incremental skip (issue #62) per-point.
     """
     if not routes_dir.exists():
         _logger.info("No workout-routes directory found, skipping GPX import")
@@ -202,7 +221,7 @@ def import_gpx_files(
                 route_key,
             )
         try:
-            total += import_single_gpx(conn, path, import_id, workout_hash)
+            total += import_single_gpx(conn, path, import_id, workout_hash, existing=existing)
         except HealthImportError as exc:
             _logger.warning("Failed to import GPX file %s: %s", path, exc)
         except OSError as exc:
