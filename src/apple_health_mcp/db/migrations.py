@@ -101,6 +101,19 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
     The caller must have created the canonical schema via
     :func:`schema.ensure_schema` before invoking this function on a fresh
     database; the migration layer only tracks the version sentinel.
+
+    Atomicity: every migration step and the final ``schema_version`` stamp
+    run inside a single DuckDB transaction. Crash, SIGKILL, OOM, or any
+    Python exception during the loop causes the transaction to roll back,
+    so the database schema_version sentinel and the on-disk schema can
+    never diverge. Today's only registered migration is an
+    ``ADD COLUMN IF NOT EXISTS`` (so a partial-then-retry would converge
+    anyway), but the transaction wrap is the load-bearing safety the next
+    data migration -- e.g. backfilling a derived column or rewriting a
+    row's contents -- depends on. Without it, a kill between the ALTER
+    and the stamp would leave the DB in a "schema migrated but sentinel
+    unchanged" state and the next run would replay the ALTER, which is
+    fine for IF NOT EXISTS but corrupts a non-idempotent step.
     """
     current = get_current_version(conn)
     if current > CURRENT_SCHEMA_VERSION:
@@ -109,23 +122,34 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
             f"the package supports ({CURRENT_SCHEMA_VERSION})"
         )
 
-    applied = current
-    for target, migration in MIGRATIONS:
-        if target > CURRENT_SCHEMA_VERSION:
-            raise DatabaseError(
-                f"migration target {target} exceeds CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
-            )
-        if target <= applied:
-            # Already applied on a previous run; idempotent skip.
-            continue
-        _logger.info("Applying migration to schema version %d", target)
-        migration(conn)
-        applied = target
+    conn.execute("BEGIN TRANSACTION;")
+    try:
+        applied = current
+        for target, migration in MIGRATIONS:
+            if target > CURRENT_SCHEMA_VERSION:
+                raise DatabaseError(
+                    f"migration target {target} exceeds "
+                    f"CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
+                )
+            if target <= applied:
+                # Already applied on a previous run; idempotent skip.
+                continue
+            _logger.info("Applying migration to schema version %d", target)
+            migration(conn)
+            applied = target
 
-    # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION) so
-    # that fresh databases on schema-only bumps (no data migration registered)
-    # still record the package's current version.
-    final = max(applied, CURRENT_SCHEMA_VERSION)
-    if final != current:
-        set_current_version(conn, final)
+        # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION)
+        # so that fresh databases on schema-only bumps (no data migration
+        # registered) still record the package's current version.
+        final = max(applied, CURRENT_SCHEMA_VERSION)
+        if final != current:
+            set_current_version(conn, final)
+    except BaseException:
+        # BaseException so KeyboardInterrupt and SystemExit also trigger
+        # rollback -- the whole point of the transaction wrap is to keep
+        # the on-disk schema and the sentinel in lockstep across every
+        # abort, not just typed exceptions.
+        conn.execute("ROLLBACK;")
+        raise
+    conn.execute("COMMIT;")
     return final

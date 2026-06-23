@@ -145,3 +145,43 @@ def test_migration_target_exceeds_current_supported_raises(monkeypatch: MonkeyPa
             apply_pending_migrations(conn)
     finally:
         conn.close()
+
+
+def test_apply_pending_migrations_rolls_back_on_migration_failure(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A migration that raises mid-loop leaves the schema_version unchanged.
+
+    Regression guard for the transaction wrap (issue #62 gachima follow-up):
+    without ``BEGIN TRANSACTION ... ROLLBACK`` around the loop, a kill
+    after the ALTER but before ``set_current_version`` would leave the
+    on-disk schema migrated but the sentinel pointing at the old
+    version. The next run would replay the same step -- harmless under
+    ``ADD COLUMN IF NOT EXISTS`` but data-corrupting under any non-
+    idempotent step (e.g. a backfill that reads-then-writes a column).
+    """
+    import duckdb as _duckdb
+
+    def _step_one(conn: _duckdb.DuckDBPyConnection) -> None:
+        # Make a real schema change BEFORE raising so we can verify the
+        # rollback also undoes the ALTER, not just the version stamp.
+        conn.execute("CREATE TABLE _migration_smoke (x INTEGER)")
+        raise RuntimeError("simulated migration crash")
+
+    monkeypatch.setattr(migrations_module, "MIGRATIONS", ((2, _step_one),))
+    monkeypatch.setattr(migrations_module, "CURRENT_SCHEMA_VERSION", 2)
+
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, 1)
+        with pytest.raises(RuntimeError, match="simulated migration crash"):
+            apply_pending_migrations(conn)
+        # Sentinel did NOT advance.
+        assert get_current_version(conn) == 1
+        # The mid-migration ALTER was rolled back too.
+        row = conn.execute(
+            "SELECT 1 FROM duckdb_tables() WHERE table_name = '_migration_smoke' LIMIT 1"
+        ).fetchone()
+        assert row is None
+    finally:
+        conn.close()
