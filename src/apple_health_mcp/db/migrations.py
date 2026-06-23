@@ -13,6 +13,7 @@ only tracks the version sentinel; it does not create the canonical tables.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
@@ -101,6 +102,23 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
     The caller must have created the canonical schema via
     :func:`schema.ensure_schema` before invoking this function on a fresh
     database; the migration layer only tracks the version sentinel.
+
+    Atomicity: every migration step, the final ``schema_version`` stamp,
+    and the COMMIT itself run inside a single DuckDB transaction. Crash,
+    SIGKILL, OOM, or any Python exception during the loop -- including
+    a failed COMMIT -- triggers ROLLBACK so the database schema_version
+    sentinel and the on-disk schema can never diverge. The transaction
+    wrap is the load-bearing safety the next non-idempotent migration
+    (e.g. backfilling a derived column or rewriting a row's contents)
+    will rely on; with ``ADD COLUMN IF NOT EXISTS`` -only registries the
+    wrap is also harmless and keeps tests honest.
+
+    Precondition: ``conn`` must be in autocommit mode (no caller-opened
+    transaction). The inner ``BEGIN TRANSACTION`` would otherwise raise
+    ``TransactionException`` -- DuckDB does not allow nested transactions.
+    Today's callers (``run_import`` and the read-only bootstrap) both
+    invoke this in autocommit; future callers that want broader atomicity
+    should issue migrations BEFORE opening their own transaction.
     """
     current = get_current_version(conn)
     if current > CURRENT_SCHEMA_VERSION:
@@ -109,23 +127,37 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
             f"the package supports ({CURRENT_SCHEMA_VERSION})"
         )
 
-    applied = current
-    for target, migration in MIGRATIONS:
-        if target > CURRENT_SCHEMA_VERSION:
-            raise DatabaseError(
-                f"migration target {target} exceeds CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
-            )
-        if target <= applied:
-            # Already applied on a previous run; idempotent skip.
-            continue
-        _logger.info("Applying migration to schema version %d", target)
-        migration(conn)
-        applied = target
+    try:
+        conn.execute("BEGIN TRANSACTION;")
+        applied = current
+        for target, migration in MIGRATIONS:
+            if target > CURRENT_SCHEMA_VERSION:
+                raise DatabaseError(
+                    f"migration target {target} exceeds "
+                    f"CURRENT_SCHEMA_VERSION {CURRENT_SCHEMA_VERSION}"
+                )
+            if target <= applied:
+                # Already applied on a previous run; idempotent skip.
+                continue
+            _logger.info("Applying migration to schema version %d", target)
+            migration(conn)
+            applied = target
 
-    # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION) so
-    # that fresh databases on schema-only bumps (no data migration registered)
-    # still record the package's current version.
-    final = max(applied, CURRENT_SCHEMA_VERSION)
-    if final != current:
-        set_current_version(conn, final)
+        # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION)
+        # so that fresh databases on schema-only bumps (no data migration
+        # registered) still record the package's current version.
+        final = max(applied, CURRENT_SCHEMA_VERSION)
+        if final != current:
+            set_current_version(conn, final)
+        conn.execute("COMMIT;")
+    except BaseException:
+        # BaseException so KeyboardInterrupt and SystemExit also trigger
+        # rollback -- the whole point of the transaction wrap is to keep
+        # the on-disk schema and the sentinel in lockstep across every
+        # abort, not just typed exceptions. ROLLBACK errors are swallowed
+        # so the user sees the ORIGINAL migration failure, not a follow-up
+        # 'connection closed' from a teardown race.
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK;")
+        raise
     return final

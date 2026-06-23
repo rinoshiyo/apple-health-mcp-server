@@ -466,6 +466,29 @@ class _XmlImporter:
             self._current_correlation_hash = None
 
     # -- handlers ------------------------------------------------------------
+    #
+    # Grouped by per-element lifecycle so a contributor can scan one
+    # section to understand a single XML element's full handling:
+    #
+    #   * Singletons (per-import once):  HealthData, ExportDate, Me
+    #   * Record context:                Record, correlation-child Record
+    #   * Metadata routing:              MetadataEntry (routes to Record
+    #                                    or Workout depending on context)
+    #   * Workout context:               Workout + WorkoutEvent /
+    #                                    WorkoutStatistics /
+    #                                    WorkoutRoute / FileReference
+    #   * HeartRate samples:             InstantaneousBeatsPerMinute
+    #   * ActivitySummary:               daily activity goals (standalone)
+    #   * Correlation context:           Correlation (parent of nested
+    #                                    correlation-child Records)
+    #
+    # NOTE: end-of-element cleanup for every tracked element is dispatched
+    # in :meth:`_on_end_sax` (Record / WorkoutRoute / Workout / Correlation
+    # end events), NOT inside the per-element handler section below. When
+    # tracing one element's full lifecycle, read its `_handle_*` here AND
+    # the matching branch in `_on_end_sax` above.
+
+    # -- handlers: Singleton root-level elements (once per import) ----------
 
     def _handle_health_data(self, attr: dict[str, str]) -> None:
         # HealthData fires exactly once at the document root; insert
@@ -525,6 +548,8 @@ class _XmlImporter:
             ],
         )
         self._stats.me_rows += 1
+
+    # -- handlers: Record context (top-level + correlation-child) ----------
 
     def _handle_record(self, attr: dict[str, str]) -> None:
         # The SAX target hands us the attribute dict directly -- no
@@ -634,6 +659,8 @@ class _XmlImporter:
         if len(self._correlation_members) >= _BATCH_SIZE:
             self._flush_correlation_members()
 
+    # -- handlers: MetadataEntry (routes by inner-most context) ------------
+
     def _handle_metadata_entry(self, attr: dict[str, str]) -> None:
         key = attr.get("key", "")
         value = attr.get("value", "")
@@ -671,6 +698,8 @@ class _XmlImporter:
                 self._current_workout_metadata.append(
                     (self._current_workout_hash, key, value, self._import_id)
                 )
+
+    # -- handlers: Workout context (Workout + nested children) -------------
 
     def _handle_workout_start(self, attr: dict[str, str]) -> None:
         self._in_workout = True
@@ -787,6 +816,8 @@ class _XmlImporter:
         if path is not None:
             self._current_workout_route["file_path"] = path
 
+    # -- handlers: HeartRate samples (nested in HR or HRV Record) ----------
+
     def _handle_instantaneous_bpm(self, attr: dict[str, str]) -> None:
         # Emitted as a child of either an HR record or an HRV record wrapped
         # in HeartRateVariabilityMetadataList. Both flatten into
@@ -808,6 +839,8 @@ class _XmlImporter:
         self._stats.heart_rate_samples += 1
         if len(self._heart_rate_samples) >= _BATCH_SIZE_HOT:
             self._flush_heart_rate_samples()
+
+    # -- handlers: ActivitySummary (standalone daily-goal row) -------------
 
     def _handle_activity_summary(self, attr: dict[str, str]) -> None:
         date_components = attr.get("dateComponents", "")
@@ -835,6 +868,8 @@ class _XmlImporter:
         self._stats.activity_summaries += 1
         if len(self._activities) >= _BATCH_SIZE:
             self._flush_activities()
+
+    # -- handlers: Correlation context (parent of nested child Records) ----
 
     def _handle_correlation_start(self, attr: dict[str, str]) -> None:
         self._in_correlation = True
