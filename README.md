@@ -150,6 +150,14 @@ uvx apple-health-mcp-server import /path/to/apple_health_export
 The import is idempotent — re-running it with a newer export merges
 the new rows into the existing database via the `import_id` column.
 
+Phase 1 (XML parse) emits a single-line progress entry every
+10 seconds (`INFO progress: xml NN% (X / Y MB, ~Z min remaining)`)
+so a streaming agent or human can confirm forward motion during a
+multi-minute parse. Tune the cadence via
+`APPLE_HEALTH_IMPORT_PROGRESS_SECS` (positive integer, clamped to
+1..600); set it to `60` for quiet runs or `1` for debugging. Exports
+smaller than 1 MB skip the emitter entirely.
+
 ### Database location
 
 By default the database lands at the XDG-resolved data directory:

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import chardet
 
 from apple_health_mcp.exceptions import HealthImportError
-from apple_health_mcp.importers._bulk import bulk_load_via_csv
+from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
 from apple_health_mcp.importers._hash import compute_hash
 from apple_health_mcp.importers._tz import normalize_apple_offset
 
@@ -283,9 +283,9 @@ def import_single_ecg(conn: duckdb.DuckDBPyConnection, path: Path, import_id: st
         samples.append((ecg_hash, sample_idx, voltage))
         sample_idx += 1
     # Per-file ECGs often carry several thousand voltage samples; route
-    # through bulk_load_via_csv (issue #41) for the same perf reason the
-    # XML importer does.
-    bulk_load_via_csv(conn, "ecg_samples", samples)
+    # through bulk_load_via_arrow (issues #41 / #50) for the same perf
+    # reason the XML importer does.
+    bulk_load_via_arrow(conn, "ecg_samples", samples)
 
 
 def import_ecg_files(conn: duckdb.DuckDBPyConnection, ecg_dir: Path, import_id: str) -> int:

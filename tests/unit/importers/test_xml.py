@@ -590,3 +590,154 @@ def test_import_xml_nested_record_in_workout_routes_metadata_to_record(
     assert row is not None and int(row[0]) == 1
     row = conn.execute("SELECT COUNT(*) FROM workout_metadata").fetchone()
     assert row is not None and int(row[0]) == 0
+
+
+# --- Issue #51: Phase-1 progress emitter --------------------------------------
+
+
+def test_resolve_progress_interval_defaults_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apple_health_mcp.importers.xml import (
+        _PROGRESS_INTERVAL_DEFAULT_SECS,
+        _resolve_progress_interval,
+    )
+
+    monkeypatch.delenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", raising=False)
+    assert _resolve_progress_interval() == _PROGRESS_INTERVAL_DEFAULT_SECS
+
+
+def test_resolve_progress_interval_empty_string_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apple_health_mcp.importers.xml import (
+        _PROGRESS_INTERVAL_DEFAULT_SECS,
+        _resolve_progress_interval,
+    )
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "")
+    assert _resolve_progress_interval() == _PROGRESS_INTERVAL_DEFAULT_SECS
+
+
+def test_resolve_progress_interval_respects_explicit_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apple_health_mcp.importers.xml import _resolve_progress_interval
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "30")
+    assert _resolve_progress_interval() == 30
+
+
+def test_resolve_progress_interval_clamps_too_low(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apple_health_mcp.importers.xml import (
+        _PROGRESS_INTERVAL_MIN_SECS,
+        _resolve_progress_interval,
+    )
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "0")
+    assert _resolve_progress_interval() == _PROGRESS_INTERVAL_MIN_SECS
+
+
+def test_resolve_progress_interval_clamps_too_high(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from apple_health_mcp.importers.xml import (
+        _PROGRESS_INTERVAL_MAX_SECS,
+        _resolve_progress_interval,
+    )
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "100000")
+    assert _resolve_progress_interval() == _PROGRESS_INTERVAL_MAX_SECS
+
+
+def test_resolve_progress_interval_non_integer_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A typo at the command line warns once and falls back to the default."""
+    from apple_health_mcp.importers.xml import (
+        _PROGRESS_INTERVAL_DEFAULT_SECS,
+        _resolve_progress_interval,
+    )
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "ten")
+    caplog.set_level("WARNING", logger="apple_health_mcp.importers.xml")
+    assert _resolve_progress_interval() == _PROGRESS_INTERVAL_DEFAULT_SECS
+    assert any("is not an integer" in r.message for r in caplog.records)
+
+
+def test_progress_emitter_fires_for_large_import(
+    conn: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Beyond the minimum-size gate, at least one progress line lands.
+
+    Construct an XML file > 1 MB so the gate trips, pin the cadence to
+    1 second (the clamped minimum) and stub ``time.monotonic`` so the
+    first event-loop iteration already exceeds the interval. One INFO
+    line of the documented shape must appear in caplog.
+    """
+    from apple_health_mcp.importers import xml as xml_module
+
+    monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "1")
+
+    # Stretch the body with filler Record elements until the file goes
+    # past the 1 MB gate.
+    filler_record = (
+        '<Record type="HKQuantityTypeIdentifierHeartRate" '
+        'sourceName="Apple Watch" unit="count/min" value="72" '
+        'startDate="2024-06-15 08:00:00 +0000" '
+        'endDate="2024-06-15 08:01:00 +0000"/>'
+    )
+    # Aim well above the minimum so wrapper overhead does not undershoot.
+    target_size = xml_module._PROGRESS_MIN_BYTES * 2
+    count = target_size // len(filler_record) + 1
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<HealthData locale="en_US">' + (filler_record * count) + "</HealthData>"
+    )
+    xml_path = tmp_path / "big.xml"
+    xml_path.write_text(body, encoding="utf-8")
+    assert xml_path.stat().st_size >= xml_module._PROGRESS_MIN_BYTES
+
+    # Stub monotonic so every iterparse event yields elapsed >= interval.
+    ticks = iter([0.0] + [10.0] * (count * 4))
+    monkeypatch.setattr(xml_module.time, "monotonic", lambda: next(ticks))
+
+    caplog.set_level("INFO", logger="apple_health_mcp.importers.xml")
+    import_xml(conn, xml_path, "imp_progress")
+    progress_lines = [r.message for r in caplog.records if r.message.startswith("progress: xml")]
+    assert progress_lines
+    # Shape contract: percent, MB consumed/total, ETA fragment.
+    sample = progress_lines[0]
+    assert "%" in sample
+    assert "MB" in sample
+    assert "min remaining" in sample or "ETA unknown" in sample
+
+
+def test_progress_emitter_suppressed_for_tiny_files(
+    conn: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sub-megabyte exports must emit zero progress lines.
+
+    The CI smoke fixture is sub-second; an emitted line would be noise.
+    """
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<HealthData locale="en_US">'
+        '<Record type="HKQuantityTypeIdentifierHeartRate" '
+        'sourceName="Apple Watch" unit="count/min" value="72" '
+        'startDate="2024-06-15 08:00:00 +0000" '
+        'endDate="2024-06-15 08:01:00 +0000"/>'
+        "</HealthData>"
+    )
+    xml_path = _write_xml(tmp_path, xml)
+    caplog.set_level("INFO", logger="apple_health_mcp.importers.xml")
+    import_xml(conn, xml_path, "imp_tiny")
+    assert not [r for r in caplog.records if r.message.startswith("progress: xml")]

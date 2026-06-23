@@ -32,6 +32,11 @@ dependencies = [
     # the obvious stdlib choice but DuckDB has not migrated; declare the
     # transitive dependency explicitly so a fresh `uv sync` succeeds.
     "pytz>=2024.1",
+    # PyArrow powers the importer bulk-load path (issue #50). A wheel
+    # adds ~30 MB to the install footprint; the module is imported only
+    # by the importer package so `serve` startup is unaffected. A unit
+    # test guards the import boundary.
+    "pyarrow>=18.0",
 ]
 
 [project.scripts]
@@ -97,7 +102,7 @@ packages = ["apple_health_mcp"]
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["duckdb", "chardet", "sqlglot", "sqlglot.expressions"]
+module = ["duckdb", "chardet", "sqlglot", "sqlglot.expressions", "pyarrow"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

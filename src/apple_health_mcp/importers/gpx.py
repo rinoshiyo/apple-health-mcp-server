@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
-from apple_health_mcp.importers._bulk import bulk_load_via_csv
+from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
 from apple_health_mcp.importers._hash import compute_hash
 
 if TYPE_CHECKING:
@@ -127,7 +127,7 @@ def import_single_gpx(
     except etree.XMLSyntaxError as exc:
         raise HealthImportError(f"unrecoverable GPX syntax error: {exc}") from exc
 
-    bulk_load_via_csv(conn, "route_points", rows)
+    bulk_load_via_arrow(conn, "route_points", rows)
     return len(rows)
 
 
