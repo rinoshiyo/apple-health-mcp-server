@@ -187,8 +187,8 @@ def test_deduplicate_extra_tables(conn: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO correlation_members VALUES
           ('c1','h1','imp1'),('c1','h1','imp1');
         INSERT INTO imports VALUES
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0),
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0);
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL),
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL);
         INSERT INTO export_metadata VALUES
           ('imp1','2024-01-01 06:00:00','ja_JP'),
           ('imp1','2024-01-01 06:00:00','ja_JP');

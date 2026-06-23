@@ -59,6 +59,7 @@ from lxml import etree
 
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
+from apple_health_mcp.importers._existing_hashes import ExistingHashes
 from apple_health_mcp.importers._hash import compute_hash
 from apple_health_mcp.importers._tz import (
     normalize_apple_offset,
@@ -212,10 +213,16 @@ class _XmlImporter:
         self,
         conn: duckdb.DuckDBPyConnection,
         import_id: str,
+        existing: ExistingHashes | None = None,
     ) -> None:
         self._conn = conn
         self._import_id = import_id
         self._stats = ImportStats()
+        # Tier 2 incremental re-import snapshot (issue #62). When non-None
+        # every per-element handler short-circuits on a hash hit BEFORE
+        # the row is staged for the Arrow flush buffer; when None the
+        # importer keeps the legacy full-insert behavior.
+        self._existing = existing
 
         # Batch buffers; each entry is a tuple matching the appender column
         # order declared in `_flush_*` helpers below.
@@ -247,6 +254,15 @@ class _XmlImporter:
         self._in_record = False
         self._current_record_hash: str | None = None
         self._current_hr_sample_idx = 0
+
+        # Tier 2 skip flags (issue #62). ``_skipping_record`` is set when the
+        # current Record's hash hit ``existing.records``; we keep ``_in_record``
+        # True so the SAX end event balances the stack, but route nested
+        # MetadataEntry / InstantaneousBeatsPerMinute / StateOfMind to no-op
+        # via the flag. ``_skipping_workout`` does the same job for Workout.
+        # Reset at the matching end event (Record / Workout).
+        self._skipping_record = False
+        self._skipping_workout = False
 
         # Per-StateOfMind-record staging. Populated only when the current
         # Record is a HKCategoryTypeIdentifierStateOfMind; flushed at the
@@ -419,6 +435,7 @@ class _XmlImporter:
         if tag == "Record":
             self._finalize_state_of_mind()
             self._in_record = False
+            self._skipping_record = False
             self._current_record_hash = None
         elif tag == "WorkoutRoute":
             self._finalize_workout_route()
@@ -518,6 +535,23 @@ class _XmlImporter:
             ]
         )
 
+        # Tier 2 incremental re-import: when the record_hash is already on
+        # disk, skip the row AND every nested child (metadata, instantaneous
+        # BPM, state-of-mind metadata). ``_in_record`` stays True so the
+        # SAX end event balances the stack; ``_current_record_hash = None``
+        # is what every nested handler keys off to short-circuit. The
+        # ``_skipping_record`` flag covers the one case None alone cannot:
+        # ``_handle_metadata_entry`` falls through to the ``_in_workout``
+        # branch when record_hash is None, which would mis-route the
+        # skipped record's metadata into ``workout_metadata``.
+        if self._existing is not None and record_hash in self._existing.records:
+            self._in_record = True
+            self._skipping_record = True
+            self._current_record_hash = None
+            self._current_state_of_mind = None
+            self._current_hr_sample_idx = 0
+            return
+
         self._records.append(
             (
                 record_hash,
@@ -536,6 +570,7 @@ class _XmlImporter:
         )
         self._stats.records += 1
         self._in_record = True
+        self._skipping_record = False
         self._current_record_hash = record_hash
         self._current_hr_sample_idx = 0
         if record_type == _STATE_OF_MIND_RECORD_TYPE:
@@ -560,7 +595,11 @@ class _XmlImporter:
         # top-level Record handler exactly so the join key matches (same
         # attribute read order, same string trimming) — keep this in lockstep
         # with :meth:`_handle_record`.
-        if self._current_correlation_hash is None:  # pragma: no cover - defensive
+        #
+        # ``_current_correlation_hash is None`` is reachable on the Tier 2
+        # skip path (issue #62): the parent Correlation hashed to an
+        # already-on-disk row, so every child linkage already exists too.
+        if self._current_correlation_hash is None:
             return
         record_type = attr.get("type", "")
         source_name = attr.get("sourceName", "")
@@ -579,6 +618,13 @@ class _XmlImporter:
             self._flush_correlation_members()
 
     def _handle_metadata_entry(self, attr: dict[str, str]) -> None:
+        # Tier 2 incremental skip (issue #62). When the enclosing Record /
+        # Workout was found in ``existing``, its metadata already exists on
+        # disk too -- a Record nested inside a Workout block would otherwise
+        # fall through to the ``_in_workout`` branch below and mis-route the
+        # skipped record's metadata into ``workout_metadata``.
+        if self._skipping_record or self._skipping_workout:
+            return
         key = attr.get("key", "")
         value = attr.get("value", "")
         # Inner-most context wins: a <Record> nested inside a <Workout>
@@ -613,7 +659,29 @@ class _XmlImporter:
         workout_hash = compute_hash(
             [activity_type, source_name, start_date, end_date, duration_str or ""]
         )
+        # ``_current_workout_hash`` stays populated even when the workout is
+        # skipped (Tier 2): the GPX importer relies on
+        # ``stats.workout_route_map`` to feed each route's ``point_hash``
+        # computation with the owning workout's hash. If we left the field
+        # ``None`` here the route map would still match the file_path but
+        # GPX would receive ``None`` and compute a different point_hash that
+        # would miss the existing-point set.
         self._current_workout_hash = workout_hash
+        self._current_workout_events.clear()
+        self._current_workout_stats.clear()
+        self._current_workout_metadata.clear()
+        self._current_workout_route = None
+        self._in_workout_route = False
+        if self._existing is not None and workout_hash in self._existing.workouts:
+            self._skipping_workout = True
+            # ``_finalize_workout`` bails on a None ``_current_workout`` so
+            # no workout / events / stats / metadata rows are committed; the
+            # WorkoutRoute child still updates ``workout_route_map`` because
+            # ``_finalize_workout_route`` always populates that map (the GPX
+            # importer needs it whether or not the workout is being skipped).
+            self._current_workout = None
+            return
+        self._skipping_workout = False
         self._current_workout = (
             workout_hash,
             activity_type,
@@ -631,14 +699,13 @@ class _XmlImporter:
             end_date,
             self._import_id,
         )
-        self._current_workout_events.clear()
-        self._current_workout_stats.clear()
-        self._current_workout_metadata.clear()
-        self._current_workout_route = None
-        self._in_workout_route = False
 
     def _handle_workout_event(self, attr: dict[str, str]) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
+            return
+        if self._skipping_workout:
+            # Tier 2 skip: the matching workout_events rows already exist
+            # on disk for this workout_hash.
             return
         self._current_workout_events.append(
             (
@@ -652,6 +719,8 @@ class _XmlImporter:
 
     def _handle_workout_stat(self, attr: dict[str, str]) -> None:
         if self._current_workout_hash is None:  # pragma: no cover - defensive
+            return
+        if self._skipping_workout:
             return
         self._current_workout_stats.append(
             (
@@ -716,9 +785,16 @@ class _XmlImporter:
             self._flush_heart_rate_samples()
 
     def _handle_activity_summary(self, attr: dict[str, str]) -> None:
+        date_components = attr.get("dateComponents", "")
+        if self._existing is not None and date_components in self._existing.activity_summaries:
+            # Tier 2 skip: activity_summaries is keyed by date_components,
+            # not a hash. The (PARTITION BY date_components) tie-break in
+            # ``_DEDUPLICATE_SQL`` is the legacy collapse rule we are
+            # replacing for this row.
+            return
         self._activities.append(
             (
-                attr.get("dateComponents", ""),
+                date_components,
                 _parse_opt_float(attr.get("activeEnergyBurned")),
                 _parse_opt_float(attr.get("activeEnergyBurnedGoal")),
                 attr.get("activeEnergyBurnedUnit"),
@@ -737,12 +813,20 @@ class _XmlImporter:
 
     def _handle_correlation_start(self, attr: dict[str, str]) -> None:
         self._in_correlation = True
-        self._stats.correlations += 1
         correlation_type = attr.get("type", "")
         source_name = attr.get("sourceName", "")
         start_date = _clean_date(attr.get("startDate", ""))
         end_date = _clean_date(attr.get("endDate", ""))
         correlation_hash = compute_hash([correlation_type, source_name, start_date, end_date])
+        # Tier 2 incremental skip (issue #62). When the correlation hash is
+        # already on disk, the correlation row AND every
+        # ``correlation_members`` linkage already exist; set
+        # ``_current_correlation_hash = None`` so the inner-Record handler
+        # (_handle_correlation_record) short-circuits on every child.
+        if self._existing is not None and correlation_hash in self._existing.correlations:
+            self._current_correlation_hash = None
+            return
+        self._stats.correlations += 1
         self._correlations.append(
             (
                 correlation_hash,
@@ -846,7 +930,14 @@ class _XmlImporter:
             return
         workout_hash = route["workout_hash"]
         assert isinstance(workout_hash, str)
+        # ``workout_route_map`` is consulted by ``import_gpx_files`` to feed
+        # each route's owning-workout hash into the GPX point_hash. We
+        # populate it even for skipped workouts (Tier 2): otherwise GPX
+        # would compute point_hashes with an empty workout component and
+        # miss the existing-point set, re-inserting every route point.
         self._stats.workout_route_map[file_path] = workout_hash
+        if self._skipping_workout:
+            return
         self._workout_routes.append(
             (
                 workout_hash,
@@ -870,6 +961,12 @@ class _XmlImporter:
         workout_hash = self._current_workout_hash
         self._current_workout_hash = None
         self._in_workout = False
+        skipping = self._skipping_workout
+        self._skipping_workout = False
+        if skipping:
+            # Tier 2 skip: every child handler already short-circuited so
+            # ``_current_workout_*`` is empty; just balance the bookkeeping.
+            return
         if workout is None or workout_hash is None:  # pragma: no cover - defensive
             return
         self._workouts.append(workout)
@@ -1043,7 +1140,13 @@ class _SaxTarget:
             ) from exc
 
 
-def import_xml(conn: duckdb.DuckDBPyConnection, xml_path: Path, import_id: str) -> ImportStats:
+def import_xml(
+    conn: duckdb.DuckDBPyConnection,
+    xml_path: Path,
+    import_id: str,
+    *,
+    existing: ExistingHashes | None = None,
+) -> ImportStats:
     """Parse Apple Health ``export.xml`` and bulk-load it into ``conn``.
 
     Streams through the file with ``lxml.etree.XMLParser(target=...)`` so
@@ -1052,6 +1155,13 @@ def import_xml(conn: duckdb.DuckDBPyConnection, xml_path: Path, import_id: str) 
     materialises an ``Element``, so the parser never accumulates the
     document tree. Returns an :class:`ImportStats` with row counts plus
     the route / offset lookup maps the GPX importer needs.
+
+    ``existing`` enables the Tier 2 incremental re-import path (issue #62):
+    every per-element handler checks the freshly-computed hash against the
+    snapshot before staging the row, so a re-import of an export whose
+    rows are already on disk contributes only the new rows. When ``None``
+    the importer behaves identically to v0.1.5 -- every parsed row is
+    staged for insert.
     """
-    importer = _XmlImporter(conn, import_id)
+    importer = _XmlImporter(conn, import_id, existing=existing)
     return importer.run(xml_path)

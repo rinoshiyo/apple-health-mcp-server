@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Incremental re-import via `export.xml` sha256 fast path and an
+  in-memory existing-hash snapshot (issue #62).** Re-importing the same
+  Apple Health export over an existing DB is now near-instant when
+  nothing has changed and orders of magnitude faster when only the
+  trailing few days differ:
+  - **Tier 1** stamps the sha256 of `export.xml` on every successful
+    import. When a subsequent import sees the most recent stamped row
+    match the incoming file byte-for-byte, the orchestrator logs
+    `Skipping import: export.xml is byte-identical ...` and exits in
+    roughly one disk-read of wall-clock without parsing the file or
+    touching the DB. `--force` on the `import` subcommand bypasses
+    the check (and also disables Tier 2 so the legacy full-insert +
+    Phase 4 dedup path runs unchanged).
+  - **Tier 2** loads every dedup-keyed hash currently on disk
+    (`record_hash`, `workout_hash`, `point_hash`, `ecg_hash`,
+    `correlation_hash`, and the `activity_summaries.date_components`
+    natural key) into Python sets at import start. Every XML / GPX /
+    ECG handler checks the freshly-computed hash against the set
+    BEFORE staging the row, so the new import contributes only
+    genuinely-new rows. Phase 4 dedup auto-skips because the bulk
+    staging buffers carry no duplicates -- this also avoids the
+    DuckDB MVCC tombstones that were ballooning the on-disk file by
+    ~120% on every re-import under the legacy path. A skipped Workout
+    still updates `stats.workout_route_map` so the GPX importer
+    computes point hashes with the correct workout component and
+    hits the existing-point set.
+  - Schema migration v1 → v2 adds `imports.export_xml_sha256`
+    (nullable). Existing rows backfill `NULL`; the sha256 fast path
+    filters `IS NOT NULL` so pre-#62 rows are simply skipped over
+    and the next import stamps a real hash. (#62)
+
 ### Changed
 
 - **Phase 4 dedup avoids the full-table rewrite (issue #60).** The

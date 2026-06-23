@@ -73,6 +73,16 @@ def import_cmd(
         ...,
         help="Path to the Apple Health extracted export directory.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Bypass the export.xml sha256 fast path and the incremental "
+            "hash-set skip; re-parse and re-insert every row, then run the "
+            "legacy Phase 4 dedup pass to collapse duplicates. Use when you "
+            "suspect on-disk drift that the incremental path would miss."
+        ),
+    ),
 ) -> None:
     """Import an Apple Health export into the local DuckDB database."""
     # Imported lazily so `apple-health-mcp-server serve` does not pay the
@@ -81,9 +91,9 @@ def import_cmd(
     from apple_health_mcp.importers import run_import
 
     db: Path | None = ctx.obj["db"]
-    _logger.info("import invoked: export=%s db=%s", export_path, db)
+    _logger.info("import invoked: export=%s db=%s force=%s", export_path, db, force)
     try:
-        stats = run_import(export_path, db)
+        stats = run_import(export_path, db, force=force)
     except AppleHealthMCPError as exc:
         _logger.error("import failed: %s", exc)
         raise typer.Exit(code=1) from exc

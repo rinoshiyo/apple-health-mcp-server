@@ -185,12 +185,17 @@ CREATE TABLE IF NOT EXISTS correlation_members (
 );
 
 CREATE TABLE IF NOT EXISTS imports (
-    import_id     VARCHAR,
-    export_dir    VARCHAR NOT NULL,
-    imported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    record_count  BIGINT,
-    workout_count BIGINT,
-    duration_secs DOUBLE
+    import_id          VARCHAR,
+    export_dir         VARCHAR NOT NULL,
+    imported_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    record_count       BIGINT,
+    workout_count      BIGINT,
+    duration_secs      DOUBLE,
+    -- Hex sha256 of the source export.xml. NULL on rows finalized before
+    -- the column was introduced (#62); a fresh import always stamps it so
+    -- the orchestrator can match a subsequent re-import against the most
+    -- recent stamped row and exit early when the file is byte-identical.
+    export_xml_sha256  VARCHAR
 );
 
 -- Captures the root <HealthData locale="..."> attribute and the
