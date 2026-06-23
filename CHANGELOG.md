@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster XML import on real exports (issue #56, minimal tier of #55).**
+  Four mechanical wins on the XML hot path with no architectural
+  rewrite and no new runtime dependency:
+  - `normalize_apple_offset` now takes a string-slice fast path for
+    Apple's two well-formed offset shapes (`" +HHMM"` and `" +HH:MM"`)
+    and falls back to the regex only for the legacy / malformed
+    inputs. py-spy attributed ~15% of Phase 1 (~24 s on a 1.2 GB
+    export) to the regex; the fast path skips it for the common case.
+  - `bulk_load_via_arrow` builds one `pa.array` per column and feeds
+    them to `Table.from_arrays`, skipping the intermediate `dict[str,
+    list]` `Table.from_pydict` materialised. Microbench: +11% build
+    throughput on a 100k-row records flush.
+  - The hot per-element handlers (`_handle_record`, the workout /
+    correlation / activity / metadata / BPM / route start handlers)
+    snapshot `elem.attrib` once instead of crossing the lxml C
+    boundary on every `elem.get(...)` call.
+  - The three high-volume tables (`records`, `record_metadata`,
+    `heart_rate_samples`) flush at 250 000 rows instead of 100 000,
+    saving DuckDB INSERT round-trip overhead. Peak Python RSS rises
+    by ~150 MB on the records run, well under the 1 GB budget.
+
 ## [0.1.5] - 2026-06-23
 
 ### Changed

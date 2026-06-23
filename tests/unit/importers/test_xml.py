@@ -450,16 +450,20 @@ def test_import_xml_batch_flush_thresholds_fire(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Lowering _BATCH_SIZE to 1 forces every flush branch to execute mid-parse.
+    """Lowering both batch thresholds to 1 forces every flush branch to fire mid-parse.
 
     The XML below exercises records, record_metadata, workouts, workout
     events / stats / metadata, workout routes, activities, heart-rate
     samples, correlations, and correlation members in the same document so
     every per-batch ``if len >= _BATCH_SIZE`` clause is taken at least once.
+    ``records`` / ``record_metadata`` / ``heart_rate_samples`` were
+    promoted to ``_BATCH_SIZE_HOT`` for #56 — patch both so the hot-table
+    flush branches still execute under the test.
     """
     from apple_health_mcp.importers import xml as xml_module
 
     monkeypatch.setattr(xml_module, "_BATCH_SIZE", 1)
+    monkeypatch.setattr(xml_module, "_BATCH_SIZE_HOT", 1)
 
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <HealthData locale="en_US">

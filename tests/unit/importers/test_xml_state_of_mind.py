@@ -174,10 +174,17 @@ def test_state_of_mind_batch_flush_threshold_fires(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mid-import batch flush of state_of_mind fires once _BATCH_SIZE is hit."""
+    """Mid-import batch flush of state_of_mind fires once _BATCH_SIZE is hit.
+
+    ``records`` / ``record_metadata`` / ``heart_rate_samples`` now look up
+    ``_BATCH_SIZE_HOT`` instead (issue #56); patch both so the upstream
+    record flush also fires mid-parse and the state_of_mind buffer sees
+    each record event in turn.
+    """
     from apple_health_mcp.importers import xml as xml_module
 
     monkeypatch.setattr(xml_module, "_BATCH_SIZE", 1)
+    monkeypatch.setattr(xml_module, "_BATCH_SIZE_HOT", 1)
     xml = """<?xml version="1.0" encoding="UTF-8"?>
 <HealthData locale="en_US">
  <Record type="HKCategoryTypeIdentifierStateOfMind" sourceName="iPhone"

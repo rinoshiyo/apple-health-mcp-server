@@ -283,10 +283,17 @@ def bulk_load_via_arrow(
             f"bulk_load_via_arrow: row arity {len(column_tuples)} does not match "
             f"the {table!r} schema arity {n_cols}"
         )
-    columns: dict[str, list[Any]] = {
-        field.name: list(col) for field, col in zip(schema, column_tuples, strict=True)
-    }
-    tbl = pa.Table.from_pydict(columns, schema=schema)
+    # ``array_per_col`` builds one ``pa.array`` per column and feeds them
+    # to ``Table.from_arrays`` instead of materialising the intermediate
+    # ``dict[str, list]`` ``Table.from_pydict`` would build. The
+    # microbench under ``tmp/perf-probe/arrow_microbench.py`` (issue #56)
+    # measures ~11% higher build throughput on a 100k-row records flush
+    # and skips the per-column ``list(...)`` copy that ``from_pydict``
+    # otherwise forces.
+    arrays = [
+        pa.array(col, type=field.type) for field, col in zip(schema, column_tuples, strict=True)
+    ]
+    tbl = pa.Table.from_arrays(arrays, schema=schema)
 
     # The importer runs single-threaded per process (the orchestrator
     # serialises XML → ECG → GPX → finalize), so a fixed registration

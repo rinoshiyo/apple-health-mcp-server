@@ -33,6 +33,23 @@ def normalize_apple_offset(raw: str) -> str:
     fields under a non-UTC session TZ should be aware that a later
     re-import under a different TZ would store a different instant.
     """
+    # Hot-path fast path (issue #56): py-spy attributed ~15% of Phase 1
+    # to the regex below on a 1.2 GB export (8M+ calls). The overwhelming
+    # majority of Apple-emitted timestamps fit one of two fixed shapes at
+    # the tail: " +HHMM" (space + 5 chars) or " +HH:MM" (space + 6 chars).
+    # Detecting them via index lookups skips the regex engine entirely
+    # for the common case and falls back to ``_OFFSET_TAIL_RE`` for
+    # anything else so the original behaviour (trailing whitespace,
+    # offset without leading space, etc.) stays intact.
+    n = len(raw)
+    if n >= 7 and raw[-7] == " " and raw[-6] in "+-" and raw[-3] == ":":
+        tail = raw[-6:]
+        if tail[1:3].isdigit() and tail[4:6].isdigit():
+            return raw[:-7] + tail
+    if n >= 6 and raw[-6] == " " and raw[-5] in "+-":
+        tail = raw[-5:]
+        if tail[1:3].isdigit() and tail[3:5].isdigit():
+            return raw[:-6] + tail[:3] + ":" + tail[3:]
     return _OFFSET_TAIL_RE.sub(r"\1\2:\3", raw)
 
 
