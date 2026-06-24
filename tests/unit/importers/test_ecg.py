@@ -11,8 +11,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from apple_health_mcp import ISSUES_URL
 from apple_health_mcp.db import ensure_schema, get_in_memory_connection
-from apple_health_mcp.exceptions import HealthImportError
+from apple_health_mcp.exceptions import HealthImportError, LocaleUnrecognisedError
 from apple_health_mcp.importers._tz import normalize_apple_offset
 from apple_health_mcp.importers.ecg import (
     _match_header,
@@ -21,6 +22,21 @@ from apple_health_mcp.importers.ecg import (
     import_ecg_files,
     import_single_ecg,
 )
+
+
+def _make_fresh_conn() -> duckdb.DuckDBPyConnection:
+    """A schema-applied in-memory connection that the caller must ``close``.
+
+    Same bootstrap as the ``conn`` fixture but suitable for tests that need
+    several independent connections inside one test body (e.g. cross-locale
+    equivalence checks where the same recorded_date + device would otherwise
+    collide on ``ecg_hash``). Keeping it next to the fixture means a future
+    bootstrap change updates both call sites.
+    """
+    c = get_in_memory_connection()
+    ensure_schema(c)
+    return c
+
 
 # A synthetic English-locale ECG export. Voltage samples are illustrative
 # (not from a real recording).
@@ -62,8 +78,7 @@ _JAPANESE_ECG_CSV = """名前,テスト ユーザー
 
 @pytest.fixture
 def conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
-    c = get_in_memory_connection()
-    ensure_schema(c)
+    c = _make_fresh_conn()
     yield c
     c.close()
 
@@ -188,8 +203,60 @@ def test_import_single_ecg_missing_date_raises(
 ) -> None:
     csv = "Name,Test\nClassification,Normal\n\n100\n200\n"
     path = _write_csv(tmp_path, "bad.csv", csv)
-    with pytest.raises(HealthImportError, match="no recorded date"):
+    # ``LocaleUnrecognisedError`` is a subclass of ``HealthImportError``;
+    # asserting on the subclass pins both the exception hierarchy (the
+    # batch importer rate-limits on the subclass) and the friendly text.
+    with pytest.raises(LocaleUnrecognisedError) as exc_info:
         import_single_ecg(conn, path, "imp_bad")
+    # The friendly message must surface (a) the underlying cause, (b) the
+    # locale coverage so the user knows whether to retry or report, and
+    # (c) the issues URL so reporting is one click away. Each of these
+    # has burned at least one user before, so the assertion pins them.
+    msg = str(exc_info.value)
+    assert "no recorded date" in msg
+    assert "locale" in msg
+    assert ISSUES_URL in msg
+
+
+def test_import_single_ecg_en_ja_voltages_equivalent(tmp_path: Path) -> None:
+    """Cross-locale equivalence: identical voltage payloads must land identically.
+
+    Pins the invariant that locale switching only affects header label
+    resolution, never sample parsing. If a future change accidentally
+    coupled parser logic to header locale (e.g. by reusing a locale-aware
+    float parser on the voltage column), this test would catch it.
+
+    Each import gets its own in-memory connection so the en and ja imports
+    do not collide on ``ecg_hash`` (recorded_date + device are identical by
+    design, since the point of the test is "same input → same output").
+    """
+    body = "\n100\n200\n-50\n150\n75\n"
+    en_csv = (
+        "Recorded Date,2024-06-15 10:30:00 +0000\n"
+        "Classification,Sinus Rhythm\n"
+        'Device,"Apple Watch"\n'
+        "Sample Rate,512.000 Hz\n"
+    ) + body
+    ja_csv = (
+        "記録日,2024-06-15 10:30:00 +0000\n"
+        "分類,Sinus Rhythm\n"
+        'デバイス,"Apple Watch"\n'
+        "サンプルレート,512.000 Hz\n"
+    ) + body
+
+    def _voltages_for(csv_body: str, label: str) -> list[float]:
+        c = _make_fresh_conn()
+        try:
+            import_single_ecg(c, _write_csv(tmp_path, f"{label}.csv", csv_body), label)
+            rows = c.execute("SELECT voltage_uv FROM ecg_samples ORDER BY sample_idx").fetchall()
+            return [float(r[0]) for r in rows]
+        finally:
+            c.close()
+
+    en_voltages = _voltages_for(en_csv, "imp_en")
+    ja_voltages = _voltages_for(ja_csv, "imp_ja")
+    assert en_voltages == [100.0, 200.0, -50.0, 150.0, 75.0]
+    assert ja_voltages == en_voltages
 
 
 def test_import_single_ecg_no_voltages_does_not_insert_samples(
@@ -275,6 +342,35 @@ def test_import_ecg_files_logs_and_continues_on_per_file_error(
     assert any("Failed to import ECG file" in rec.message for rec in caplog.records)
 
 
+def test_import_ecg_files_rate_limits_locale_help(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Multiple unrecognised-locale CSVs emit the full guidance only once.
+
+    Without the rate limit, a user with N ECG files in an unsupported
+    locale gets the same ~6-line guidance N times, drowning unrelated
+    warnings in the same import run. The dedup keeps the first one full
+    and the rest short.
+    """
+    d = tmp_path / "ecgs"
+    d.mkdir()
+    # Three files all missing a recognised Recorded Date header → each
+    # raises LocaleUnrecognisedError on its own.
+    for i in range(3):
+        (d / f"bad_{i}.csv").write_text(f"Name,Foo{i}\n", encoding="utf-8")
+
+    count = import_ecg_files(conn, d, "imp")
+    assert count == 0
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    full_help_lines = [r for r in warnings if ISSUES_URL in r.message]
+    short_lines = [
+        r for r in warnings if "locale not recognised" in r.message and ISSUES_URL not in r.message
+    ]
+    assert len(full_help_lines) == 1, "full guidance should appear exactly once"
+    assert len(short_lines) == 2, "remaining bad files should get the short line"
+
+
 def test_import_ecg_files_logs_oserror(
     conn: duckdb.DuckDBPyConnection,
     tmp_path: Path,
@@ -294,6 +390,34 @@ def test_import_ecg_files_logs_oserror(
     count = import_ecg_files(conn, d, "imp")
     assert count == 0
     assert any("Failed to read ECG file" in rec.message for rec in caplog.records)
+
+
+def test_import_ecg_files_logs_generic_health_import_error(
+    conn: duckdb.DuckDBPyConnection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Plain ``HealthImportError`` (not the locale subclass) hits the
+    catch-all branch — defensive against a future ECG-side raise that
+    isn't about locale (e.g. a malformed voltage section that someday
+    starts raising ``HealthImportError`` instead of silently skipping)."""
+    d = tmp_path / "ecgs"
+    d.mkdir()
+    (d / "boom.csv").write_text(_MINIMAL_ECG_CSV, encoding="utf-8")
+
+    from apple_health_mcp.importers import ecg as ecg_module
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise HealthImportError("structural defect, not a locale issue")
+
+    monkeypatch.setattr(ecg_module, "import_single_ecg", boom)
+    count = import_ecg_files(conn, d, "imp")
+    assert count == 0
+    assert any(
+        "Failed to import ECG file" in rec.message and "structural defect" in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_read_text_falls_back_when_chardet_returns_none(

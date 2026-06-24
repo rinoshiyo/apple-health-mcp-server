@@ -18,7 +18,8 @@ from typing import TYPE_CHECKING
 
 import chardet
 
-from apple_health_mcp.exceptions import HealthImportError
+from apple_health_mcp import ISSUES_URL
+from apple_health_mcp.exceptions import HealthImportError, LocaleUnrecognisedError
 from apple_health_mcp.importers._bulk_arrow import bulk_load_via_arrow
 from apple_health_mcp.importers._existing_hashes import ExistingHashes
 from apple_health_mcp.importers._hash import compute_hash
@@ -101,6 +102,18 @@ _UNIT_LABELS = (
     "单位",
     "單位",
     "단위",
+)
+
+# Human-readable locale names that mirror the ``_*_LABELS`` tuples above.
+# These two tuples are the single source of truth used to format both the
+# ``LocaleUnrecognisedError`` message and the README "Locales" sections;
+# anyone adding a new locale tuple entry must extend the appropriate one
+# of these two so the user-facing surfaces stay in sync.
+_VERIFIED_LOCALES: tuple[str, ...] = ("English", "Japanese")
+_BEST_EFFORT_LOCALES: tuple[str, ...] = (
+    "Chinese (Simplified)",
+    "Chinese (Traditional)",
+    "Korean",
 )
 
 
@@ -249,7 +262,23 @@ def import_single_ecg(
         break
 
     if recorded_date == "":
-        raise HealthImportError(f"no recorded date found in ECG file: {path}")
+        # No "Recorded Date" header label matched. Most common cause is an
+        # Apple Watch set to a locale whose header labels are not in our
+        # lookup tables (see ``_RECORDED_DATE_LABELS`` etc. at the top of
+        # this module). Surface the locale coverage explicitly and point the
+        # user at a one-action remediation path so a silent skip turns into
+        # a 30-second issue report. The locale lists are derived from the
+        # module-level ``_VERIFIED_LOCALES`` / ``_BEST_EFFORT_LOCALES``
+        # tuples so a future locale-tuple addition cannot leave this
+        # message stale.
+        raise LocaleUnrecognisedError(
+            f"no recorded date found in ECG file: {path}. "
+            f"This usually means the CSV header labels are in a locale we do "
+            f"not yet recognise (verified: {', '.join(_VERIFIED_LOCALES)}; "
+            f"best-effort: {', '.join(_BEST_EFFORT_LOCALES)}). "
+            f"Please file an issue at {ISSUES_URL} "
+            f"and paste the first 10 lines of the CSV so we can add your locale."
+        )
 
     ecg_hash = compute_hash([recorded_date, device or ""])
 
@@ -335,9 +364,25 @@ def import_ecg_files(
     entries = sorted(p for p in ecg_dir.iterdir() if p.suffix.lower() == ".csv")
     count = 0
     skipped = 0
+    # Rate-limit the verbose locale-coverage guidance to one full emission
+    # per import run. Without this, a user with N ECG files in an
+    # unrecognised locale gets N copies of the same ~6-line guidance,
+    # drowning unrelated warnings (XML / GPX) in the same import run.
+    locale_help_shown = False
     for path in entries:
         try:
             inserted = import_single_ecg(conn, path, import_id, existing=existing)
+        except LocaleUnrecognisedError as exc:
+            if not locale_help_shown:
+                _logger.warning("Failed to import ECG file %s: %s", path, exc)
+                locale_help_shown = True
+            else:
+                _logger.warning(
+                    "Failed to import ECG file %s: locale not recognised "
+                    "(see earlier warning for the full guidance and "
+                    "issue-tracker URL).",
+                    path,
+                )
         except HealthImportError as exc:
             _logger.warning("Failed to import ECG file %s: %s", path, exc)
         except OSError as exc:

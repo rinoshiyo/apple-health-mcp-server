@@ -21,6 +21,8 @@ from decimal import Decimal
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
+from apple_health_mcp import REPO_URL
+
 if TYPE_CHECKING:
     import duckdb
 
@@ -37,7 +39,7 @@ IMPORT_REQUIRED_MESSAGE = (
     "Error: No Apple Health data has been imported yet. "
     "Run `apple-health-mcp-server import <export-dir>` to ingest your "
     "export, then restart this MCP server. "
-    "See https://github.com/rinoshiyo/apple-health-mcp-server#usage for details."
+    f"See {REPO_URL}#usage for details."
 )
 
 
