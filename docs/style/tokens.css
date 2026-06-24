@@ -1,0 +1,153 @@
+/* ============================================================
+   Design Tokens — apple-health-mcp-server LP
+   全セクションでこの変数だけを参照する (literal value 直書き禁止)
+   ============================================================ */
+
+:root {
+  /* ---------- Color: Brand (CTA gradient ベース) ---------- */
+  --primary-from: #16a34a;        /* green-600  */
+  --primary-via:  #10b981;        /* emerald-500 */
+  --primary-to:   #06b6d4;        /* cyan-500   */
+  --primary-solid: #10b981;       /* secondary link / fallback */
+
+  --primary-hover-from: #15803d;  /* green-700  */
+  --primary-hover-via:  #059669;  /* emerald-600 */
+  --primary-hover-to:   #0891b2;  /* cyan-600   */
+  --primary-hover-solid: #059669;
+
+  --gradient-primary:
+    linear-gradient(120deg,
+      var(--primary-from) 0%,
+      var(--primary-via) 45%,
+      var(--primary-to) 100%);
+  --gradient-primary-hover:
+    linear-gradient(120deg,
+      var(--primary-hover-from) 0%,
+      var(--primary-hover-via) 45%,
+      var(--primary-hover-to) 100%);
+
+  /* 主見出し phrase の text-fill 用 gradient */
+  --gradient-text-accent:
+    linear-gradient(120deg, #16a34a 0%, #10b981 45%, #06b6d4 100%);
+
+  /* ---------- Color: Health (赤系、 意味性のあるアクセント) ---------- */
+  --health-red: #fa2c54;
+  --health-red-bg: rgba(250, 44, 84, 0.12);
+  --health-red-underline: rgba(250, 44, 84, 0.18);
+
+  /* ---------- Color: Neutral (Apple HIG 系) ---------- */
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --hairline: #d2d2d7;
+  --divider: #f0f0f2;
+  --bg: #fbfbfd;
+  --card: #ffffff;
+
+  /* ---------- Color: Code block (Tailwind 系 syntax) ---------- */
+  --code-bg: #0f172a;     /* slate-900 */
+  --code-ink: #e2e8f0;    /* slate-200 */
+  --code-mute: #64748b;   /* slate-500 */
+  --code-green: #16a34a;
+  --code-cyan: #06b6d4;
+  --code-amber: #f59e0b;
+
+  /* ---------- Color: Background blur (decorative) ---------- */
+  --blur-green: rgba(22, 163, 74, 0.16);
+  --blur-cyan:  rgba(6, 182, 212, 0.14);
+
+  /* ============================================================
+     Typography
+     ============================================================ */
+
+  --font-jp:   "Noto Sans JP", "Plus Jakarta Sans",
+               -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-en:   "Plus Jakarta Sans", "Noto Sans JP",
+               -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono",
+               ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* fluid size scale (clamp ベース) */
+  --fs-display:  clamp(48px, 6.4vw, 88px);
+  --fs-h2:       clamp(28px, 3.4vw, 48px);
+  --fs-h3:       clamp(20px, 2vw, 24px);
+  --fs-body-lg:  clamp(16px, 1.4vw, 19px);
+  --fs-body:     16px;
+  --fs-caption:  14px;
+  --fs-micro:    12px;
+
+  --lh-tight: 1.06;
+  --lh-snug:  1.3;
+  --lh-body:  1.7;
+
+  --ls-tight: -0.035em;
+  --ls-normal: 0.005em;
+  --ls-loose: 0.08em;
+
+  /* ============================================================
+     Spacing scale
+     ============================================================ */
+
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --sp-18: 72px;
+  --sp-24: 96px;
+  --sp-32: 128px;
+
+  /* Minimum tap target size per Apple HIG (used on mobile tab controls). */
+  --touch-target-min: 44px;
+
+  /* ============================================================
+     Radius
+     ============================================================ */
+
+  --r-sm: 8px;     /* metric icons */
+  --r-md: 12px;    /* CTA, install code */
+  --r-lg: 24px;    /* Claude card */
+  --r-xl: 32px;    /* Health card (iPhone-ish) */
+  --r-pill: 999px; /* status dots / pills */
+
+  /* ============================================================
+     Shadow
+     ============================================================ */
+
+  --shadow-sm:
+    0 1px 3px rgba(0,0,0,0.06),
+    0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:
+    0 6px 16px -6px rgba(0,0,0,0.10);
+  --shadow-lg:
+    0 24px 60px -24px rgba(0,0,0,0.18),
+    0 8px 24px -8px rgba(0,0,0,0.08);
+
+  /* CTA 専用 (gradient ボタンに合わせた emerald 系 rgba) */
+  --shadow-cta-primary:
+    0 6px 16px -6px rgba(16, 185, 129, 0.35);
+  --shadow-cta-primary-hover:
+    0 12px 28px -8px rgba(16, 185, 129, 0.45);
+
+  /* Code block 専用 */
+  --shadow-code:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 60px -24px rgba(15, 23, 42, 0.30),
+    0 8px 20px -8px rgba(15, 23, 42, 0.18);
+
+  /* ============================================================
+     Motion
+     ============================================================ */
+
+  --ease-spring:  cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out:     cubic-bezier(0.22, 0.61, 0.36, 1);
+  --d-fast: 160ms;
+  --d-med:  240ms;
+  --d-slow: 700ms;
+  /* Hero scenario rotator fade in/out (one-way duration). */
+  --d-rotate-fade: 400ms;
+  /* Hero scenario hold time between rotations. */
+  --d-rotate-hold: 6000ms;
+}

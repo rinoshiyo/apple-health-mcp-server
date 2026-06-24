@@ -1,0 +1,200 @@
+{
+  "lang": "en",
+  "title": "apple-health-mcp-server — Make Claude your personal health AI.",
+  "nav": {
+    "overview": "Overview",
+    "export": "Export",
+    "install": "Install",
+    "tools": "Tools",
+    "github": "GitHub"
+  },
+  "lang_toggle": "日本語",
+  "hero": {
+    "headline_html": "Make Claude your<br><span class=\"accent\">personal health AI</span>.",
+    "deck_html": "A <strong>local-first</strong> MCP server that hands your full Apple Health export to Claude.<br>Your runs, your sleep, your trends —<br>like a trainer or coach, only for you."
+  },
+  "card": {
+    "summary": "Summary",
+    "summary_day": "Today · Tuesday",
+    "metric_heart": "Heart Rate",
+    "metric_heart_value": "62",
+    "metric_heart_unit": "bpm",
+    "metric_walk": "Steps",
+    "metric_walk_value": "8,432",
+    "metric_walk_unit": "steps",
+    "metric_sleep": "Sleep",
+    "metric_sleep_value": "7h 14m",
+    "metric_flame": "Active",
+    "metric_flame_value": "412",
+    "metric_flame_unit": "kcal",
+    "hrv_label": "HRV (7d)",
+    "hrv_value": "48 ms"
+  },
+  "claude": {
+    "name": "Claude",
+    "time": "just now",
+    "body_html": "<p>Your runs last week totaled <span class=\"hi\">32.4 km</span>, average pace 5'38\"/km. HRV dropped 9 ms the day after your long run — suggest an easy run or rest today.</p><p style=\"color: var(--muted); font-size: 12.5px;\">Sleep depth also -22% that day — recovery priority.</p>",
+    "meta": "Local DuckDB · 17 tools · no cloud upload"
+  },
+  "cta": {
+    "primary": "Quick start",
+    "secondary": ".mcpb for Claude Desktop"
+  },
+  "connector": {
+    "src": "MCP",
+    "dst": "Local"
+  },
+
+  "why": {
+    "eyebrow": "Why this exists",
+    "title": "Your full Apple Health export, given to Claude — locally.",
+    "deck": "An MCP server for the health data you'd rather not hand to a cloud — analyzed entirely on your own laptop.",
+    "card1_title": "Local-first",
+    "card1_body": "Not a byte leaves your laptop. Everything stays in your local DuckDB.",
+    "card2_title": "Full export",
+    "card2_body": "export.xml + ECG CSV + GPX routes — every artefact Apple Health writes out.",
+    "card3_title": "17 MCP tools",
+    "card3_body": "A broad, read-oriented query surface. Workouts, heart rate, sleep, ECG, State of Mind.",
+    "card4_title": "Three Claude environments",
+    "card4_body": "Claude Code / Claude Desktop / Codex CLI — same data, any entry point."
+  },
+
+  "usecases": {
+    "eyebrow": "What you can do",
+    "title": "Ask your own data anything.",
+    "deck": "Just prompt Claude. It picks the right tools on its own.",
+    "card1_q": "Map yesterday's run, color-coded by heart rate.",
+    "card1_a_html": "Pulled GPX points with <code>get_workout_route()</code> and time-aligned HR with <code>get_heart_rate_samples()</code> &mdash; generated an HTML map colored by HR zone.",
+    "card1_meta": "workout · heart rate · route",
+    "card2_q": "What should today's training look like?",
+    "card2_a_html": "Checked sleep, HRV, and resting HR over the past 7 days. HRV hasn't recovered from the long run yet &mdash; recommend <span class=\"hi\">easy run or rest</span> today.",
+    "card2_meta": "sleep · HRV · resting HR",
+    "card3_q": "Notice anything in my long-term data?",
+    "card3_a_html": "VO2Max shows a clear seasonal dip in winter, recovers in spring. Body weight tends to spike +1.2 kg after long holidays. Sleep duration is &plus;42 min only on weekends.",
+    "card3_meta": "long-term trends · seasonality"
+  },
+
+  "export": {
+    "eyebrow": "Export your data first",
+    "title": "Export your Health data first.",
+    "deck": "From the iPhone Health app, export everything as a single archive and transfer it to your Mac / PC. Takes a few minutes.",
+    "step1": "Open the Health app on iPhone",
+    "step2": "Tap your profile picture (top-right)",
+    "step3": "Tap \"Export All Health Data\"",
+    "step4": "Wait a few minutes (5-15 min for several GB)",
+    "step5": "Send to your Mac / PC via AirDrop or cloud, then unzip the archive",
+    "note_html": "Unzipping gives you an <code>apple_health_export/</code> folder &mdash; <code>export.xml</code> plus the ECG CSVs and GPX routes. Hand the whole folder to the import command."
+  },
+
+  "install": {
+    "eyebrow": "Install",
+    "title": "Three environments, same data.",
+    "deck": "Claude Code / Claude Desktop / Codex CLI — a few steps each.",
+    "tab_uvx": "uvx (shared)",
+    "tab_code": "Claude Code",
+    "tab_desktop": "Claude Desktop",
+    "tab_codex": "Codex CLI",
+    "uvx_title": "Prereq: install uv",
+    "uvx_step1": "1. Install uv via the official installer",
+    "uvx_step2": "2. Import the unzipped Apple Health export directory",
+    "uvx_step3": "3. Serve as an MCP server",
+    "uvx_note": "<code>~/apple_health_export</code> is the folder containing <code>export.xml</code>, ECG CSVs, and GPX files. Re-import is idempotent &mdash; duplicates are auto-dedup'd.",
+    "code_title": "Claude Code (CLI)",
+    "code_body": "Add to <code>mcpServers</code> in <code>~/.claude.json</code>.",
+    "code_note": "Append <code>@latest</code> to re-resolve the newest version on every serve. See README \"Updating\" for details.",
+    "desktop_title": "Claude Desktop (.mcpb bundle)",
+    "desktop_step1": "1. Download <code>apple-health-mcp-server-v0.2.0.mcpb</code> from GitHub Releases",
+    "desktop_step2": "2. Drag & drop the <code>.mcpb</code> onto Claude Desktop &rarr; Settings &rarr; Extensions",
+    "desktop_step3": "3. Run the import command in your terminal once (point it at your export.xml folder)",
+    "desktop_note": "Claude Desktop is not available on Linux &mdash; use Claude Code or Codex CLI instead.",
+    "codex_title": "Codex CLI",
+    "codex_body": "Register as an MCP server in <code>~/.codex/config.toml</code>."
+  },
+
+  "tools": {
+    "eyebrow": "17 tools",
+    "title": "A read-oriented, broad query surface.",
+    "deck": "Tools modeled on the Apple Health schema. Claude composes queries; your local DuckDB answers.",
+    "g1_title": "Records / Statistics",
+    "g1_desc": "Generic record lookup and aggregations.",
+    "t_query_records": "Fetch any HKQuantity / HKCategory record by type and time range.",
+    "t_get_record_statistics": "Per-type sum / avg / min / max aggregations.",
+    "t_list_record_types": "List every record type present after import.",
+    "t_list_state_of_mind": "Enumerate State of Mind entries (iOS 17+).",
+    "g2_title": "Workouts",
+    "g2_desc": "Workout listing, detail, route.",
+    "t_list_workouts": "List workouts filtered by date and type.",
+    "t_get_workout_details": "Full metadata and stats for a single workout.",
+    "t_get_workout_route": "GPX route points with timestamps (joinable to HR samples).",
+    "g3_title": "ECG",
+    "g3_desc": "Apple Watch ECG waveforms and classifications.",
+    "t_list_ecg_readings": "List ECG readings by date (with classification and symptoms).",
+    "t_get_ecg_data": "Raw waveform samples for a single ECG reading.",
+    "g4_title": "Heart rate",
+    "g4_desc": "Heart rate samples.",
+    "t_get_heart_rate_samples": "Heart rate sample series over a range (align to a workout for map sourcing).",
+    "g5_title": "Correlations",
+    "g5_desc": "Correlated records such as blood pressure.",
+    "t_list_correlations": "List correlations (e.g. blood pressure) by date.",
+    "t_get_correlation_details": "A single correlation and its child records' real values.",
+    "g6_title": "Activity summary",
+    "g6_desc": "Daily Move / Exercise / Stand rings.",
+    "t_get_activity_summaries": "Daily activity ring summaries.",
+    "g7_title": "Metadata",
+    "g7_desc": "DB-wide metadata and your own attributes.",
+    "t_get_import_history": "Past import runs and row counts.",
+    "t_list_data_sources": "List data sources (Apple Watch / iPhone / connected apps).",
+    "t_get_me_attributes": "Your own attributes — birthdate, biological sex, blood type, handedness.",
+    "g8_title": "Custom query",
+    "g8_desc": "Direct DuckDB query (read-only).",
+    "t_run_custom_query": "Run an arbitrary SELECT (writes are rejected at the parser level)."
+  },
+
+  "privacy": {
+    "eyebrow": "Privacy",
+    "title": "Not a byte leaves your laptop.",
+    "deck": "Starting from the Apple Health export, every step happens on your own machine.",
+    "flow_src": "Apple Health export",
+    "flow_db": "Local DuckDB",
+    "flow_mcp": "MCP server",
+    "flow_claude": "Claude (on your machine)",
+    "point1_title": "Where it lives",
+    "point1_body": "<code>~/.local/share/apple-health-mcp/data.duckdb</code> (XDG_DATA_HOME compliant). One file — easy to back up, easy to delete.",
+    "point2_title": "No upload path",
+    "point2_body": "There is no code path that ships your health data anywhere. The only network access is <code>uvx</code> resolving server updates.",
+    "point3_title": "100% open source",
+    "point3_body": "MIT licensed. Every line on GitHub, fully auditable."
+  },
+
+  "faq": {
+    "eyebrow": "FAQ",
+    "title": "Frequently asked",
+    "q1": "Claude Desktop doesn't run on Linux — what should I use?",
+    "a1": "Use Claude Code (CLI) or Codex CLI. Both speak MCP and give you the same capabilities.",
+    "q2": "What is <code>uv</code>? Do I need to install it?",
+    "a2": "uv is a Python package runner / installer (official: <a href=\"https://docs.astral.sh/uv/\" rel=\"noopener\">astral.sh/uv</a>). <code>uvx</code> lets you run this server with a single command, so it's the recommended path.",
+    "q3": "Can I use this without an Apple Watch?",
+    "a3": "Yes. iPhone alone gives you steps, sleep, weight, nutrition and more — plenty to work with. Only a few ECG / HR-specific tools will return empty.",
+    "q4": "Where is the data stored?",
+    "a4": "<code>~/.local/share/apple-health-mcp/data.duckdb</code> (XDG_DATA_HOME compliant). Delete the file and all data is gone.",
+    "q5": "What happens if I re-import the same export?",
+    "a5": "Idempotent. Duplicate rows are deduped by content hash, so re-running yields the same DB."
+  },
+
+  "footer": {
+    "tagline": "Make Claude your personal health AI &mdash; locally.",
+    "col_resources": "Resources",
+    "link_readme": "README",
+    "link_changelog": "CHANGELOG",
+    "link_contributing": "Contributing",
+    "col_project": "Project",
+    "link_github": "GitHub repo",
+    "link_issues": "Issues",
+    "link_releases": "Releases",
+    "col_legal": "License & author",
+    "license": "MIT License",
+    "author": "Author: rinoshiyo",
+    "version": "",
+    "copyright": "© 2026 rinoshiyo · Made with care for the local-first AI movement."
+  }
+}

@@ -1,0 +1,200 @@
+{
+  "lang": "ja",
+  "title": "apple-health-mcp-server — Claude を、自分専属のヘルス AI に。",
+  "nav": {
+    "overview": "概要",
+    "export": "エクスポート",
+    "install": "インストール",
+    "tools": "ツール",
+    "github": "GitHub"
+  },
+  "lang_toggle": "English",
+  "hero": {
+    "headline_html": "Claude を、<br><span class=\"accent\">自分専属のヘルス AI</span> に。",
+    "deck_html": "Apple ヘルスケアのフルデータを<strong>ローカル</strong>で Claude に渡せる MCP サーバーです。<br>走った記録も、 眠った夜も、 ふだんの傾向も、<br>トレーナーやコーチのように、 あなただけの相談相手になります。"
+  },
+  "card": {
+    "summary": "サマリー",
+    "summary_day": "今日 · 火曜日",
+    "metric_heart": "心拍数",
+    "metric_heart_value": "62",
+    "metric_heart_unit": "bpm",
+    "metric_walk": "歩数",
+    "metric_walk_value": "8,432",
+    "metric_walk_unit": "歩",
+    "metric_sleep": "睡眠",
+    "metric_sleep_value": "7時間14分",
+    "metric_flame": "アクティブ",
+    "metric_flame_value": "412",
+    "metric_flame_unit": "kcal",
+    "hrv_label": "HRV (7日)",
+    "hrv_value": "48 ms"
+  },
+  "claude": {
+    "name": "Claude",
+    "time": "just now",
+    "body_html": "<p>先週のランは合計 <span class=\"hi\">32.4 km</span>、 平均ペースは 5'38\"/km でした。 一昨日のロング走の翌日に HRV が 9 ms 落ちているので、 今日は easy run か rest がおすすめです。</p><p style=\"color: var(--muted); font-size: 12.5px;\">睡眠の深さも同じ日に -22% &mdash; 回復を優先しましょう。</p>",
+    "meta": "Local DuckDB · 17 tools · no cloud upload"
+  },
+  "cta": {
+    "primary": "クイックスタート",
+    "secondary": "Claude Desktop 用 .mcpb"
+  },
+  "connector": {
+    "src": "MCP",
+    "dst": "Local"
+  },
+
+  "why": {
+    "eyebrow": "なぜ作ったか",
+    "title": "Apple ヘルスケアのフルデータを、ローカルで Claude に。",
+    "deck": "クラウドに預けたくない健康データを、 自分のラップトップの中だけで AI に解析させるための MCP サーバーです。",
+    "card1_title": "ローカル完結",
+    "card1_body": "クラウドには 1 バイトも送りません。 データはあなたのコンピュータの外には出ません。",
+    "card2_title": "フルデータ対応",
+    "card2_body": "export.xml はもちろん、 ECG の CSV やワークアウトの GPX ルートも、 まとめて取り込みます。",
+    "card3_title": "17 個の MCP ツール",
+    "card3_body": "ワークアウトから心拍、 睡眠、 ECG、 State of Mind まで、 自分のデータに幅広く尋ねられます。",
+    "card4_title": "Claude 三環境対応",
+    "card4_body": "Claude Code でも Claude Desktop でも Codex CLI でも、 同じデータをそのまま使えます。"
+  },
+
+  "usecases": {
+    "eyebrow": "使い道",
+    "title": "「自分のデータで質問できる」 ということ。",
+    "deck": "Claude にプロンプトを投げるだけ。 必要なツールは Claude が自分で選びます。",
+    "card1_q": "昨日のラン、 心拍数で色分け地図にして",
+    "card1_a_html": "走ったルートの GPX のポイントと、 その瞬間の心拍を重ね合わせて、 HR ゾーン別に色分けした HTML 地図を生成しました。",
+    "card1_meta": "workout · heart rate · route",
+    "card2_q": "今日のトレーニング、 どうしたらいい?",
+    "card2_a_html": "直近 7 日の睡眠、 HRV、 安静時心拍を確認しました。 一昨日のロング走から HRV が回復しきっていないので、 今日は <span class=\"hi\">easy run か rest</span> をおすすめします。",
+    "card2_meta": "sleep · HRV · resting HR",
+    "card3_q": "過去のデータから何か気付くことある?",
+    "card3_a_html": "VO2Max は冬に下がって春に戻る季節性がはっきり出ています。 体重は連休明けに +1.2 kg ほど上振れする傾向があります。 睡眠時間は週末だけ &plus;42 分です。",
+    "card3_meta": "long-term trends · seasonality"
+  },
+
+  "export": {
+    "eyebrow": "データのエクスポート",
+    "title": "ヘルスケアのデータを、 まず書き出す。",
+    "deck": "iPhone のヘルスケアアプリでデータをまとめて書き出し、 Mac / PC に転送します。 数分の作業です。",
+    "step1": "iPhone のヘルスケアアプリを開く",
+    "step2": "右上のプロフィール画像をタップ",
+    "step3": "「すべてのヘルスケアデータを書き出す」 をタップ",
+    "step4": "数分待つ (データ量による、 数 GB なら 5-15 分)",
+    "step5": "AirDrop / クラウド経由で Mac / PC に転送、 zip を解凍",
+    "note_html": "解凍すると <code>apple_health_export/</code> ができます。 中身は <code>export.xml</code> と、 ECG の CSV、 ワークアウトの GPX ルートです。 次の import コマンドには、 このフォルダごと渡してください。"
+  },
+
+  "install": {
+    "eyebrow": "インストール",
+    "title": "3 つの環境、 同じデータ。",
+    "deck": "Claude Code / Claude Desktop / Codex CLI — いずれも数ステップで終わります。",
+    "tab_uvx": "uvx (共通)",
+    "tab_code": "Claude Code",
+    "tab_desktop": "Claude Desktop",
+    "tab_codex": "Codex CLI",
+    "uvx_title": "前提: uv を入れる",
+    "uvx_step1": "1. uv 公式インストーラで uv を導入",
+    "uvx_step2": "2. Apple ヘルスケア export を解凍したディレクトリを import",
+    "uvx_step3": "3. MCP サーバとして serve",
+    "uvx_note": "<code>~/apple_health_export</code> は <code>export.xml</code> や ECG CSV、 GPX を含むフォルダです。 何度インポートしても重複は自動的にまとめられるので、 気にせず実行できます。",
+    "code_title": "Claude Code (CLI)",
+    "code_body": "<code>~/.claude.json</code> の <code>mcpServers</code> に追加してください。",
+    "code_note": "<code>@latest</code> を付けると、 serve を起動するたびに最新版が解決されます。 詳しくは README の「Updating」 をご覧ください。",
+    "desktop_title": "Claude Desktop (.mcpb bundle)",
+    "desktop_step1": "1. GitHub Releases から <code>apple-health-mcp-server-v0.2.0.mcpb</code> をダウンロード",
+    "desktop_step2": "2. Claude Desktop の設定 &rarr; Extensions に <code>.mcpb</code> をドラッグ&ドロップ",
+    "desktop_step3": "3. 初回のみ import コマンドだけはターミナルで実行 (export.xml の場所を指定)",
+    "desktop_note": "Linux では Claude Desktop が提供されていないため、 Claude Code または Codex CLI をお使いください。",
+    "codex_title": "Codex CLI",
+    "codex_body": "<code>~/.codex/config.toml</code> に MCP サーバーとして登録します。"
+  },
+
+  "tools": {
+    "eyebrow": "17 個のツール",
+    "title": "読み取り中心の、 幅広いクエリ。",
+    "deck": "Claude が自分で選んで使う、 Apple ヘルスケア向けのツールです。 クエリの組み立てからローカルでの応答まで、 すべてあなたのコンピュータの中で完結します。",
+    "g1_title": "Records / Statistics",
+    "g1_desc": "任意の期間で記録を絞り込んだり、 合計や平均をまとめて確認したりできます。",
+    "t_query_records": "型と期間を指定して、 任意の HKQuantity / HKCategory レコードを取り出します。",
+    "t_get_record_statistics": "型ごとに sum / avg / min / max といった集計をまとめて確認できます。",
+    "t_list_record_types": "インポート済みのレコード型をひと目で見渡せます。",
+    "t_list_state_of_mind": "State of Mind (iOS 17+) の記録を時系列で見られます。",
+    "g2_title": "Workouts",
+    "g2_desc": "ワークアウトの一覧から、 個別の詳細、 走ったルートまでたどれます。",
+    "t_list_workouts": "ワークアウトを期間や種別で絞り込んで眺められます。",
+    "t_get_workout_details": "1 件のワークアウトの全メタデータと統計をまとめて見られます。",
+    "t_get_workout_route": "GPX ルートのポイントを timestamp 付きで取り出し、 心拍などと時刻を合わせられます。",
+    "g3_title": "ECG",
+    "g3_desc": "Apple Watch が記録した心電図の波形と、 その分類を確認できます。",
+    "t_list_ecg_readings": "ECG の記録を期間で見られます。 分類と症状も一緒に並びます。",
+    "t_get_ecg_data": "1 回分の ECG 波形サンプル列を取り出します。",
+    "g4_title": "Heart rate",
+    "g4_desc": "心拍のサンプルを必要なだけ取り出せます。",
+    "t_get_heart_rate_samples": "期間内の心拍サンプルを取り出します。 ワークアウトの時刻と重ねれば、 地図上に描画するデータとしても使えます。",
+    "g5_title": "Correlations",
+    "g5_desc": "血圧などの相関レコードを、 親子セットで参照できます。",
+    "t_list_correlations": "血圧などの相関レコードを期間で見られます。",
+    "t_get_correlation_details": "1 件の相関と、 その子レコードの実値をまとめて取り出します。",
+    "g6_title": "Activity summary",
+    "g6_desc": "日次の Move / Exercise / Stand リングをそのまま読めます。",
+    "t_get_activity_summaries": "アクティビティリングの日次サマリーを取り出します。",
+    "g7_title": "Metadata",
+    "g7_desc": "DB 全体のメタデータと、 自分自身の属性を確認できます。",
+    "t_get_import_history": "過去のインポート実行履歴と件数を振り返れます。",
+    "t_list_data_sources": "データソース (Apple Watch / iPhone / 連携アプリ) を一覧で確認できます。",
+    "t_get_me_attributes": "生年月日、 性別、 血液型、 利き手など、 自分自身の属性を取り出します。",
+    "g8_title": "Custom query",
+    "g8_desc": "DuckDB に直接 SQL を投げられます (読み取り専用)。",
+    "t_run_custom_query": "任意の SELECT 文を実行します。 書き込み系は構文レベルで拒否します。"
+  },
+
+  "privacy": {
+    "eyebrow": "プライバシー",
+    "title": "クラウドに 1 バイトも送らない。",
+    "deck": "Apple ヘルスケアの export から始まり、 すべての処理があなたのラップトップの中で完結します。",
+    "flow_src": "Apple ヘルスケア export",
+    "flow_db": "ローカル DuckDB",
+    "flow_mcp": "MCP サーバー",
+    "flow_claude": "Claude (あなたの端末上)",
+    "point1_title": "保存先",
+    "point1_body": "<code>~/.local/share/apple-health-mcp/data.duckdb</code> (XDG_DATA_HOME 準拠) に置かれます。 別のマシンへコピーするだけで移行でき、 やめたければそのファイルを捨てるだけです。",
+    "point2_title": "通信なし",
+    "point2_body": "健康データをネットワーク越しに送る仕組みは、 最初から持っていません。 ネットワークアクセスは、 サーバー更新時の <code>uvx</code> による解決だけです。",
+    "point3_title": "100% オープンソース",
+    "point3_body": "MIT ライセンスで公開しています。 ソースコードはすべて GitHub にあり、 自由に監査できます。"
+  },
+
+  "faq": {
+    "eyebrow": "よくある質問",
+    "title": "FAQ",
+    "q1": "Linux で Claude Desktop は動かない、 どうする?",
+    "a1": "Claude Code (CLI) または Codex CLI をおすすめします。 どちらも MCP サーバーとして同じ機能が使えます。",
+    "q2": "<code>uv</code> ってなに? 入れないとダメ?",
+    "a2": "uv は Python のパッケージランナー兼インストーラです (公式: <a href=\"https://docs.astral.sh/uv/\" rel=\"noopener\">astral.sh/uv</a>)。 <code>uvx</code> を使えば本サーバーをインストールせずにそのまま実行できるので、 おすすめの経路になっています。",
+    "q3": "Apple Watch なくても使える?",
+    "a3": "使えます。 iPhone のヘルスケアアプリだけでも、 歩数や睡眠、 身長体重、 栄養記録などがあれば十分役に立ちます。 ECG や心拍系の一部ツールが空になるだけです。",
+    "q4": "データはどこに保存される?",
+    "a4": "<code>~/.local/share/apple-health-mcp/data.duckdb</code> (XDG_DATA_HOME 準拠) に保存されます。 ファイルを削除すれば全データが消えます。",
+    "q5": "export を再 import したら?",
+    "a5": "何度実行しても大丈夫です。 重複レコードは内容ハッシュをもとに自動的にまとめられるので、 結果は変わりません。"
+  },
+
+  "footer": {
+    "tagline": "Make Claude your personal health AI &mdash; locally.",
+    "col_resources": "リソース",
+    "link_readme": "README",
+    "link_changelog": "CHANGELOG",
+    "link_contributing": "Contributing",
+    "col_project": "プロジェクト",
+    "link_github": "GitHub リポジトリ",
+    "link_issues": "Issues",
+    "link_releases": "Releases",
+    "col_legal": "ライセンス・作者",
+    "license": "MIT License",
+    "author": "Author: rinoshiyo",
+    "version": "",
+    "copyright": "© 2026 rinoshiyo · Made with care for the local-first AI movement."
+  }
+}
