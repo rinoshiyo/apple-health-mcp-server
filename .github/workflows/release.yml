@@ -23,6 +23,49 @@ permissions:
   contents: read
 
 jobs:
+  build_bundle:
+    name: Build MCPB (Claude Desktop) bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify manifest version matches tag
+        # The MCPB bundle embeds manifest.json verbatim; a drift between
+        # the tag, pyproject [project].version, and manifest.json version
+        # would publish a bundle that disagrees with PyPI on which
+        # release it is. The pyproject check in the `build` job covers
+        # the tag↔pyproject pair; this catches the third leg.
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          manifest_version="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
+          if [ "$tag_version" != "$manifest_version" ]; then
+            echo "::error::Tag v$tag_version does not match manifest.json version $manifest_version. Bump manifest.json and re-tag."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches manifest.json version $manifest_version."
+
+      - name: Install MCPB CLI
+        run: npm install -g @anthropic-ai/mcpb
+
+      - name: Validate manifest
+        run: mcpb validate manifest.json
+
+      - name: Pack bundle
+        # `mcpb pack` writes ``<name>-<version>.mcpb`` next to manifest.
+        run: mcpb pack . apple-health-mcp-server-${{ github.ref_name }}.mcpb
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcpb
+          path: apple-health-mcp-server-*.mcpb
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: Build sdist + wheel
     runs-on: ubuntu-latest
@@ -95,7 +138,7 @@ jobs:
       id-token: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
@@ -110,3 +153,48 @@ jobs:
           # already has the artefact, which is the desired idempotent
           # behaviour for a tag-triggered release.
           skip-existing: true
+
+  github_release:
+    name: Create GitHub Release with PyPI artefacts + MCPB bundle
+    # Depend on `publish` (not just `build`) so a failed PyPI upload
+    # blocks the GitHub Release. Otherwise the release page would
+    # advertise an `uvx ...` install path whose PyPI artefact never
+    # landed, and users would hit ``No matching distribution found``.
+    needs: [publish, build_bundle]
+    runs-on: ubuntu-latest
+    permissions:
+      # `contents: write` is what ``softprops/action-gh-release`` needs
+      # to push the release and upload assets. Job-level scoping keeps
+      # the write permission off every other job in this workflow.
+      contents: write
+    steps:
+      - name: Download PyPI build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download MCPB bundle artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: mcpb
+          path: mcpb/
+
+      - name: Create release with both artefact sets attached
+        # The release is created with the tag as the name; the body
+        # links readers at CHANGELOG.md for the full change list rather
+        # than auto-generating release notes (the human-curated entry
+        # is the canonical version-history record for this project).
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            mcpb/*.mcpb
+          generate_release_notes: false
+          body: |
+            See [CHANGELOG.md at this tag](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/CHANGELOG.md) for the full change list pinned to this release (the `main` link rots as new versions ship).
+
+            ## Install
+
+            - **uvx / PyPI (recommended for Claude Code, Codex CLI, scripts):** see README ["Installation"](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/README.md#installation).
+            - **Claude Desktop (one-click):** download `apple-health-mcp-server-${{ github.ref_name }}.mcpb` from this release's assets and drag-and-drop it into Claude Desktop's *Settings → Connectors* panel. Requires [`uv`](https://docs.astral.sh/uv/) on `PATH` (the bundle wraps `uvx ... serve`).

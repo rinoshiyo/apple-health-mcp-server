@@ -9,6 +9,38 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- **One-click Claude Desktop install via MCPB bundle (issue #71).**
+  Each GitHub Release now attaches an `apple-health-mcp-server-vX.Y.Z.mcpb`
+  bundle (Model Context Protocol Bundle, the successor to DXT) alongside
+  the existing PyPI wheel/sdist. Users can drag-and-drop the `.mcpb`
+  onto Claude Desktop's Connectors panel instead of editing
+  `claude_desktop_config.json` by hand. The bundle wraps the same
+  `uvx apple-health-mcp-server serve` invocation as the manual JSON
+  path, so it still requires `uv` on `PATH`.
+- **README "Locales" and "Compatibility" sections (issue #71).** Documents
+  ECG header locale coverage (English + Japanese verified;
+  Chinese/Korean best-effort) and the SemVer-from-v1.0.0 public-API
+  contract that will govern future releases. Includes a deprecation
+  cadence (CHANGELOG `Deprecated` heading → at-least-one-minor grace
+  period → next-major removal) so the 1.0 promise has operational rules.
+
+### Changed
+
+- **`apple_health_mcp.__version__` now reads from
+  `importlib.metadata.version("apple-health-mcp-server")`** instead of
+  a hard-coded literal, eliminating the drift that had it stuck at
+  `0.1.0` through six releases. Consumers who imported `__version__`
+  to gate behaviour on the running release see the real version
+  starting with this release.
+- **ECG importer raises `LocaleUnrecognisedError` (subclass of
+  `HealthImportError`) when no locale headers match**, with an
+  actionable message that lists supported locales and points at the
+  issue tracker. `import_ecg_files` rate-limits the verbose guidance
+  to one full emission per import run; subsequent failing files in
+  the same batch get a short reference back.
+
 ## [0.1.6] - 2026-06-24
 
 ### Changed

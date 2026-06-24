@@ -1,5 +1,10 @@
 tmp/
 
+# MCPB bundles produced by a local `mcpb pack .` dry-run before tagging.
+# CI builds the canonical bundle as a workflow artefact attached to the
+# GitHub Release; nothing should live in the repo root.
+*.mcpb
+
 # Python
 __pycache__/
 *.py[cod]

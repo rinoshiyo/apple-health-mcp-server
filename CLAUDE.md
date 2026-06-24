@@ -123,10 +123,12 @@ Done once before the first release tag is pushed.
 
 ### Cutting a release
 
-0. **Bump `[project] version`** in `pyproject.toml` to the version you
-   are about to ship, and merge that change to `main` via a PR. The
-   release workflow refuses to publish if the tag and pyproject
-   versions disagree, so this step is load-bearing.
+0. **Bump both `[project] version` in `pyproject.toml` AND `version`
+   in `manifest.json`** to the version you are about to ship, and
+   merge that change to `main` via a PR. The release workflow refuses
+   to publish if the tag and pyproject versions disagree, AND refuses
+   to pack the MCPB bundle if the tag and manifest.json versions
+   disagree, so both bumps are load-bearing.
 
 1. Pre-flight (run locally before tagging):
 
