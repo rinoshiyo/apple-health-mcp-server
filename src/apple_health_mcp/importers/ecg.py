@@ -249,7 +249,20 @@ def import_single_ecg(
         break
 
     if recorded_date == "":
-        raise HealthImportError(f"no recorded date found in ECG file: {path}")
+        # No "Recorded Date" header label matched. Most common cause is an
+        # Apple Watch set to a locale whose header labels are not in our
+        # lookup tables (see ``_RECORDED_DATE_LABELS`` etc. at the top of
+        # this module). Surface the locale coverage explicitly and point the
+        # user at a one-action remediation path so a silent skip turns into
+        # a 30-second issue report.
+        raise HealthImportError(
+            f"no recorded date found in ECG file: {path}. "
+            f"This usually means the CSV header labels are in a locale we do "
+            f"not yet recognise (verified: English, Japanese; best-effort: "
+            f"Chinese (Simplified/Traditional), Korean). Please file an "
+            f"issue at https://github.com/rinoshiyo/apple-health-mcp-server/issues "
+            f"and paste the first 10 lines of the CSV so we can add your locale."
+        )
 
     ecg_hash = compute_hash([recorded_date, device or ""])
 

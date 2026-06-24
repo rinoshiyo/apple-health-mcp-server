@@ -188,8 +188,58 @@ def test_import_single_ecg_missing_date_raises(
 ) -> None:
     csv = "Name,Test\nClassification,Normal\n\n100\n200\n"
     path = _write_csv(tmp_path, "bad.csv", csv)
-    with pytest.raises(HealthImportError, match="no recorded date"):
+    with pytest.raises(HealthImportError) as exc_info:
         import_single_ecg(conn, path, "imp_bad")
+    # The friendly message must surface (a) the underlying cause, (b) the
+    # locale coverage so the user knows whether to retry or report, and
+    # (c) the issues URL so reporting is one click away. Each of these
+    # has burned at least one user before, so the assertion pins them.
+    msg = str(exc_info.value)
+    assert "no recorded date" in msg
+    assert "locale" in msg
+    assert "github.com/rinoshiyo/apple-health-mcp-server/issues" in msg
+
+
+def test_import_single_ecg_en_ja_voltages_equivalent(tmp_path: Path) -> None:
+    """Cross-locale equivalence: identical voltage payloads must land identically.
+
+    Pins the invariant that locale switching only affects header label
+    resolution, never sample parsing. If a future change accidentally
+    coupled parser logic to header locale (e.g. by reusing a locale-aware
+    float parser on the voltage column), this test would catch it.
+
+    Each import gets its own in-memory connection so the en and ja imports
+    do not collide on ``ecg_hash`` (recorded_date + device are identical by
+    design, since the point of the test is "same input → same output").
+    """
+    body = "\n100\n200\n-50\n150\n75\n"
+    en_csv = (
+        "Recorded Date,2024-06-15 10:30:00 +0000\n"
+        "Classification,Sinus Rhythm\n"
+        'Device,"Apple Watch"\n'
+        "Sample Rate,512.000 Hz\n"
+    ) + body
+    ja_csv = (
+        "記録日,2024-06-15 10:30:00 +0000\n"
+        "分類,Sinus Rhythm\n"
+        'デバイス,"Apple Watch"\n'
+        "サンプルレート,512.000 Hz\n"
+    ) + body
+
+    def _voltages_for(csv_body: str, label: str) -> list[float]:
+        c = get_in_memory_connection()
+        ensure_schema(c)
+        try:
+            import_single_ecg(c, _write_csv(tmp_path, f"{label}.csv", csv_body), label)
+            rows = c.execute("SELECT voltage_uv FROM ecg_samples ORDER BY sample_idx").fetchall()
+            return [float(r[0]) for r in rows]
+        finally:
+            c.close()
+
+    en_voltages = _voltages_for(en_csv, "imp_en")
+    ja_voltages = _voltages_for(ja_csv, "imp_ja")
+    assert en_voltages == [100.0, 200.0, -50.0, 150.0, 75.0]
+    assert ja_voltages == en_voltages
 
 
 def test_import_single_ecg_no_voltages_does_not_insert_samples(

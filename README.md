@@ -167,6 +167,27 @@ By default the database lands at the XDG-resolved data directory:
 
 Override with `--db /custom/path/health.duckdb` on either subcommand.
 
+### Locales
+
+Apple Health localises the ECG CSV header labels to the iPhone language
+setting (the `export.xml` itself is locale-neutral). The importer
+recognises:
+
+- **Verified**: English, Japanese (both `記録日` and `記録日時` variants)
+- **Best-effort**: Chinese Simplified, Chinese Traditional, Korean — header
+  strings are educated guesses and have not been confirmed against real
+  exports from those locales
+
+When the parser fails to match any locale, the warning log points to the
+GitHub issue tracker and asks for the first ten lines of the CSV so the
+locale can be added. There is no privacy concern in those header lines —
+the importer skips `Name` and `Date of Birth` by design.
+
+Distance and energy units (`km`, `mi`, `kcal`) come straight from the
+underlying HealthKit identifiers and are not localised; the
+`total_distance_unit` column on the `workouts` table records them
+faithfully.
+
 ## Tools
 
 17 tools are registered with FastMCP, grouped by family:
