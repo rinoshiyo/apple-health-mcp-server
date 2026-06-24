@@ -46,9 +46,27 @@ Python:
 uvx apple-health-mcp-server --help
 ```
 
-### Claude Desktop
+### Claude Desktop (one-click via MCPB bundle)
 
-Edit `claude_desktop_config.json`:
+The easiest path on Claude Desktop is the **MCPB bundle** attached to
+each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/releases):
+
+1. Download the latest `apple-health-mcp-server-vX.Y.Z.mcpb` from the
+   release assets
+2. Open Claude Desktop's **Settings → Connectors** panel
+3. Drag-and-drop the `.mcpb` file onto the panel — Claude Desktop will
+   install it and prompt to enable the server
+
+The bundle wraps the same `uvx apple-health-mcp-server serve` invocation
+as the manual JSON path below, so you still need `uv` available on
+`PATH`. The format is documented at
+<https://github.com/anthropics/mcpb>; both `.dxt` (legacy) and `.mcpb`
+extensions are accepted by Claude Desktop.
+
+### Claude Desktop (manual JSON config)
+
+If you prefer to wire the server up by hand, edit
+`claude_desktop_config.json`:
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`

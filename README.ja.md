@@ -44,9 +44,26 @@
 uvx apple-health-mcp-server --help
 ```
 
-### Claude Desktop
+### Claude Desktop（MCPB バンドルでワンクリック）
 
-`claude_desktop_config.json` を編集します。
+Claude Desktop で最も簡単な手順は、 各
+[GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/releases)
+に添付された **MCPB バンドル** を使う方法です:
+
+1. リリースアセットから最新の `apple-health-mcp-server-vX.Y.Z.mcpb`
+   をダウンロード
+2. Claude Desktop の **Settings → Connectors** パネルを開く
+3. `.mcpb` ファイルをパネルにドラッグ&ドロップ — Claude Desktop が
+   インストールしてサーバ有効化を確認するプロンプトを出します
+
+バンドルは下記の手動 JSON と同じ `uvx apple-health-mcp-server serve`
+呼び出しをラップするため、 `uv` が `PATH` に通っている必要があります。
+フォーマット仕様は <https://github.com/anthropics/mcpb> を参照。
+`.dxt` (旧名) と `.mcpb` どちらの拡張子も Claude Desktop が受け付けます。
+
+### Claude Desktop（手動 JSON 設定）
+
+手動で配線したい場合は `claude_desktop_config.json` を編集します。
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`

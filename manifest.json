@@ -1,0 +1,36 @@
+{
+  "manifest_version": "0.4",
+  "name": "apple-health-mcp-server",
+  "display_name": "Apple Health",
+  "version": "0.1.6",
+  "description": "Probably the most complete Apple Health MCP server — local-first ingest of Apple Health export.xml + ECG CSVs + GPX into DuckDB, exposed over 17 read-oriented MCP tools.",
+  "long_description": "Ingests an Apple Health export (export.xml + electrocardiograms/*.csv + workout-routes/*.gpx) into a local DuckDB database and exposes 17 read-oriented MCP tools over it (records / workouts / heart rate samples / ECG readings / activity summaries / state of mind / etc., plus a validated SELECT-only escape hatch). All data stays local; nothing is uploaded.",
+  "author": {
+    "name": "Yoshinori Ishii",
+    "url": "https://github.com/rinoshiyo"
+  },
+  "homepage": "https://github.com/rinoshiyo/apple-health-mcp-server",
+  "documentation": "https://github.com/rinoshiyo/apple-health-mcp-server#readme",
+  "support": "https://github.com/rinoshiyo/apple-health-mcp-server/issues",
+  "license": "MIT",
+  "keywords": [
+    "apple-health",
+    "healthkit",
+    "duckdb",
+    "mcp"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "uvx",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["apple-health-mcp-server", "serve"]
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  }
+}
