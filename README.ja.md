@@ -292,11 +292,15 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 ヘルパー、 internal 例外）、 モジュール内部の定数 — は
 **public API ではなく**、 任意のリリースで変更されます。 特に:
 
+<!-- TODO(#101): when the LOG_LEVEL/LOG_FORMAT env vars get the APPLE_HEALTH_ prefix, update the names referenced in this bullet. -->
 - **ログ行のフォーマット** (例: `progress: xml NN% (X / Y MB, ~Z min remaining)`)
   は public API 契約の一部ではありません。 人間向けの表記は SemVer
-  バンプなしに変更され得ます。 進捗を機械的にパースしたい場合は
-  `LOG_FORMAT=json` を設定して構造化フィールドを読んでください
-  (構造化側のフィールドは安定とみなします)
+  バンプなしに変更され得ます。 `LOG_FORMAT=json` は現状、 同じ人間
+  向け文字列を JSON envelope の `message` フィールドに包むだけで、
+  progress 専用の構造化フィールドはまだ emit していません。 機械的に
+  パースしたい用途があれば issue を立ててください — 構造化 progress
+  契約が公開されるまでは、 progress 出力は informational のみと扱って
+  ください
 - **MCP ツールの description テキスト** (各ツール登録時の LLM 向け
   プロンプト文面) は public API 契約の一部ではありません。 パラメータ
   と戻り値の shape が変わらない限り、 description の文言は SemVer

@@ -30,7 +30,12 @@ Out of scope (use normal issues instead):
   that the importer skips is a feature gap, not a vulnerability.
 - Locale / language drift in the friendly-error path — file an issue
   with the locale and the error message.
-- Performance regressions — file an issue with a reproducer.
+- Performance regressions that don't escalate into a denial-of-service
+  — file an issue with a reproducer. **Exception:** a perf bug severe
+  enough to be exploitable for denial-of-service (e.g. a crafted
+  `export.xml` shape that drives unbounded memory or CPU) is in scope
+  for private reporting — please use the Security Advisory channel
+  above and include the reproducer there, not in a public issue.
 
 ## Response target
 
