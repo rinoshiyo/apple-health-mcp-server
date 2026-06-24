@@ -21,16 +21,12 @@
   ],
   "server": {
     "type": "binary",
-    "entry_point": "uvx",
     "mcp_config": {
       "command": "uvx",
       "args": ["apple-health-mcp-server", "serve"]
     }
   },
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
-    "runtimes": {
-      "python": ">=3.12"
-    }
+    "platforms": ["darwin", "win32", "linux"]
   }
 }

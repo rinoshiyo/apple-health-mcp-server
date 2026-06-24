@@ -48,7 +48,15 @@ uvx apple-health-mcp-server --help
 
 Claude Desktop で最も簡単な手順は、 各
 [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/releases)
-に添付された **MCPB バンドル** を使う方法です:
+に添付された **MCPB バンドル** を使う方法です。
+
+> **前提条件:** バンドルは `uvx apple-health-mcp-server serve` を
+> ラップしているため、 先に [`uv`](https://docs.astral.sh/uv/) を
+> インストールしてください（macOS は `brew install uv`、 Windows は
+> 公式インストーラ）。 `PATH` に `uv` が無いと Claude Desktop は
+> インストール後に汎用的な spawn エラーで失敗します。
+
+その後:
 
 1. リリースアセットから最新の `apple-health-mcp-server-vX.Y.Z.mcpb`
    をダウンロード
@@ -56,9 +64,7 @@ Claude Desktop で最も簡単な手順は、 各
 3. `.mcpb` ファイルをパネルにドラッグ&ドロップ — Claude Desktop が
    インストールしてサーバ有効化を確認するプロンプトを出します
 
-バンドルは下記の手動 JSON と同じ `uvx apple-health-mcp-server serve`
-呼び出しをラップするため、 `uv` が `PATH` に通っている必要があります。
-フォーマット仕様は <https://github.com/anthropics/mcpb> を参照。
+MCPB フォーマット仕様は <https://github.com/anthropics/mcpb> を参照。
 `.dxt` (旧名) と `.mcpb` どちらの拡張子も Claude Desktop が受け付けます。
 
 ### Claude Desktop（手動 JSON 設定）

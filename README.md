@@ -33,6 +33,9 @@ including Claude Desktop — through 17 read-oriented tools backed by a local
   workout's local offset so joins against XML-derived rows are clean.
 - **Cross-platform.** Tested on Ubuntu, macOS, and Windows against Python
   3.12 / 3.13 / 3.14.
+- **One-click Claude Desktop install.** Drag-and-drop the MCPB bundle
+  attached to every GitHub Release; see the *Installation → Claude
+  Desktop (MCPB bundle)* section below.
 - **100% branch-tested.** Every release gates on full coverage with
   `pytest --cov-branch --cov-fail-under=100`.
 
@@ -49,7 +52,14 @@ uvx apple-health-mcp-server --help
 ### Claude Desktop (one-click via MCPB bundle)
 
 The easiest path on Claude Desktop is the **MCPB bundle** attached to
-each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/releases):
+each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/releases).
+
+> **Prerequisite:** the bundle wraps `uvx apple-health-mcp-server serve`,
+> so install [`uv`](https://docs.astral.sh/uv/) first (`brew install uv`
+> on macOS, the official installer on Windows). Without `uv` on `PATH`
+> Claude Desktop will fail with a generic spawn error after install.
+
+Then:
 
 1. Download the latest `apple-health-mcp-server-vX.Y.Z.mcpb` from the
    release assets
@@ -57,11 +67,9 @@ each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/relea
 3. Drag-and-drop the `.mcpb` file onto the panel — Claude Desktop will
    install it and prompt to enable the server
 
-The bundle wraps the same `uvx apple-health-mcp-server serve` invocation
-as the manual JSON path below, so you still need `uv` available on
-`PATH`. The format is documented at
-<https://github.com/anthropics/mcpb>; both `.dxt` (legacy) and `.mcpb`
-extensions are accepted by Claude Desktop.
+The MCPB format is documented at <https://github.com/anthropics/mcpb>;
+both `.dxt` (legacy) and `.mcpb` extensions are accepted by Claude
+Desktop.
 
 ### Claude Desktop (manual JSON config)
 

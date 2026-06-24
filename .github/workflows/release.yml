@@ -67,7 +67,6 @@ jobs:
           retention-days: 7
 
   build:
-  build:
     name: Build sdist + wheel
     runs-on: ubuntu-latest
     steps:
@@ -139,7 +138,7 @@ jobs:
       id-token: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
@@ -157,7 +156,11 @@ jobs:
 
   github_release:
     name: Create GitHub Release with PyPI artefacts + MCPB bundle
-    needs: [build, build_bundle]
+    # Depend on `publish` (not just `build`) so a failed PyPI upload
+    # blocks the GitHub Release. Otherwise the release page would
+    # advertise an `uvx ...` install path whose PyPI artefact never
+    # landed, and users would hit ``No matching distribution found``.
+    needs: [publish, build_bundle]
     runs-on: ubuntu-latest
     permissions:
       # `contents: write` is what ``softprops/action-gh-release`` needs
@@ -166,13 +169,13 @@ jobs:
       contents: write
     steps:
       - name: Download PyPI build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
 
       - name: Download MCPB bundle artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: mcpb
           path: mcpb/
@@ -189,9 +192,9 @@ jobs:
             mcpb/*.mcpb
           generate_release_notes: false
           body: |
-            See [CHANGELOG.md](https://github.com/rinoshiyo/apple-health-mcp-server/blob/main/CHANGELOG.md) for the full change list.
+            See [CHANGELOG.md at this tag](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/CHANGELOG.md) for the full change list pinned to this release (the `main` link rots as new versions ship).
 
             ## Install
 
-            - **uvx / PyPI (recommended for Claude Code, Codex CLI, scripts):** see README ["Installation"](https://github.com/rinoshiyo/apple-health-mcp-server#installation).
-            - **Claude Desktop (one-click):** download `apple-health-mcp-server-${{ github.ref_name }}.mcpb` from this release's assets and drag-and-drop it into Claude Desktop's *Settings → Connectors* panel.
+            - **uvx / PyPI (recommended for Claude Code, Codex CLI, scripts):** see README ["Installation"](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/README.md#installation).
+            - **Claude Desktop (one-click):** download `apple-health-mcp-server-${{ github.ref_name }}.mcpb` from this release's assets and drag-and-drop it into Claude Desktop's *Settings → Connectors* panel. Requires [`uv`](https://docs.astral.sh/uv/) on `PATH` (the bundle wraps `uvx ... serve`).
