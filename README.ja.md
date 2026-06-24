@@ -259,32 +259,31 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 
   | 名前 | 用途 | デフォルト |
   |---|---|---|
-  | `APPLE_HEALTH_TZ` | DuckDB セッションタイムゾーン。 `TIMESTAMPTZ`
-    カラムのレンダリングに使用。 未設定時は OS の TZ にフォールバック | OS の TZ |
-  | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | `import` の Phase 1 進捗
-    emitter の間隔 (整数秒、 1..600 にクランプ)。 1 MB 未満の
-    エクスポートは emitter 自体をスキップ | `10` |
+  | `APPLE_HEALTH_TZ` | DuckDB セッションタイムゾーン。 `TIMESTAMPTZ` カラムのレンダリングに使用。 CLI の `--tz` 指定時はそちらが優先される | OS の TZ |
+  | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | `import` の Phase 1 進捗 emitter の間隔。 整数秒、 範囲外の整数は 1..600 にクランプ、 非整数文字列は警告ログを出してデフォルトにフォールバック。 1 MB 未満のエクスポートは emitter 自体をスキップ | `10` |
+  | `LOG_LEVEL` | stdlib `logging` のルートロガーレベル (`DEBUG`/`INFO`/`WARNING`/`ERROR`)。 全ログは stderr 行き、 stdout は MCP stdio transport が占有 | `INFO` |
+  | `LOG_FORMAT` | ログフォーマッタ形式。 `human` はプレーンテキスト、 `json` は 1 行 1 オブジェクトの JSON でログアグリゲータ向け | `human` |
 
-  これらのリネーム / 削除 / パース仕様変更はメジャーバンプ。 新規
-  env var 追加はマイナーバンプ
-- **CLI 終了コード** — `apple-health-mcp-server` をシェルスクリプトや
-  サービススーパーバイザに食わせる呼び出し側向けの契約:
+  サーバは DB デフォルトパス解決時に OS 標準の `XDG_DATA_HOME` (Linux/macOS) と `LOCALAPPDATA` (Windows) も honour するが、 これらはプラットフォーム契約であってプロジェクト固有変数ではない。
+
+  これらのリネーム / 削除 / パース仕様変更はメジャーバンプ。 新規 env var 追加はマイナーバンプ
+- **CLI パラメータ** — `apple-health-mcp-server` をシェルスクリプト / サービススーパーバイザに食わせる、 あるいは Claude Desktop / Claude Code config に組み込む呼び出し側向けの契約:
+
+  - **サブコマンド**: `import <export-dir>`, `serve`
+  - **トップレベルフラグ**: `--db <path>` (DB パス上書き、 両サブコマンドで有効)、 `--tz <name>` (`APPLE_HEALTH_TZ` を上書き)
+  - **`serve` フラグ**: `--transport stdio|http` (デフォルト `stdio`)、 `--host <addr>` (HTTP バインドホスト)、 `--port <int>` (HTTP ポート)
+
+  サブコマンドやフラグのリネーム / 削除 / 既存項目のセマンティクス変更はメジャーバンプ。 新規 optional フラグやサブコマンドの追加はマイナーバンプ
+- **CLI 終了コード** — シェルスクリプト呼び出し側が観測する:
 
   | コード | 意味 |
   |---|---|
   | `0` | 成功 |
-  | `1` | import / serve パス内の任意の `AppleHealthMCPError`
-    (エクスポート不在、 DB 破損、 importer 失敗、 サーバ起動失敗) |
-  | `2` | Typer/Click 層の usage error (未知サブコマンド、 不正フラグ) |
+  | `1` | import / serve パス内の任意の `AppleHealthMCPError` (エクスポート不在、 DB 破損、 importer 失敗、 サーバ起動失敗) |
+  | `2` | CLI 引数パーサ層の usage error (未知サブコマンド、 必須引数欠落、 不正フラグ値) |
 
-  新規の specific exit code 追加（例: 「他プロセスが DB ロック中」
-  を `3` に切り出す等）はマイナーバンプ。 既存コードの統合や再利用は
-  メジャーバンプ
-- **DuckDB データベースファイルパス規約** (詳細は[データベースの場所](#データベースの場所))
-  — 各 OS の XDG 準拠デフォルトパスは契約の一部。 ユーザはここを
-  バックアップ対象にしたり監視を向けたり symlink を貼ったりするため。
-  デフォルト DB 配置先の変更はメジャーバンプ、 追加のオーバーライド
-  機構を増やすのはマイナーバンプ
+  新規の specific exit code 追加 (例: 「他プロセスが DB ロック中」 を `3` に切り出す等) はマイナーバンプ。 既存コードの **意味の付け替え (repurpose) や統合** はメジャーバンプ
+- **DuckDB データベースファイルパス規約** (詳細は[データベースの場所](#データベースの場所)) — 各 OS の XDG 準拠デフォルトパスは契約の一部。 ユーザはここをバックアップ対象にしたり監視を向けたり symlink を貼ったりするため。 デフォルト DB 配置先の変更はメジャーバンプ、 追加のオーバーライド機構を増やすのはマイナーバンプ
 
 上記に列挙されていないもの — MCP ツール / CLI / DuckDB スキーマ /
 `__all__` / env var / exit code / DB path の表面を持たない
