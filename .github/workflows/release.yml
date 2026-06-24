@@ -207,3 +207,68 @@ jobs:
 
             - **uvx / PyPI (recommended for Claude Code, Codex CLI, scripts):** see README ["Installation"](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/README.md#installation).
             - **Claude Desktop (one-click):** download `apple-health-mcp-server-${{ github.ref_name }}.mcpb` from this release's assets and drag-and-drop it into Claude Desktop's *Settings → Connectors* panel. Requires [`uv`](https://docs.astral.sh/uv/) on `PATH` (the bundle wraps `uvx ... serve`).
+
+  sync_docs_version:
+    name: Sync LP footer version on main
+    # Run only after PyPI publish + GitHub Release both succeed, so a
+    # failed publish does not advertise a version on the LP that users
+    # cannot actually install. The auto-commit pushes back to `main`,
+    # not the tag — the tag itself stays immutable.
+    needs: [publish, github_release]
+    runs-on: ubuntu-latest
+    permissions:
+      # `contents: write` is required to push the auto-commit back to
+      # `main`. Scoped at job level so the other jobs keep their read-
+      # only / id-token-only posture.
+      contents: write
+    steps:
+      - name: Checkout main
+        # Explicitly check out `main` (not the tag ref that triggered
+        # this workflow), because the auto-commit needs to land on the
+        # branch tip, not a detached HEAD at the tag commit.
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          # The default GITHUB_TOKEN is fine for `git push` back to the
+          # same repo when `contents: write` is granted; no PAT needed.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rewrite docs/i18n footer.version to tag
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+
+          tag = os.environ["GITHUB_REF_NAME"]
+          for path in ("docs/i18n/ja.json", "docs/i18n/en.json"):
+              with open(path, "r", encoding="utf-8") as f:
+                  data = json.load(f)
+              footer = data.get("footer")
+              if not isinstance(footer, dict) or "version" not in footer:
+                  raise SystemExit(f"{path}: footer.version key missing")
+              footer["version"] = tag
+              with open(path, "w", encoding="utf-8") as f:
+                  json.dump(data, f, ensure_ascii=False, indent=2)
+                  f.write("\n")
+          PY
+
+      - name: Commit and push if changed
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/i18n/ja.json docs/i18n/en.json
+          # When the LP version already matches the tag (e.g. the maintainer
+          # bumped it by hand in the release PR), there is nothing to commit
+          # — exit cleanly instead of failing on an empty commit.
+          if git diff --cached --quiet; then
+            echo "docs/i18n footer.version already at ${GITHUB_REF_NAME}; no commit needed."
+            exit 0
+          fi
+          git commit -m "chore(docs): sync LP footer version to ${GITHUB_REF_NAME}"
+          git push origin HEAD:main
