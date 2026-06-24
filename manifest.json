@@ -21,6 +21,7 @@
   ],
   "server": {
     "type": "binary",
+    "entry_point": "uvx",
     "mcp_config": {
       "command": "uvx",
       "args": ["apple-health-mcp-server", "serve"]
