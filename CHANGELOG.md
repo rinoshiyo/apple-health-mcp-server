@@ -98,6 +98,52 @@ v0.3.0 will ship after stability is confirmed.
   the numeric-vs-text duality rule; `workouts.total_distance` /
   `total_energy_burned` are annotated with the iOS 10 vs iOS 11+
   back-fill behaviour. Comments only — no schema mutation.
+- **Compatibility section reorganised into a two-tier contract**
+  (PR-A post-merge follow-up). The DuckDB schema (table / column /
+  type / NOT NULL constraints) and the default DuckDB file path are
+  reclassified as **Layer 2 (best-effort, may change in a minor
+  release when called out under `Changed` in CHANGELOG.md)**; the
+  wire-facing surfaces (MCP tool names / signatures / response
+  fields, CLI subcommands and flags, env var names and parsing rules,
+  exit codes, `__all__` exports) keep the strict **Layer 1** SemVer
+  contract. `run_custom_query` users are explicitly noted as Layer 2
+  consumers. This is a documentation-only re-framing — no behavioural
+  change ships under this entry — and it preserves room to evolve
+  storage internals without major bumps that would otherwise be
+  forced by treating every schema rename as a wire-breaking change.
+- **`get_import_history` now selects explicit columns** (PR-A
+  post-merge follow-up). Matches the audit-batch principle already
+  applied to `get_workout_details` (T5), `get_activity_summaries`
+  (T6), and `get_ecg_data` (T12): a future
+  `ALTER TABLE imports ADD COLUMN` cannot leak into the wire shape
+  without a deliberate description + projection update. The response
+  fields stay identical to v0.3.0-rc1.
+- **`get_heart_rate_samples.sample_time` description fixed** (PR-A
+  post-merge follow-up). The tool's description now accurately
+  documents that `sample_time` is wall-clock seconds since 00:00
+  local (e.g. `28800.0` = 08:00:00), not a relative offset from the
+  parent record's `start_date`. The numeric value already matched
+  this contract; only the description was wrong, which would have
+  caused HRV calculations (RMSSD, pNN50) to be off by the parent
+  record's wall-clock offset.
+- **`get_workout_route` and `list_ecg_readings` reject `limit < 1`**
+  (PR-A post-merge follow-up). Previously `limit=0` clamped to 0 and
+  returned an empty page; for `get_workout_route` that combined with
+  `has_more=True` to create an infinite pagination loop, and for
+  `list_ecg_readings` it returned an empty list a client could mistake
+  for "no recordings". Both now return `Error: limit must be >= 1`.
+- **`get_record_statistics` no longer echoes the rejected `period`
+  value in its error string** (PR-A post-merge follow-up). The error
+  now reads `Error: invalid period; accepted values: day, week, month, year`
+  without interpolating the user-supplied value, closing a small
+  prompt-injection vector where a control-character `period` would
+  round-trip into the caller LLM's context as trusted server output.
+- **`get_workout_route` normalises gate-probe failures to `Error:`
+  strings** (PR-A post-merge follow-up). `require_imports_or_message`
+  now runs inside the tool's `try` block so a lock contention or DB
+  read failure on the empty-DB gate cannot leak a raw traceback up
+  through FastMCP. Brings the tool in line with the 16 other tools
+  that funnel through `run_query`.
 
 ### Verification needed at first stable v0.3.0 push
 

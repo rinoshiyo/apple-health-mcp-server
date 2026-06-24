@@ -36,6 +36,7 @@ from apple_health_mcp.server.tools import (
     query_records,
     run_custom_query,
 )
+from tests._helpers import assert_tool_db_error, seed_one_import
 from tests._helpers import bind_tool as _bind
 
 
@@ -121,11 +122,17 @@ def test_get_record_statistics_invalid_period_errors(
     out = asyncio.run(
         fn(
             record_type="HKQuantityTypeIdentifierHeartRate",
-            period="bogus",
+            period="bogus-\x1b[31m-injection",
         )
     )
-    assert out.startswith("Error: invalid period 'bogus'")
+    # The accepted set must be enumerated so callers know how to recover.
+    assert out.startswith("Error: invalid period; ")
     assert "day" in out and "week" in out
+    # The user-supplied value must NOT be echoed back — otherwise a
+    # control-character payload in ``period`` would round-trip into the
+    # caller LLM's context as trusted server output.
+    assert "bogus" not in out
+    assert "\x1b" not in out
 
 
 def test_get_record_statistics_with_date_filters(
@@ -274,14 +281,49 @@ def test_get_workout_route_unknown_hash_returns_empty_envelope(
 
 def test_get_workout_route_db_error_path(empty_conn: duckdb.DuckDBPyConnection) -> None:
     """Downstream binder errors propagate as ``Error: ...`` strings."""
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE route_points")
     fn = _bind(get_workout_route, empty_conn)
+    assert_tool_db_error(fn, workout_hash="wh1")
+
+
+def test_get_workout_route_gate_failure_returns_error_string(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """L2: failure inside ``require_imports_or_message`` is normalised.
+
+    Dropping ``imports`` makes the gate probe raise; PR-A's pre-fix code
+    let the traceback escape ``require_imports_or_message`` because it ran
+    outside the try block. The hardened version catches the exception and
+    surfaces an ``Error: ...`` string instead.
+    """
+    empty_conn.execute("DROP TABLE imports")
+    fn = _bind(get_workout_route, empty_conn)
     out = asyncio.run(fn(workout_hash="wh1"))
-    assert out.startswith("Error: ")
+    # ``imports_present`` swallows the exception and returns ``False``,
+    # which sends the gate down the import-required-message branch — that
+    # is the documented contract for a missing/corrupt ``imports`` table
+    # and is asserted explicitly here so any future tightening of
+    # ``imports_present`` shows up in this test.
+    assert out == IMPORT_REQUIRED_MESSAGE
+
+
+def test_get_workout_route_limit_zero_errors(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """H2: ``limit=0`` must error instead of looping at ``has_more=True``."""
+    fn = _bind(get_workout_route, seeded_conn)
+    out = asyncio.run(fn(workout_hash="wh1", limit=0))
+    assert out == "Error: limit must be >= 1"
+
+
+def test_get_workout_route_negative_limit_errors(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A negative ``limit`` hits the same guard as ``limit=0``."""
+    fn = _bind(get_workout_route, seeded_conn)
+    out = asyncio.run(fn(workout_hash="wh1", limit=-5))
+    assert out == "Error: limit must be >= 1"
 
 
 # --- get_heart_rate_samples --------------------------------------------------
@@ -327,14 +369,10 @@ def test_get_heart_rate_samples_malformed_sample_time_returns_none(
 
 def test_get_heart_rate_samples_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
     """Downstream binder errors propagate as ``Error: ...`` strings."""
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE heart_rate_samples")
     fn = _bind(get_heart_rate_samples, empty_conn)
-    out = asyncio.run(fn(record_hash="rh1"))
-    assert out.startswith("Error: ")
+    assert_tool_db_error(fn, record_hash="rh1")
 
 
 # --- list_correlations -------------------------------------------------------
@@ -410,13 +448,28 @@ def test_list_ecg_readings_clamps_limit(seeded_conn: duckdb.DuckDBPyConnection) 
     assert len(rows) <= 1000
 
 
-def test_list_ecg_readings_limit_zero_returns_empty(
+def test_list_ecg_readings_limit_zero_errors(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """Issue #97 (T11): ``limit=0`` returns an empty list rather than erroring."""
+    """L4: ``limit=0`` errors instead of silently returning an empty list.
+
+    The previous behaviour (empty list) let an LLM mistake the response
+    for "no recordings exist". Returning an explicit error string keeps
+    the failure mode close to the caller; H3's envelope sweep will align
+    every list_* tool with this contract.
+    """
     fn = _bind(list_ecg_readings, seeded_conn)
-    rows = _call(fn, limit=0)
-    assert rows == []
+    out = asyncio.run(fn(limit=0))
+    assert out == "Error: limit must be >= 1"
+
+
+def test_list_ecg_readings_negative_limit_errors(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A negative ``limit`` is rejected on the same code path as ``limit=0``."""
+    fn = _bind(list_ecg_readings, seeded_conn)
+    out = asyncio.run(fn(limit=-1))
+    assert out == "Error: limit must be >= 1"
 
 
 # --- get_ecg_data ------------------------------------------------------------
@@ -515,6 +568,20 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(get_import_history, seeded_conn)
     rows = _call(fn)
     assert rows[0]["import_id"] == "imp1"
+    # L1: ``get_import_history`` now selects explicit columns instead of
+    # ``SELECT *``. Assert the exact wire-facing set so a future
+    # ``ALTER TABLE imports ADD COLUMN`` cannot leak into the response
+    # without an intentional description + SQL update.
+    expected_fields = {
+        "import_id",
+        "export_dir",
+        "imported_at",
+        "record_count",
+        "workout_count",
+        "duration_secs",
+        "export_xml_sha256",
+    }
+    assert set(rows[0].keys()) == expected_fields
 
 
 # --- list_state_of_mind ------------------------------------------------------

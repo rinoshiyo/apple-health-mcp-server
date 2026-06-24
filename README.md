@@ -248,9 +248,13 @@ onward. While the project remains in the v0.x.y series, breaking
 changes can land in any minor release; the project minimises them but
 does not formally guarantee against them yet.
 
-### Public API surface
+### Two-tier contract
 
-The following are considered part of the **public API** under SemVer:
+The public surface is split into two tiers so that internal storage
+choices can keep evolving without dragging the wire-facing contract
+into major-bump territory every time.
+
+**Layer 1 — Wire-facing contract (strict; changes require a major bump):**
 
 - **MCP tool names, parameter signatures (including defaults), and
   top-level response field names** — adding a new tool, parameter, or
@@ -258,54 +262,84 @@ The following are considered part of the **public API** under SemVer:
   type of an existing one is a major bump. Tool responses are consumed
   by downstream LLM prompt templates, so renaming a returned key is as
   breaking as renaming a parameter.
-- **DuckDB schema table names, column names, types, and NOT NULL
-  constraints** — adding a column is a minor bump; renaming, removing,
-  retyping, or relaxing a NOT NULL on an existing column (or renaming a
-  table) is a major bump. Relevant for `run_custom_query` consumers
-  building SQL against the tables — the v0.1.4 `imports.imported_at`
-  regression showed constraints are user-visible too, not just types.
 - **CLI subcommand names and their required parameters** (positional
-  arguments and required flags alike) — same versioning rules apply.
+  arguments and required flags alike), and **environment variable
+  names and parsing rules** — same major-bump rules apply to
+  renames / removals / semantic changes.
+- **CLI exit codes** (see the table below).
 - **Top-level Python identifiers exported via `__all__` from the
   package root** (`apple_health_mcp`) — e.g. `__version__`, `REPO_URL`,
   `ISSUES_URL`. Removing one of these or changing its type is a major
   bump.
-- **Environment variables** the server and importer read from the
-  process environment. The current set:
 
-  | Name | Purpose | Default |
-  |---|---|---|
-  | `APPLE_HEALTH_TZ` | DuckDB session timezone used to render `TIMESTAMPTZ` columns. Overridden by `--tz` on the CLI when both are set. | OS timezone |
-  | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB skip the emitter entirely. | `10` |
-  | `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
-  | `APPLE_HEALTH_LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
+**Layer 2 — Internal escape hatch (best-effort; changes ride a minor
+bump and are called out under `Changed` in CHANGELOG.md):**
 
-  The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path; those are part of the platform contract, not project-specific.
+- **DuckDB schema** — table names, column names, types, and NOT NULL
+  constraints. `run_custom_query` users read against these directly,
+  so the project will not break them lightly, but the schema is a
+  storage detail rather than the wire contract: a column rename or a
+  type widening can ship in a minor release as long as the CHANGELOG
+  flags it under `Changed`. Layer 1 still gates the tool responses
+  built on top, so a schema migration that does not affect any tool's
+  output stays invisible to non-`run_custom_query` callers.
+- **Default DuckDB file path conventions** (see [Database location](#database-location)).
+  The XDG-resolved defaults on each OS are stable in practice — users
+  back them up, point monitoring at them, or symlink them across
+  machines — but reserving them as Layer 2 leaves room to add an
+  override mechanism or shift the default in response to an OS
+  convention change without forcing a major bump.
+- **Module-internal helpers** — anything not re-exported through
+  `apple_health_mcp.__all__`. These are documented inline for
+  contributors but are not part of the SemVer contract at any tier.
 
-  Renaming, removing, or changing the parsing rules of any of these is a major bump. Adding a new env var is a minor bump.
-- **CLI parameters** — used by callers that pipe `apple-health-mcp-server` into shell scripts, service supervisors, or wire it into Claude Desktop / Claude Code configs:
+`run_custom_query` callers depend on Layer 2 by construction. The
+project treats their stability as best-effort: the goal is to avoid
+breaking the schema between minor versions whenever possible, and to
+document any change that does land under `Changed` in CHANGELOG.md so
+existing custom queries can be updated in one pass.
 
-  - **Subcommands**: `import <export-dir>`, `serve`
-  - **Top-level flags**: `--db <path>` (DB path override, applies to both subcommands), `--tz <name>` (overrides `APPLE_HEALTH_TZ`)
-  - **`serve` flags**: `--transport stdio|http` (default `stdio`), `--host <addr>` (HTTP bind host), `--port <int>` (HTTP port)
+#### Layer 1 reference tables
 
-  Renaming a subcommand or flag, removing one, or changing the semantics of an existing one is a major bump. Adding a new optional flag or subcommand is a minor bump.
-- **CLI exit codes** — observed by shell-script callers:
+**Environment variables** the server and importer read from the
+process environment. The current set:
 
-  | Code | Meaning |
-  |---|---|
-  | `0` | Success |
-  | `1` | Any `AppleHealthMCPError` from the import or serve path (missing export, malformed DB, importer failure, server startup failure) |
-  | `2` | Usage error from the CLI argument parser (unknown subcommand, missing required argument, bad flag value) |
+| Name | Purpose | Default |
+|---|---|---|
+| `APPLE_HEALTH_TZ` | DuckDB session timezone used to render `TIMESTAMPTZ` columns. Overridden by `--tz` on the CLI when both are set. | OS timezone |
+| `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB skip the emitter entirely. | `10` |
+| `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
+| `APPLE_HEALTH_LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
 
-  Adding a new specific exit code (e.g. carving off `3` for "DB locked by another process") is a minor bump; collapsing or repurposing an existing code is a major bump.
-- **DuckDB database file path conventions** (see [Database location](#database-location)) — the default XDG-resolved paths on each OS are part of the contract because users back them up, point monitoring at them, or symlink them across machines. Changing where the default DB lands is a major bump; supporting an additional override mechanism is a minor bump.
+The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path; those are part of the platform contract, not project-specific.
 
-Anything not enumerated above — helper modules without an MCP-tool /
-CLI / DuckDB-schema / `__all__` / env-var / exit-code / DB-path
-surface, identifiers prefixed with `_` (private constants, helpers,
-internal exceptions), and module-internal constants — is **not** part
-of the public API and may change in any release. In particular:
+Renaming, removing, or changing the parsing rules of any of these is a major bump. Adding a new env var is a minor bump.
+
+**CLI parameters** — used by callers that pipe `apple-health-mcp-server` into shell scripts, service supervisors, or wire it into Claude Desktop / Claude Code configs:
+
+- **Subcommands**: `import <export-dir>`, `serve`
+- **Top-level flags**: `--db <path>` (DB path override, applies to both subcommands), `--tz <name>` (overrides `APPLE_HEALTH_TZ`)
+- **`serve` flags**: `--transport stdio|http` (default `stdio`), `--host <addr>` (HTTP bind host), `--port <int>` (HTTP port)
+
+Renaming a subcommand or flag, removing one, or changing the semantics of an existing one is a major bump. Adding a new optional flag or subcommand is a minor bump.
+
+**CLI exit codes** — observed by shell-script callers:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | Any `AppleHealthMCPError` from the import or serve path (missing export, malformed DB, importer failure, server startup failure) |
+| `2` | Usage error from the CLI argument parser (unknown subcommand, missing required argument, bad flag value) |
+
+Adding a new specific exit code (e.g. carving off `3` for "DB locked by another process") is a minor bump; collapsing or repurposing an existing code is a major bump.
+
+#### Outside both layers
+
+Anything not enumerated in Layer 1 or Layer 2 — helper modules without
+an MCP-tool / CLI / `__all__` / env-var / exit-code surface,
+identifiers prefixed with `_` (private constants, helpers, internal
+exceptions), and module-internal constants — is **not** part of the
+public API at any tier and may change in any release. In particular:
 
 - **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
   is not part of the public API contract; the human-readable shape may

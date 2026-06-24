@@ -47,7 +47,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         # (dozens) but a long-tenured Apple Watch user may hit hundreds, so
         # the cap keeps responses LLM-friendly without forcing a contract
         # of "always returns everything".
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        #
+        # ``limit=0`` is rejected up front so the tool can never silently
+        # return an empty list that a downstream LLM might mistake for a
+        # "no recordings" result. Matches the behaviour of
+        # ``get_workout_route``; the rest of the list_* family will be
+        # aligned in the H3 envelope sweep.
+        if limit is not None and limit < 1:
+            return "Error: limit must be >= 1"
+        effective_limit = _DEFAULT_LIMIT if limit is None else min(limit, _MAX_LIMIT)
         sql_parts = [
             "SELECT ecg_hash, recorded_date, classification, device, "
             "sample_rate_hz FROM ecg_readings WHERE 1=1"

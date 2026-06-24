@@ -63,8 +63,14 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         # stays case-insensitive so ``"Week"`` / ``"MONTH"`` still resolve.
         normalised = (period or "day").lower()
         if normalised not in _PERIOD_TRUNCS:
+            # Do not echo the user-supplied value back into the error
+            # string: a maliciously crafted ``period`` (control chars,
+            # nested prompt fragments) would otherwise round-trip into the
+            # caller LLM's context as if it were trusted server output.
+            # The accepted set is small and stable, so an enumerated
+            # message stays helpful without the echo vector.
             accepted = ", ".join(sorted(_PERIOD_TRUNCS))
-            return f"Error: invalid period {period!r}; accepted values: {accepted}"
+            return f"Error: invalid period; accepted values: {accepted}"
         date_trunc = _PERIOD_TRUNCS[normalised]
         sql_parts = [
             f"SELECT {date_trunc} AS period, SUM(count) AS count, "

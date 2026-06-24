@@ -61,11 +61,25 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         # Issue #95 (T7): pre-v1.0.0 promotion from a bare array to a
         # ``{points, total, has_more, next_offset}`` envelope so clients
         # can detect the end of a paginated route without blind probing.
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        #
+        # ``limit=0`` is rejected up front (rather than clamped to 0) so a
+        # client cannot land in an infinite pagination loop where each
+        # page returns ``points=[]`` but ``has_more=True``. The bare-cap
+        # ``min(limit, _MAX_LIMIT)`` still applies for limit >= 1.
+        if limit is not None and limit < 1:
+            return "Error: limit must be >= 1"
+        effective_limit = _DEFAULT_LIMIT if limit is None else min(limit, _MAX_LIMIT)
         effective_offset = 0 if offset is None else max(0, offset)
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
+        # Issue #103 (T7 follow-up, L2): keep ``require_imports_or_message``
+        # inside the try block so a lock contention or DB read failure on
+        # the gate probe is normalised to an ``Error: ...`` string instead
+        # of bubbling a raw traceback up through FastMCP. The other 16
+        # tools that funnel through ``run_query`` already get this for
+        # free; this tool builds its envelope by hand so the same
+        # protection has to be applied explicitly.
         try:
+            if msg := require_imports_or_message(conn, lock=lock):
+                return msg
             # ``total`` is the full point count for the workout (independent
             # of ``offset`` / ``limit``) so clients can render a progress
             # bar or skip pagination entirely when total <= limit.
