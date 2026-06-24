@@ -66,3 +66,30 @@ def call_tool(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> Any:
     raw = asyncio.run(fn(**kwargs))
     assert not raw.startswith("Error: "), f"tool returned a validation error: {raw}"
     return json.loads(raw)
+
+
+def seed_one_import(conn: duckdb.DuckDBPyConnection) -> None:
+    """Insert a single placeholder row into ``imports``.
+
+    Several DB-error-path tests need the empty-DB gate to pass so the tool
+    actually reaches the SQL it is about to fail on. Hoisting the literal
+    here keeps the placeholder columns in one place, matching the synthetic
+    fixture pattern documented in ``tests/fixtures/README.md`` (no real
+    device UUIDs or source names anywhere in the repo).
+    """
+    conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+    )
+
+
+def assert_tool_db_error(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> str:
+    """Call ``fn`` and assert it produced an ``Error: ...`` string.
+
+    Returns the error string so individual tests can layer additional
+    assertions on the message body when they need to (e.g. checking that a
+    specific exception class name leaked through).
+    """
+    out = asyncio.run(fn(**kwargs))
+    assert out.startswith("Error: "), f"expected an Error: response, got: {out!r}"
+    return out

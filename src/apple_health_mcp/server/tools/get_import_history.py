@@ -19,7 +19,16 @@ DESCRIPTION = (
     "the column was introduced)."
 )
 
-_SQL = "SELECT * FROM imports ORDER BY imported_at DESC"
+# Explicit column list (rather than ``SELECT *``) mirrors the audit-batch
+# principle applied to T5 / T6 / T12: future ``ALTER TABLE imports ADD
+# COLUMN`` work cannot leak into the wire shape without a deliberate
+# description / schema bump. The order matches the description above so
+# the LLM-facing prose and SQL projection stay in sync.
+_SQL = (
+    "SELECT import_id, export_dir, imported_at, record_count, "
+    "workout_count, duration_secs, export_xml_sha256 "
+    "FROM imports ORDER BY imported_at DESC"
+)
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:

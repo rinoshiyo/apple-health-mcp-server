@@ -233,9 +233,13 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 系列の間はマイナーリリースでも破壊的変更が含まれる可能性があり、
 極力避ける方針ではあるものの formal な保証はまだありません。
 
-### Public API として扱う範囲
+### 二層構造の契約
 
-下記は SemVer の **public API** として扱います:
+public surface は二層構造に分け、 内部ストレージの選択を改善しても
+wire-facing な契約が毎度メジャーバンプを要求しないように整理して
+います。
+
+**Layer 1 — wire-facing 契約 (strict、 変更はメジャーバンプ):**
 
 - **MCP ツール名、 パラメータシグネチャ (デフォルト値含む)、
   トップレベルのレスポンスフィールド名** — 新ツール / 新パラメータ /
@@ -243,53 +247,80 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
   削除 / 型変更はメジャーバンプ。 ツールのレスポンスは下流の LLM
   プロンプトテンプレートが消費するため、 返却キーのリネームは
   パラメータのリネームと同等の破壊変更
-- **DuckDB スキーマのテーブル名、 カラム名、 型、 NOT NULL 制約** —
-  カラム追加はマイナー、 既存カラムのリネーム / 削除 / 型変更 /
-  NOT NULL 緩和 / テーブルリネームはメジャー
-  （`run_custom_query` でテーブルへ SQL を直接書く利用者向け、
-  v0.1.4 の `imports.imported_at` リグレッションが示すとおり制約も
-  ユーザ可視）
 - **CLI サブコマンド名と必須パラメータ** (positional 引数と必須
-  フラグの両方) — 同様のバージョニングルール
+  フラグの両方)、 および **環境変数名とパース仕様** — リネーム /
+  削除 / セマンティクス変更はメジャーバンプ
+- **CLI 終了コード** (詳細は下記の表)
 - **パッケージルート (`apple_health_mcp`) から `__all__` で
   エクスポートされるトップレベルの Python 識別子** — 例
   `__version__`, `REPO_URL`, `ISSUES_URL`。 削除や型変更はメジャー
   バンプ
-- **サーバ / importer がプロセス環境から読む環境変数** — 現状の
-  セット:
 
-  | 名前 | 用途 | デフォルト |
-  |---|---|---|
-  | `APPLE_HEALTH_TZ` | DuckDB セッションタイムゾーン。 `TIMESTAMPTZ` カラムのレンダリングに使用。 CLI の `--tz` 指定時はそちらが優先される | OS の TZ |
-  | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | `import` の Phase 1 進捗 emitter の間隔。 整数秒、 範囲外の整数は 1..600 にクランプ、 非整数文字列は警告ログを出してデフォルトにフォールバック。 1 MB 未満のエクスポートは emitter 自体をスキップ | `10` |
-  | `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` のルートロガーレベル (`DEBUG`/`INFO`/`WARNING`/`ERROR`)。 全ログは stderr 行き、 stdout は MCP stdio transport が占有 | `INFO` |
-  | `APPLE_HEALTH_LOG_FORMAT` | ログフォーマッタ形式。 `human` はプレーンテキスト、 `json` は 1 行 1 オブジェクトの JSON でログアグリゲータ向け | `human` |
+**Layer 2 — internal escape hatch (best-effort、 変更はマイナー
+バンプ + CHANGELOG.md `Changed` で明示):**
 
-  サーバは DB デフォルトパス解決時に OS 標準の `XDG_DATA_HOME` (Linux/macOS) と `LOCALAPPDATA` (Windows) も honour するが、 これらはプラットフォーム契約であってプロジェクト固有変数ではない。
+- **DuckDB スキーマ** — テーブル名、 カラム名、 型、 NOT NULL 制約。
+  `run_custom_query` でテーブルへ SQL を直接書く利用者がここに依存
+  するため軽率には変更しないが、 スキーマは wire 契約ではなく
+  ストレージの実装詳細であって、 カラムリネームや型拡張は
+  CHANGELOG.md の `Changed` で明示することを条件にマイナーリリース
+  でも入り得る。 Layer 1 のツールレスポンスはその上に組み立てられて
+  いるため、 ツール出力に影響しないスキーマ移行は
+  `run_custom_query` 以外の呼び出し側からは不可視のまま済む
+- **デフォルト DuckDB ファイルパス規約** (詳細は
+  [データベースの場所](#データベースの場所)) — 各 OS の XDG 準拠
+  デフォルトパスは実運用上は安定 (ユーザはバックアップ対象にしたり
+  監視を向けたり symlink を貼ったりする) だが、 Layer 2 に置く
+  ことで、 追加のオーバーライド機構を導入したり、 OS の規約変更に
+  応じてデフォルトを調整する余地をメジャーバンプなしに確保する
+- **モジュール内部のヘルパー** — `apple_health_mcp.__all__` から
+  re-export されていないもの。 コントリビュータ向けに inline で
+  ドキュメントしているが、 どの tier でも SemVer 契約の対象外
 
-  これらのリネーム / 削除 / パース仕様変更はメジャーバンプ。 新規 env var 追加はマイナーバンプ
-- **CLI パラメータ** — `apple-health-mcp-server` をシェルスクリプト / サービススーパーバイザに食わせる、 あるいは Claude Desktop / Claude Code config に組み込む呼び出し側向けの契約:
+`run_custom_query` を使う利用者は構造上 Layer 2 に依存する。 安定性は
+best-effort 扱い — マイナーバージョン間ではできる限りスキーマ変更を
+避け、 変更が入った場合は CHANGELOG.md の `Changed` で明示するため、
+既存のカスタムクエリは 1 パスで更新できる。
 
-  - **サブコマンド**: `import <export-dir>`, `serve`
-  - **トップレベルフラグ**: `--db <path>` (DB パス上書き、 両サブコマンドで有効)、 `--tz <name>` (`APPLE_HEALTH_TZ` を上書き)
-  - **`serve` フラグ**: `--transport stdio|http` (デフォルト `stdio`)、 `--host <addr>` (HTTP バインドホスト)、 `--port <int>` (HTTP ポート)
+#### Layer 1 リファレンステーブル
 
-  サブコマンドやフラグのリネーム / 削除 / 既存項目のセマンティクス変更はメジャーバンプ。 新規 optional フラグやサブコマンドの追加はマイナーバンプ
-- **CLI 終了コード** — シェルスクリプト呼び出し側が観測する:
+**サーバ / importer がプロセス環境から読む環境変数** — 現状のセット:
 
-  | コード | 意味 |
-  |---|---|
-  | `0` | 成功 |
-  | `1` | import / serve パス内の任意の `AppleHealthMCPError` (エクスポート不在、 DB 破損、 importer 失敗、 サーバ起動失敗) |
-  | `2` | CLI 引数パーサ層の usage error (未知サブコマンド、 必須引数欠落、 不正フラグ値) |
+| 名前 | 用途 | デフォルト |
+|---|---|---|
+| `APPLE_HEALTH_TZ` | DuckDB セッションタイムゾーン。 `TIMESTAMPTZ` カラムのレンダリングに使用。 CLI の `--tz` 指定時はそちらが優先される | OS の TZ |
+| `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | `import` の Phase 1 進捗 emitter の間隔。 整数秒、 範囲外の整数は 1..600 にクランプ、 非整数文字列は警告ログを出してデフォルトにフォールバック。 1 MB 未満のエクスポートは emitter 自体をスキップ | `10` |
+| `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` のルートロガーレベル (`DEBUG`/`INFO`/`WARNING`/`ERROR`)。 全ログは stderr 行き、 stdout は MCP stdio transport が占有 | `INFO` |
+| `APPLE_HEALTH_LOG_FORMAT` | ログフォーマッタ形式。 `human` はプレーンテキスト、 `json` は 1 行 1 オブジェクトの JSON でログアグリゲータ向け | `human` |
 
-  新規の specific exit code 追加 (例: 「他プロセスが DB ロック中」 を `3` に切り出す等) はマイナーバンプ。 既存コードの **意味の付け替え (repurpose) や統合** はメジャーバンプ
-- **DuckDB データベースファイルパス規約** (詳細は[データベースの場所](#データベースの場所)) — 各 OS の XDG 準拠デフォルトパスは契約の一部。 ユーザはここをバックアップ対象にしたり監視を向けたり symlink を貼ったりするため。 デフォルト DB 配置先の変更はメジャーバンプ、 追加のオーバーライド機構を増やすのはマイナーバンプ
+サーバは DB デフォルトパス解決時に OS 標準の `XDG_DATA_HOME` (Linux/macOS) と `LOCALAPPDATA` (Windows) も honour するが、 これらはプラットフォーム契約であってプロジェクト固有変数ではない。
 
-上記に列挙されていないもの — MCP ツール / CLI / DuckDB スキーマ /
-`__all__` / env var / exit code / DB path の表面を持たない
-ヘルパーモジュール、 `_` プレフィックス付き識別子（private 定数、
-ヘルパー、 internal 例外）、 モジュール内部の定数 — は
+これらのリネーム / 削除 / パース仕様変更はメジャーバンプ。 新規 env var 追加はマイナーバンプ。
+
+**CLI パラメータ** — `apple-health-mcp-server` をシェルスクリプト / サービススーパーバイザに食わせる、 あるいは Claude Desktop / Claude Code config に組み込む呼び出し側向けの契約:
+
+- **サブコマンド**: `import <export-dir>`, `serve`
+- **トップレベルフラグ**: `--db <path>` (DB パス上書き、 両サブコマンドで有効)、 `--tz <name>` (`APPLE_HEALTH_TZ` を上書き)
+- **`serve` フラグ**: `--transport stdio|http` (デフォルト `stdio`)、 `--host <addr>` (HTTP バインドホスト)、 `--port <int>` (HTTP ポート)
+
+サブコマンドやフラグのリネーム / 削除 / 既存項目のセマンティクス変更はメジャーバンプ。 新規 optional フラグやサブコマンドの追加はマイナーバンプ。
+
+**CLI 終了コード** — シェルスクリプト呼び出し側が観測する:
+
+| コード | 意味 |
+|---|---|
+| `0` | 成功 |
+| `1` | import / serve パス内の任意の `AppleHealthMCPError` (エクスポート不在、 DB 破損、 importer 失敗、 サーバ起動失敗) |
+| `2` | CLI 引数パーサ層の usage error (未知サブコマンド、 必須引数欠落、 不正フラグ値) |
+
+新規の specific exit code 追加 (例: 「他プロセスが DB ロック中」 を `3` に切り出す等) はマイナーバンプ。 既存コードの **意味の付け替え (repurpose) や統合** はメジャーバンプ。
+
+#### どちらの層にも含まれないもの
+
+Layer 1 / Layer 2 のいずれにも列挙されていないもの — MCP ツール /
+CLI / `__all__` / env var / exit code の表面を持たないヘルパー
+モジュール、 `_` プレフィックス付き識別子（private 定数、 ヘルパー、
+internal 例外）、 モジュール内部の定数 — はどの tier でも
 **public API ではなく**、 任意のリリースで変更されます。 特に:
 
 - **ログ行のフォーマット** (例: `progress: xml NN% (X / Y MB, ~Z min remaining)`)
