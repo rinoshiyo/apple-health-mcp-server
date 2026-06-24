@@ -5,8 +5,9 @@
 [![PyPI version](https://img.shields.io/pypi/v/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![Python versions](https://img.shields.io/pypi/pyversions/apple-health-mcp-server.svg)](https://pypi.org/project/apple-health-mcp-server/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Landing page](https://img.shields.io/badge/landing_page-rinoshiyo.github.io-10b981)](https://rinoshiyo.github.io/apple-health-mcp-server/)
 
-> **おそらく、もっとも網羅的な Apple Health MCP サーバー。**
+> **Claude を、自分専属のヘルス AI に。**
 >
 > Read this in [English](README.md) / [日本語](README.ja.md).
 
