@@ -17,8 +17,8 @@ def _seed_existing_handler() -> None:
 
 
 def test_configure_logging_human(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LOG_FORMAT", raising=False)
-    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.delenv("APPLE_HEALTH_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_LOG_LEVEL", "DEBUG")
     _seed_existing_handler()
 
     configure_logging()
@@ -32,8 +32,8 @@ def test_configure_logging_human(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_configure_logging_json_and_unknown_level(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LOG_FORMAT", "json")
-    monkeypatch.setenv("LOG_LEVEL", "NOPE")
+    monkeypatch.setenv("APPLE_HEALTH_LOG_FORMAT", "json")
+    monkeypatch.setenv("APPLE_HEALTH_LOG_LEVEL", "NOPE")
 
     configure_logging()
 

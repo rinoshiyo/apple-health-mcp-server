@@ -19,15 +19,15 @@ if TYPE_CHECKING:
 
 
 DESCRIPTION = (
-    "Get ECG data by ecg_hash. Returns: reading (metadata), stats "
-    "(sample_count, mean_uv, min_uv, max_uv, stddev_uv -- STDDEV_SAMP), "
-    "downsample_factor, and voltages_uv (empty by default). Set "
-    "include_voltages=true to get the waveform array; pair with "
-    "downsample_factor (e.g. 10) to thin it out so the LLM context doesn't "
-    "get overwhelmed. Downsampling is naive every-Nth-sample decimation (no "
-    "anti-alias filter) -- fine for waveform visualization, avoid for "
-    "spectral analysis. NOTE: in earlier versions sample_count was a "
-    "top-level field; it is now under stats. Get ecg_hash from list_ecg_readings."
+    "Get ECG data by ecg_hash. Returns: reading (metadata: ecg_hash, "
+    "recorded_date, classification, device, sample_rate_hz, symptoms, "
+    "software_version), stats (sample_count, mean_uv, min_uv, max_uv, "
+    "stddev_uv -- STDDEV_SAMP), downsample_factor, and voltages_uv (empty "
+    "by default). Set include_voltages=true to get the waveform array; "
+    "pair with downsample_factor (e.g. 10) to thin it out so the LLM "
+    "context doesn't get overwhelmed. Downsampling is naive every-Nth-sample "
+    "decimation (no anti-alias filter) -- fine for waveform visualization, "
+    "avoid for spectral analysis. Get ecg_hash from list_ecg_readings."
 )
 
 
@@ -62,9 +62,14 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         if msg := require_imports_or_message(conn, lock=lock):
             return msg
         try:
+            # Issue #98 (T12): explicit column list keeps ``import_id`` (an
+            # internal join key) off the wire and pins the public response
+            # shape ahead of the v1.0.0 SemVer freeze.
             metadata = query_to_json(
                 conn,
-                "SELECT * FROM ecg_readings WHERE ecg_hash = ?",
+                "SELECT ecg_hash, recorded_date, classification, device, "
+                "sample_rate_hz, symptoms, software_version "
+                "FROM ecg_readings WHERE ecg_hash = ?",
                 [ecg_hash],
                 lock=lock,
             )

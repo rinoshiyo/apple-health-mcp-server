@@ -35,6 +35,15 @@ _logger = logging.getLogger(__name__)
 
 
 _CREATE_TABLES_SQL = """
+-- Issue #102 (DB1): ``records`` splits the Apple <Record value="..."> field
+-- across two columns by data shape. Numeric quantities (heart rate, step
+-- counts, blood pressure components, etc.) land in ``value`` as DOUBLE.
+-- Categorical / qualitative payloads (sleep analysis stages, mindful
+-- session contexts, etc.) land in ``text_value`` as VARCHAR. The two
+-- columns are mutually exclusive per row: exactly one is populated and
+-- the other is NULL. ``run_custom_query`` callers writing aggregations
+-- should ``WHERE value IS NOT NULL`` for numeric flows, or
+-- ``COALESCE(value::VARCHAR, text_value)`` when they need a unified view.
 CREATE TABLE IF NOT EXISTS records (
     record_hash     VARCHAR,
     record_type     VARCHAR NOT NULL,
@@ -56,6 +65,18 @@ CREATE TABLE IF NOT EXISTS record_metadata (
     value           VARCHAR
 );
 
+-- Issue #102 (DB2): ``workouts.total_distance`` / ``total_distance_unit`` /
+-- ``total_energy_burned`` / ``total_energy_unit`` are vestigial columns
+-- that Apple emitted on the ``<Workout>`` element through iOS 10. From
+-- iOS 11 onward Apple moved them to ``<WorkoutStatistics>`` children and
+-- left the original attributes empty, so a modern raw import lands NULL
+-- in all four columns. ``populate_workout_vestigial_columns`` below
+-- backfills them from ``workout_statistics`` so legacy tooling that
+-- queries ``workouts`` directly keeps working without having to learn
+-- the statistics table. Distance is only backfilled when every
+-- statistic row for the workout shares a unit (a triathlon mixing
+-- metres + kilometres leaves the column NULL rather than summing
+-- incommensurable values).
 CREATE TABLE IF NOT EXISTS workouts (
     workout_hash         VARCHAR,
     activity_type        VARCHAR NOT NULL,
@@ -158,6 +179,11 @@ CREATE TABLE IF NOT EXISTS workout_routes (
     import_id       VARCHAR NOT NULL
 );
 
+-- Issue #96 (T8): ``sample_time`` is stored as Apple raw ``HH:MM:SS.SSS``
+-- for round-trip fidelity so a future exporter can write the literal
+-- value back unchanged. The ``get_heart_rate_samples`` MCP tool
+-- normalises it to a float seconds offset on the way out (storage
+-- format is private; wire format is float).
 CREATE TABLE IF NOT EXISTS heart_rate_samples (
     parent_record_hash  VARCHAR NOT NULL,
     sample_idx          INTEGER NOT NULL,

@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import run_query
+from apple_health_mcp.server.query import (
+    query_to_json,
+    require_imports_or_message,
+    run_query_payload,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -17,8 +21,9 @@ if TYPE_CHECKING:
 DESCRIPTION = (
     "Get beat-level heart-rate samples attached to a parent HR or HRV record. "
     "Returns an array of {sample_idx, bpm, sample_time} where sample_time is "
-    "the relative HH:MM:SS.SSS offset Apple emits. Use this to reconstruct "
-    "HRV metrics (RMSSD, pNN50, LF/HF) from a "
+    "the relative offset in seconds (float; e.g. ``1.5`` for one and a half "
+    "seconds after the parent record's ``start_date``). Use this to "
+    "reconstruct HRV metrics (RMSSD, pNN50, LF/HF) from a "
     "HKQuantityTypeIdentifierHeartRateVariabilitySDNN record, or to inspect "
     "the per-beat distribution behind an averaged "
     "HKQuantityTypeIdentifierHeartRate record (peak vs. average bpm within a "
@@ -28,6 +33,32 @@ DESCRIPTION = (
 
 _DEFAULT_LIMIT = 1000
 _MAX_LIMIT = 10_000
+
+
+def _parse_sample_time(value: str | None) -> float | None:
+    """Convert the stored ``HH:MM:SS.SSS`` offset to a seconds float.
+
+    Issue #96 (T8): the column is stored verbatim as Apple emits it so a
+    round-trip back into the export stays byte-identical, but the wire
+    contract surfaces a numeric offset so downstream LLM math (window
+    arithmetic, RMSSD calculations) does not have to re-parse the string.
+
+    Defensive against unexpected shapes -- a malformed row falls back to
+    ``None`` rather than raising, so one bad sample cannot poison the
+    whole response.
+    """
+    if value is None:
+        return None
+    parts = value.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except ValueError:
+        return None
+    return float(hours * 3600 + minutes * 60) + seconds
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
@@ -47,9 +78,20 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
     ) -> str:
         effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        if msg := require_imports_or_message(conn, lock=lock):
+            return msg
         sql = (
             "SELECT sample_idx, bpm, sample_time FROM heart_rate_samples "
             "WHERE parent_record_hash = ? ORDER BY sample_idx "
             f"LIMIT {effective_limit}"
         )
-        return run_query(conn, sql, [record_hash], lock=lock)
+        try:
+            rows = query_to_json(conn, sql, [record_hash], lock=lock)
+        except Exception as exc:
+            return f"Error: {exc}"
+        # Issue #96 (T8): normalise ``sample_time`` on the way out only
+        # (the underlying VARCHAR column stays as Apple's raw string so a
+        # future round-trip exporter has the literal value to write back).
+        for row in rows:
+            row["sample_time"] = _parse_sample_time(row.get("sample_time"))
+        return run_query_payload(rows)

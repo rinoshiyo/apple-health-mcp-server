@@ -157,7 +157,8 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
 
         # 1. list_record_types
         rows = call_tool(bind_tool(list_record_types, conn))
-        assert any(r["type"] == "HKQuantityTypeIdentifierHeartRate" for r in rows)
+        # Issue #91 (T1): wire field is ``record_type``.
+        assert any(r["record_type"] == "HKQuantityTypeIdentifierHeartRate" for r in rows)
 
         # 2. query_records
         rows = call_tool(
@@ -185,9 +186,11 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         rows = call_tool(bind_tool(get_activity_summaries, conn))
         assert rows and rows[0]["date_components"] == "2024-06-15"
 
-        # 7. get_workout_route
-        rows = call_tool(bind_tool(get_workout_route, conn), workout_hash=workout_hash)
-        assert len(rows) == 3
+        # 7. get_workout_route -- envelope shape (issue #95 / T7).
+        payload = call_tool(bind_tool(get_workout_route, conn), workout_hash=workout_hash)
+        assert payload["total"] == 3
+        assert len(payload["points"]) == 3
+        assert payload["has_more"] is False
 
         # 8. get_heart_rate_samples (no embedded HR samples in the fixture,
         # but the tool must still return a list).
