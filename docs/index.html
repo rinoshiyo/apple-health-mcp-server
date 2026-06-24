@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>apple-health-mcp-server</title>
+<meta name="description" content="A local-first MCP server that hands your full Apple Health export to Claude.">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+JP:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="./style/tokens.css">
+<link rel="stylesheet" href="./style/main.css">
+</head>
+<body>
+
+<nav class="topnav" aria-label="Top">
+  <div class="topnav-inner">
+    <div class="topnav-left">
+      <span class="topnav-brand"><span class="red-dot" aria-hidden="true"></span>apple-health-mcp-server</span>
+    </div>
+    <div class="topnav-right">
+      <a href="#why" data-i18n="nav.overview">概要</a>
+      <a href="#export" data-i18n="nav.export">エクスポート</a>
+      <a href="#install" data-i18n="nav.install">インストール</a>
+      <a href="#tools" data-i18n="nav.tools">ツール</a>
+      <a href="https://github.com/rinoshiyo/apple-health-mcp-server" class="topnav-github" aria-label="GitHub repository" data-i18n-attr-aria-label="nav.github">
+        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+      </a>
+      <button type="button" class="lang-toggle" data-i18n-toggle>English</button>
+    </div>
+  </div>
+</nav>
+
+<section class="hero" aria-label="Hero">
+
+  <h1 class="headline" data-i18n-html="hero.headline_html">
+    Claude を、<br>
+    <span class="accent">自分専属のヘルス AI</span> に。
+  </h1>
+
+  <p class="deck" data-i18n-html="hero.deck_html">
+    Apple ヘルスケアのフルデータを<strong>ローカルで</strong> Claude に渡す MCP サーバ。<br>
+    自分のラン、自分の睡眠、自分の傾向 &mdash;<br>
+    トレーナーやコーチのように、あなただけの相談相手になる。
+  </p>
+
+  <div class="visual" aria-hidden="true">
+
+    <div class="health-card">
+      <div class="health-card-inner">
+        <div class="health-card-title">
+          <span data-i18n="card.summary">サマリー</span>
+          <span class="summary" data-i18n="card.summary_day">今日 · 火曜日</span>
+        </div>
+
+        <div class="metric-row">
+          <div class="metric-label">
+            <div class="metric-icon heart">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.9-9.7-9.4C.9 8.3 2.9 4.6 6.5 4.6c2 0 3.6 1.1 4.5 2.6.9-1.5 2.5-2.6 4.5-2.6 3.6 0 5.6 3.7 4.2 7C19.5 16.1 12 21 12 21z"/></svg>
+            </div>
+            <span class="metric-name" data-i18n="card.metric_heart">心拍数</span>
+          </div>
+          <div class="metric-value">
+            <span data-i18n="card.metric_heart_value">62</span>
+            <span class="unit" data-i18n="card.metric_heart_unit">bpm</span>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <div class="metric-label">
+            <div class="metric-icon walk">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M14.7 3.2c1.5.4 2.4 2 1.9 3.6l-1.9 6.6c-.2.8-.9 1.3-1.7 1.3h-1c-.9 0-1.6-.7-1.6-1.6l-.3-7c0-1.7 1.4-3 3.1-2.9zM7.2 9.4c1.4.6 2 2.1 1.4 3.5L6 19c-.3.6-.9 1-1.6 1-1.1 0-1.9-1.1-1.5-2.1l2.5-7c.4-1.2 1.7-1.9 1.8-1.5z"/></svg>
+            </div>
+            <span class="metric-name" data-i18n="card.metric_walk">歩数</span>
+          </div>
+          <div class="metric-value">
+            <span data-i18n="card.metric_walk_value">8,432</span>
+            <span class="unit" data-i18n="card.metric_walk_unit">歩</span>
+          </div>
+        </div>
+
+        <div class="metric-row">
+          <div class="metric-label">
+            <div class="metric-icon sleep">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+            </div>
+            <span class="metric-name" data-i18n="card.metric_sleep">睡眠</span>
+          </div>
+          <div class="metric-value" data-i18n="card.metric_sleep_value">7時間14分</div>
+        </div>
+
+        <div class="metric-row">
+          <div class="metric-label">
+            <div class="metric-icon flame">
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2s4.5 4 4.5 8.5S14 17 12 17s-4.5-2-4.5-6.5C7.5 8 9 6 9 4c1.5 1 3 .5 3-2zM7 17c0 2.8 2.2 5 5 5s5-2.2 5-5c0-1.3-.5-2.6-1.4-3.5C15 16 13.6 17 12 17s-3-1-3.6-3.5C7.5 14.4 7 15.7 7 17z"/></svg>
+            </div>
+            <span class="metric-name" data-i18n="card.metric_flame">アクティブ</span>
+          </div>
+          <div class="metric-value">
+            <span data-i18n="card.metric_flame_value">412</span>
+            <span class="unit" data-i18n="card.metric_flame_unit">kcal</span>
+          </div>
+        </div>
+
+        <div class="mini-chart">
+          <div class="mini-chart-label">
+            <span data-i18n="card.hrv_label">HRV (7日)</span>
+            <strong data-i18n="card.hrv_value">48 ms</strong>
+          </div>
+          <svg viewBox="0 0 280 32" preserveAspectRatio="none">
+            <polyline
+              fill="none"
+              stroke="#fa2c54"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              points="0,22 40,16 80,20 120,10 160,14 200,8 240,12 280,6"/>
+            <circle cx="280" cy="6" r="2.6" fill="#fa2c54"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">
+      <span class="label" data-i18n="connector.src">MCP</span>
+      <svg viewBox="0 0 56 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <line x1="0" y1="7" x2="48" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3 3"/>
+        <path d="M44 2 L52 7 L44 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      <span class="label" data-i18n="connector.dst">Local</span>
+    </div>
+
+    <div class="hero-convo" data-hero-rotator>
+
+      <div class="hero-user-bubble">
+        <span class="hero-user-tag">You</span>
+        <p class="hero-user-text" data-rotate-q data-i18n="usecases.card1_q">昨日のラン、 心拍数で色分け地図にして</p>
+      </div>
+
+      <div class="claude-card hero-claude-bubble">
+        <div class="claude-head">
+          <div class="claude-avatar"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></div>
+          <div class="claude-name" data-i18n="claude.name">Claude</div>
+          <div class="claude-time" data-i18n="claude.time">just now</div>
+        </div>
+        <div class="claude-body" data-rotate-a data-i18n-html="usecases.card1_a_html">
+          <p><code>get_workout_route()</code> で GPX ポイントを、 <code>get_heart_rate_samples()</code> で時刻同期の心拍を取得 &mdash; HR ゾーン別に色分けした HTML 地図を生成しました。</p>
+        </div>
+        <div class="claude-meta">
+          <span class="dot"></span>
+          <span data-rotate-meta data-i18n="usecases.card1_meta">workout · heart rate · route</span>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+
+  <div class="install" id="install-quick">
+    <button class="copy-btn" type="button" aria-label="Copy install commands"
+      onclick="(function(b){if(navigator.clipboard){navigator.clipboard.writeText('uvx apple-health-mcp-server import ~/apple_health_export\nuvx apple-health-mcp-server serve').then(function(){b.dataset.copied='1';setTimeout(function(){delete b.dataset.copied;},1600);});}})(this)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M3 11V3.5C3 2.67 3.67 2 4.5 2H10" />
+      </svg>
+    </button>
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span><span class="cmd-bin">uvx</span> <span class="cmd-path">apple-health-mcp-server</span> <span class="cmd-sub">import</span> <span class="cmd-arg">~/apple_health_export</span></span>
+    </div>
+    <div class="install-row">
+      <span class="prompt">$</span>
+      <span><span class="cmd-bin">uvx</span> <span class="cmd-path">apple-health-mcp-server</span> <span class="cmd-sub">serve</span></span>
+    </div>
+  </div>
+
+  <div class="cta-row">
+    <a class="cta-primary" href="#install">
+      <span data-i18n="cta.primary">クイックスタート</span>
+      <span class="arrow">&rarr;</span>
+    </a>
+    <a class="cta-secondary" href="#install-desktop">
+      <span data-i18n="cta.secondary">Claude Desktop 用 .mcpb</span>
+      <span class="arrow">&rarr;</span>
+    </a>
+  </div>
+
+</section>
+
+<!-- ============================================================
+     #2 Why — なぜ作ったか / Why this exists
+     ============================================================ -->
+<section id="why" class="section why-section" aria-labelledby="why-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="why.eyebrow">なぜ作ったか</span>
+      <h2 id="why-title" class="section-title" data-i18n="why.title">Apple ヘルスケアのフルデータを、ローカルで Claude に。</h2>
+      <p class="section-deck" data-i18n="why.deck">クラウドに預けたくない健康データを、 自分のラップトップの中だけで AI に解析させるための MCP サーバ。</p>
+    </div>
+
+    <div class="why-grid">
+      <article class="why-card" data-fx="rise">
+        <div class="why-icon why-icon-lock" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="4" y="11" width="16" height="9" rx="2"/>
+            <path d="M8 11V8a4 4 0 0 1 8 0v3"/>
+          </svg>
+        </div>
+        <h3 class="why-card-title" data-i18n="why.card1_title">ローカル完結</h3>
+        <p class="why-card-body" data-i18n="why.card1_body">クラウドに 1 バイトも送らない。 全てローカル DuckDB に閉じる。</p>
+      </article>
+
+      <article class="why-card" data-fx="rise">
+        <div class="why-icon why-icon-stack" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 7l9-4 9 4-9 4-9-4z"/>
+            <path d="M3 12l9 4 9-4"/>
+            <path d="M3 17l9 4 9-4"/>
+          </svg>
+        </div>
+        <h3 class="why-card-title" data-i18n="why.card2_title">フルデータ対応</h3>
+        <p class="why-card-body" data-i18n="why.card2_body">export.xml + ECG CSV + GPX ルート、 Apple ヘルスケアが書き出す全てを取り込む。</p>
+      </article>
+
+      <article class="why-card" data-fx="rise">
+        <div class="why-icon why-icon-tools" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6 6 2.4 2.4 6-6a4 4 0 0 0 5.4-5.4l-2.7 2.7-2.4-2.4 2.7-2.7z"/>
+          </svg>
+        </div>
+        <h3 class="why-card-title" data-i18n="why.card3_title">17 個の MCP ツール</h3>
+        <p class="why-card-body" data-i18n="why.card3_body">読み取り中心の幅広いクエリ。 ワークアウト・心拍・睡眠・ECG・State of Mind まで。</p>
+      </article>
+
+      <article class="why-card" data-fx="rise">
+        <div class="why-icon why-icon-claude" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/>
+          </svg>
+        </div>
+        <h3 class="why-card-title" data-i18n="why.card4_title">Claude 三環境対応</h3>
+        <p class="why-card-body" data-i18n="why.card4_body">Claude Code / Claude Desktop / Codex CLI、 どの入口からでも同じデータを参照。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #3 Use cases — 使い道 / What you can do
+     ============================================================ -->
+<section id="use-cases" class="section usecases-section" aria-labelledby="usecases-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="usecases.eyebrow">使い道</span>
+      <h2 id="usecases-title" class="section-title" data-i18n="usecases.title">「自分のデータで質問できる」 ということ。</h2>
+      <p class="section-deck" data-i18n="usecases.deck">Claude にプロンプトを投げるだけ。 必要なツールは Claude が自分で選ぶ。</p>
+    </div>
+
+    <div class="usecases-grid">
+      <article class="uc-card" data-fx="rise">
+        <div class="uc-bubble uc-bubble-user">
+          <span class="uc-bubble-tag">You</span>
+          <p data-i18n="usecases.card1_q">昨日のラン、 心拍数で色分け地図にして</p>
+        </div>
+        <div class="uc-bubble uc-bubble-claude">
+          <span class="uc-bubble-tag">
+            <span class="uc-avatar"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></span>Claude
+          </span>
+          <p data-i18n-html="usecases.card1_a_html">…</p>
+        </div>
+        <div class="uc-meta" data-i18n="usecases.card1_meta">workout · heart rate · route</div>
+      </article>
+
+      <article class="uc-card" data-fx="rise">
+        <div class="uc-bubble uc-bubble-user">
+          <span class="uc-bubble-tag">You</span>
+          <p data-i18n="usecases.card2_q">今日のトレーニング、 どうしたらいい?</p>
+        </div>
+        <div class="uc-bubble uc-bubble-claude">
+          <span class="uc-bubble-tag">
+            <span class="uc-avatar"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></span>Claude
+          </span>
+          <p data-i18n-html="usecases.card2_a_html">…</p>
+        </div>
+        <div class="uc-meta" data-i18n="usecases.card2_meta">sleep · HRV · resting HR</div>
+      </article>
+
+      <article class="uc-card" data-fx="rise">
+        <div class="uc-bubble uc-bubble-user">
+          <span class="uc-bubble-tag">You</span>
+          <p data-i18n="usecases.card3_q">過去のデータから何か気付くことある?</p>
+        </div>
+        <div class="uc-bubble uc-bubble-claude">
+          <span class="uc-bubble-tag">
+            <span class="uc-avatar"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></span>Claude
+          </span>
+          <p data-i18n-html="usecases.card3_a_html">…</p>
+        </div>
+        <div class="uc-meta" data-i18n="usecases.card3_meta">long-term trends · seasonality</div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #3.5 Export — データのエクスポート / Export your data first
+     ============================================================ -->
+<section id="export" class="section export-section" aria-labelledby="export-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="export.eyebrow">データのエクスポート</span>
+      <h2 id="export-title" class="section-title" data-i18n="export.title">Claude に渡す前に、 export.xml を取り出す。</h2>
+      <p class="section-deck" data-i18n="export.deck">iPhone のヘルスケアアプリで全データを export.xml として書き出し、 Mac / PC に転送する。 数分の作業。</p>
+    </div>
+
+    <div class="export-card" data-fx="rise">
+      <ol class="export-steps">
+        <li class="export-step">
+          <span class="export-step-num" aria-hidden="true">1</span>
+          <span class="export-step-label" data-i18n="export.step1">iPhone のヘルスケアアプリを開く</span>
+        </li>
+        <li class="export-step">
+          <span class="export-step-num" aria-hidden="true">2</span>
+          <span class="export-step-label" data-i18n="export.step2">右上のプロフィール画像をタップ</span>
+        </li>
+        <li class="export-step">
+          <span class="export-step-num" aria-hidden="true">3</span>
+          <span class="export-step-label" data-i18n="export.step3">「すべてのヘルスケアデータを書き出す」 をタップ</span>
+        </li>
+        <li class="export-step">
+          <span class="export-step-num" aria-hidden="true">4</span>
+          <span class="export-step-label" data-i18n="export.step4">数分待つ (データ量による、 数 GB なら 5-15 分)</span>
+        </li>
+        <li class="export-step">
+          <span class="export-step-num" aria-hidden="true">5</span>
+          <span class="export-step-label" data-i18n="export.step5">AirDrop / クラウド経由で Mac / PC に転送、 zip を解凍</span>
+        </li>
+      </ol>
+
+      <p class="export-note" data-i18n-html="export.note_html">解凍後は <code>apple_health_export/</code> フォルダの中に <code>export.xml</code> / <code>electrocardiograms/</code> (ECG) / <code>workout-routes/</code> (GPX) が入ってる。 このフォルダ全体を import コマンドに渡す。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #4 Install — インストール / Install
+     ============================================================ -->
+<section id="install" class="section install-section" aria-labelledby="install-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="install.eyebrow">インストール</span>
+      <h2 id="install-title" class="section-title" data-i18n="install.title">3 つの環境、 同じデータ。</h2>
+      <p class="section-deck" data-i18n="install.deck">Claude Code / Claude Desktop / Codex CLI、 いずれも数ステップ。</p>
+    </div>
+
+    <div class="install-tabs" role="tablist" aria-label="Install methods" data-fx="rise">
+      <button type="button" class="install-tab is-active" role="tab" aria-selected="true" aria-controls="install-panel-uvx" data-tab="uvx" data-i18n="install.tab_uvx">uvx (共通)</button>
+      <button type="button" class="install-tab" role="tab" aria-selected="false" aria-controls="install-panel-code" data-tab="code" data-i18n="install.tab_code">Claude Code</button>
+      <button type="button" class="install-tab" role="tab" aria-selected="false" aria-controls="install-panel-desktop" data-tab="desktop" data-i18n="install.tab_desktop">Claude Desktop</button>
+      <button type="button" class="install-tab" role="tab" aria-selected="false" aria-controls="install-panel-codex" data-tab="codex" data-i18n="install.tab_codex">Codex CLI</button>
+    </div>
+
+    <div class="install-panels" data-fx="rise">
+
+      <div class="install-panel is-active" id="install-panel-uvx" role="tabpanel" data-tab="uvx">
+        <h3 class="install-panel-title" data-i18n="install.uvx_title">前提: uv を入れる</h3>
+        <ol class="install-steps">
+          <li>
+            <div class="install-step-label" data-i18n="install.uvx_step1">1. uv 公式インストーラで uv を導入</div>
+            <pre class="code-block"><code><span class="cmd-comment"># macOS / Linux</span>
+<span class="prompt">$</span> <span class="cmd-bin">curl</span> <span class="cmd-arg">-LsSf</span> <span class="cmd-path">https://astral.sh/uv/install.sh</span> | <span class="cmd-bin">sh</span></code></pre>
+          </li>
+          <li>
+            <div class="install-step-label" data-i18n="install.uvx_step2">2. Apple ヘルスケア export を解凍したディレクトリを import</div>
+            <pre class="code-block"><code><span class="prompt">$</span> <span class="cmd-bin">uvx</span> <span class="cmd-path">apple-health-mcp-server</span> <span class="cmd-sub">import</span> <span class="cmd-arg">~/apple_health_export</span></code></pre>
+          </li>
+          <li>
+            <div class="install-step-label" data-i18n="install.uvx_step3">3. MCP サーバとして serve</div>
+            <pre class="code-block"><code><span class="prompt">$</span> <span class="cmd-bin">uvx</span> <span class="cmd-path">apple-health-mcp-server</span> <span class="cmd-sub">serve</span></code></pre>
+          </li>
+        </ol>
+        <p class="install-note" data-i18n-html="install.uvx_note">…</p>
+      </div>
+
+      <div class="install-panel" id="install-panel-code" role="tabpanel" data-tab="code">
+        <h3 class="install-panel-title" data-i18n="install.code_title">Claude Code (CLI)</h3>
+        <p class="install-body" data-i18n-html="install.code_body">…</p>
+        <pre class="code-block code-block-json"><code>{
+  <span class="cmd-key">"mcpServers"</span>: {
+    <span class="cmd-key">"apple-health-mcp-server"</span>: {
+      <span class="cmd-key">"command"</span>: <span class="cmd-arg">"uvx"</span>,
+      <span class="cmd-key">"args"</span>: [<span class="cmd-arg">"apple-health-mcp-server@latest"</span>, <span class="cmd-arg">"serve"</span>]
+    }
+  }
+}</code></pre>
+        <p class="install-note" data-i18n-html="install.code_note">…</p>
+      </div>
+
+      <div class="install-panel" id="install-panel-desktop" role="tabpanel" data-tab="desktop">
+        <h3 class="install-panel-title" data-i18n="install.desktop_title">Claude Desktop (.mcpb bundle)</h3>
+        <ol class="install-steps">
+          <li><div class="install-step-label" data-i18n-html="install.desktop_step1">…</div></li>
+          <li><div class="install-step-label" data-i18n-html="install.desktop_step2">…</div></li>
+          <li><div class="install-step-label" data-i18n-html="install.desktop_step3">…</div></li>
+        </ol>
+        <p class="install-note" data-i18n-html="install.desktop_note">…</p>
+      </div>
+
+      <div class="install-panel" id="install-panel-codex" role="tabpanel" data-tab="codex">
+        <h3 class="install-panel-title" data-i18n="install.codex_title">Codex CLI</h3>
+        <p class="install-body" data-i18n-html="install.codex_body">…</p>
+        <pre class="code-block code-block-toml"><code><span class="cmd-section">[mcp_servers.apple-health-mcp-server]</span>
+<span class="cmd-key">command</span> = <span class="cmd-arg">"uvx"</span>
+<span class="cmd-key">args</span> = [<span class="cmd-arg">"apple-health-mcp-server@latest"</span>, <span class="cmd-arg">"serve"</span>]</code></pre>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #5 Tools — 17 個のツール / 17 tools
+     ============================================================ -->
+<section id="tools" class="section tools-section" aria-labelledby="tools-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="tools.eyebrow">17 個のツール</span>
+      <h2 id="tools-title" class="section-title" data-i18n="tools.title">読み取り中心の、 幅広いクエリ面。</h2>
+      <p class="section-deck" data-i18n="tools.deck">Apple ヘルスケアのスキーマに沿ったツール群。 Claude がクエリを組み立て、 ローカル DuckDB が応答する。</p>
+    </div>
+
+    <div class="tools-grid">
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g1_title">Records / Statistics</h3>
+          <p class="tools-group-desc" data-i18n="tools.g1_desc">汎用レコード照会と統計集計。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">query_records</code><span class="tool-desc" data-i18n="tools.t_query_records">…</span></li>
+          <li><code class="tool-name">get_record_statistics</code><span class="tool-desc" data-i18n="tools.t_get_record_statistics">…</span></li>
+          <li><code class="tool-name">list_record_types</code><span class="tool-desc" data-i18n="tools.t_list_record_types">…</span></li>
+          <li><code class="tool-name">list_state_of_mind</code><span class="tool-desc" data-i18n="tools.t_list_state_of_mind">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g2_title">Workouts</h3>
+          <p class="tools-group-desc" data-i18n="tools.g2_desc">ワークアウトの一覧・詳細・ルート。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">list_workouts</code><span class="tool-desc" data-i18n="tools.t_list_workouts">…</span></li>
+          <li><code class="tool-name">get_workout_details</code><span class="tool-desc" data-i18n="tools.t_get_workout_details">…</span></li>
+          <li><code class="tool-name">get_workout_route</code><span class="tool-desc" data-i18n="tools.t_get_workout_route">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g3_title">ECG</h3>
+          <p class="tools-group-desc" data-i18n="tools.g3_desc">Apple Watch の心電図波形と分類。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">list_ecg_readings</code><span class="tool-desc" data-i18n="tools.t_list_ecg_readings">…</span></li>
+          <li><code class="tool-name">get_ecg_data</code><span class="tool-desc" data-i18n="tools.t_get_ecg_data">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g4_title">Heart rate</h3>
+          <p class="tools-group-desc" data-i18n="tools.g4_desc">心拍サンプル。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">get_heart_rate_samples</code><span class="tool-desc" data-i18n="tools.t_get_heart_rate_samples">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g5_title">Correlations</h3>
+          <p class="tools-group-desc" data-i18n="tools.g5_desc">血圧などの相関レコード。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">list_correlations</code><span class="tool-desc" data-i18n="tools.t_list_correlations">…</span></li>
+          <li><code class="tool-name">get_correlation_details</code><span class="tool-desc" data-i18n="tools.t_get_correlation_details">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g6_title">Activity summary</h3>
+          <p class="tools-group-desc" data-i18n="tools.g6_desc">日次の Move / Exercise / Stand リング。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">get_activity_summaries</code><span class="tool-desc" data-i18n="tools.t_get_activity_summaries">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g7_title">Metadata</h3>
+          <p class="tools-group-desc" data-i18n="tools.g7_desc">DB 全体のメタデータと自分自身の属性。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">get_import_history</code><span class="tool-desc" data-i18n="tools.t_get_import_history">…</span></li>
+          <li><code class="tool-name">list_data_sources</code><span class="tool-desc" data-i18n="tools.t_list_data_sources">…</span></li>
+          <li><code class="tool-name">get_me_attributes</code><span class="tool-desc" data-i18n="tools.t_get_me_attributes">…</span></li>
+        </ul>
+      </article>
+
+      <article class="tools-group" data-fx="rise">
+        <header class="tools-group-head">
+          <h3 class="tools-group-title" data-i18n="tools.g8_title">Custom query</h3>
+          <p class="tools-group-desc" data-i18n="tools.g8_desc">DuckDB 直接クエリ (読み取り専用)。</p>
+        </header>
+        <ul class="tools-list">
+          <li><code class="tool-name">run_custom_query</code><span class="tool-desc" data-i18n="tools.t_run_custom_query">…</span></li>
+        </ul>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #6 Privacy — プライバシー / Privacy
+     ============================================================ -->
+<section id="privacy" class="section privacy-section" aria-labelledby="privacy-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="privacy.eyebrow">プライバシー</span>
+      <h2 id="privacy-title" class="section-title" data-i18n="privacy.title">クラウドに 1 バイトも送らない。</h2>
+      <p class="section-deck" data-i18n="privacy.deck">Apple ヘルスケアの export からはじまり、 全ての処理があなたのラップトップの中で完結する。</p>
+    </div>
+
+    <div class="flow-diagram" data-fx="rise" aria-hidden="true">
+      <div class="flow-node">
+        <div class="flow-icon flow-icon-export">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v12"/>
+            <path d="M7 8l5-5 5 5"/>
+            <path d="M5 21h14"/>
+          </svg>
+        </div>
+        <span class="flow-label" data-i18n="privacy.flow_src">Apple ヘルスケア export</span>
+      </div>
+      <div class="flow-arrow">
+        <svg viewBox="0 0 40 14" fill="none">
+          <line x1="0" y1="7" x2="32" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3 3"/>
+          <path d="M28 2 L36 7 L28 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </div>
+      <div class="flow-node">
+        <div class="flow-icon flow-icon-db">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="8" ry="2.5"/>
+            <path d="M4 5v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5V5"/>
+            <path d="M4 11v6c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-6"/>
+          </svg>
+        </div>
+        <span class="flow-label" data-i18n="privacy.flow_db">ローカル DuckDB</span>
+      </div>
+      <div class="flow-arrow">
+        <svg viewBox="0 0 40 14" fill="none">
+          <line x1="0" y1="7" x2="32" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3 3"/>
+          <path d="M28 2 L36 7 L28 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </div>
+      <div class="flow-node">
+        <div class="flow-icon flow-icon-mcp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="6" width="18" height="12" rx="2"/>
+            <path d="M7 10h2M7 14h6M15 14h2"/>
+          </svg>
+        </div>
+        <span class="flow-label" data-i18n="privacy.flow_mcp">MCP サーバ</span>
+      </div>
+      <div class="flow-arrow">
+        <svg viewBox="0 0 40 14" fill="none">
+          <line x1="0" y1="7" x2="32" y2="7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="3 3"/>
+          <path d="M28 2 L36 7 L28 12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+      </div>
+      <div class="flow-node">
+        <div class="flow-icon flow-icon-claude">
+          <span class="flow-claude-avatar"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"/></svg></span>
+        </div>
+        <span class="flow-label" data-i18n="privacy.flow_claude">Claude (あなたの端末上)</span>
+      </div>
+    </div>
+
+    <div class="privacy-points">
+      <article class="privacy-point" data-fx="rise">
+        <h3 class="privacy-point-title" data-i18n="privacy.point1_title">保存先</h3>
+        <p class="privacy-point-body" data-i18n-html="privacy.point1_body">…</p>
+      </article>
+      <article class="privacy-point" data-fx="rise">
+        <h3 class="privacy-point-title" data-i18n="privacy.point2_title">通信なし</h3>
+        <p class="privacy-point-body" data-i18n-html="privacy.point2_body">…</p>
+      </article>
+      <article class="privacy-point" data-fx="rise">
+        <h3 class="privacy-point-title" data-i18n="privacy.point3_title">100% オープンソース</h3>
+        <p class="privacy-point-body" data-i18n-html="privacy.point3_body">…</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #7 FAQ — よくある質問 / FAQ
+     ============================================================ -->
+<section id="faq" class="section faq-section" aria-labelledby="faq-title">
+  <div class="section-inner">
+    <div class="section-head" data-fx="rise">
+      <span class="section-eyebrow" data-i18n="faq.eyebrow">よくある質問</span>
+      <h2 id="faq-title" class="section-title" data-i18n="faq.title">FAQ</h2>
+    </div>
+
+    <div class="faq-list" data-fx="rise">
+      <details class="faq-item">
+        <summary class="faq-q">
+          <span class="faq-q-text" data-i18n="faq.q1">Linux で Claude Desktop は動かない、 どうする?</span>
+          <span class="faq-q-icon" aria-hidden="true"></span>
+        </summary>
+        <div class="faq-a" data-i18n-html="faq.a1">…</div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-q">
+          <span class="faq-q-text" data-i18n-html="faq.q2">…</span>
+          <span class="faq-q-icon" aria-hidden="true"></span>
+        </summary>
+        <div class="faq-a" data-i18n-html="faq.a2">…</div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-q">
+          <span class="faq-q-text" data-i18n="faq.q3">Apple Watch なくても使える?</span>
+          <span class="faq-q-icon" aria-hidden="true"></span>
+        </summary>
+        <div class="faq-a" data-i18n-html="faq.a3">…</div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-q">
+          <span class="faq-q-text" data-i18n="faq.q4">データはどこに保存される?</span>
+          <span class="faq-q-icon" aria-hidden="true"></span>
+        </summary>
+        <div class="faq-a" data-i18n-html="faq.a4">…</div>
+      </details>
+      <details class="faq-item">
+        <summary class="faq-q">
+          <span class="faq-q-text" data-i18n="faq.q5">export を再 import したら?</span>
+          <span class="faq-q-icon" aria-hidden="true"></span>
+        </summary>
+        <div class="faq-a" data-i18n-html="faq.a5">…</div>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     #8 Footer
+     ============================================================ -->
+<footer class="footer" aria-labelledby="footer-brand">
+  <div class="footer-inner">
+    <div class="footer-col footer-col-brand">
+      <div id="footer-brand" class="footer-brand">
+        <span class="red-dot" aria-hidden="true"></span>apple-health-mcp-server
+      </div>
+      <p class="footer-tagline" data-i18n-html="footer.tagline">…</p>
+      <a class="footer-github" href="https://github.com/rinoshiyo/apple-health-mcp-server" aria-label="GitHub repository">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18.92-.26 1.91-.39 2.89-.39.98 0 1.97.13 2.89.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.23 2.75.11 3.04.74.81 1.18 1.84 1.18 3.1 0 4.43-2.69 5.4-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56 4.56-1.52 7.85-5.83 7.85-10.91C23.5 5.65 18.35.5 12 .5z"/>
+        </svg>
+        <span>GitHub</span>
+      </a>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="footer-col-title" data-i18n="footer.col_resources">リソース</h4>
+      <ul class="footer-links">
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server#readme" data-i18n="footer.link_readme">README</a></li>
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server/blob/main/CHANGELOG.md" data-i18n="footer.link_changelog">CHANGELOG</a></li>
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server/blob/main/CLAUDE.md" data-i18n="footer.link_contributing">Contributing</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="footer-col-title" data-i18n="footer.col_project">プロジェクト</h4>
+      <ul class="footer-links">
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server" data-i18n="footer.link_github">GitHub リポジトリ</a></li>
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server/issues" data-i18n="footer.link_issues">Issues</a></li>
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server/releases" data-i18n="footer.link_releases">Releases</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4 class="footer-col-title" data-i18n="footer.col_legal">ライセンス・作者</h4>
+      <ul class="footer-links">
+        <li><a href="https://github.com/rinoshiyo/apple-health-mcp-server/blob/main/LICENSE" data-i18n="footer.license">MIT License</a></li>
+        <li><a href="https://github.com/rinoshiyo" data-i18n="footer.author">Author: rinoshiyo</a></li>
+        <li><span class="footer-version" data-i18n="footer.version"></span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer-base">
+    <span class="footer-copy" data-i18n="footer.copyright">© 2026 rinoshiyo · Made with care for the local-first AI movement.</span>
+  </div>
+</footer>
+
+<script src="./js/i18n.js" defer></script>
+<script src="./js/animations.js" defer></script>
+<script defer>
+  // ============================================================
+  // Entry fade in via IntersectionObserver (single-shot).
+  // Reads no literal timing — uses CSS-defined transition only.
+  // ============================================================
+  (function () {
+    "use strict";
+    if (typeof IntersectionObserver === "undefined") {
+      document.querySelectorAll("[data-fx='rise']").forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (prefersReduced) {
+      document.querySelectorAll("[data-fx='rise']").forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        });
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.12 }
+    );
+    document.querySelectorAll("[data-fx='rise']").forEach((el) => io.observe(el));
+  })();
+
+  // ============================================================
+  // Install tabs (simple ARIA tab pattern).
+  // ============================================================
+  (function () {
+    "use strict";
+    const tabs = document.querySelectorAll(".install-tab");
+    const panels = document.querySelectorAll(".install-panel");
+    if (!tabs.length) return;
+    function activate(tabName) {
+      tabs.forEach((t) => {
+        const active = t.dataset.tab === tabName;
+        t.classList.toggle("is-active", active);
+        t.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      panels.forEach((p) => {
+        p.classList.toggle("is-active", p.dataset.tab === tabName);
+      });
+    }
+    tabs.forEach((t) => {
+      t.addEventListener("click", () => activate(t.dataset.tab));
+    });
+  })();
+</script>
+</body>
+</html>
