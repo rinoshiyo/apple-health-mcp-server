@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-24
+
 ### Added
 
 - **One-click Claude Desktop install via MCPB bundle (issue #71).**
