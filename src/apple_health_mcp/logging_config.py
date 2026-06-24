@@ -1,8 +1,14 @@
 """Logging configuration for the Apple Health MCP server.
 
 All log output goes to stderr because the stdio MCP transport owns stdout.
-``LOG_LEVEL`` controls the verbosity (default ``INFO``).
-``LOG_FORMAT`` switches between ``human`` (default) and ``json`` formatters.
+``APPLE_HEALTH_LOG_LEVEL`` controls the verbosity (default ``INFO``).
+``APPLE_HEALTH_LOG_FORMAT`` switches between ``human`` (default) and ``json``
+formatters.
+
+Issue #101 (ENV1): both env vars were renamed from the unprefixed ``LOG_LEVEL``
+/ ``LOG_FORMAT`` to the project-prefixed names ahead of the v1.0.0 SemVer
+freeze. The unprefixed names risked colliding with other MCP servers loaded
+into the same process supervisor.
 """
 
 from __future__ import annotations
@@ -40,10 +46,10 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    """Configure the root logger from ``LOG_LEVEL`` / ``LOG_FORMAT`` env vars."""
-    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    """Configure the root logger from the ``APPLE_HEALTH_LOG_*`` env vars."""
+    level_name = os.environ.get("APPLE_HEALTH_LOG_LEVEL", "INFO").upper()
     level = logging.getLevelNamesMapping().get(level_name, logging.INFO)
-    use_json = os.environ.get("LOG_FORMAT", "human").lower() == "json"
+    use_json = os.environ.get("APPLE_HEALTH_LOG_FORMAT", "human").lower() == "json"
 
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setFormatter(JsonFormatter() if use_json else logging.Formatter(_HUMAN_FORMAT))

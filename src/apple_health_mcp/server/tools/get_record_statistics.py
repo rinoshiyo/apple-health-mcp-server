@@ -55,10 +55,17 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             ),
         ] = None,
     ) -> str:
-        # Unknown periods fall back to ``day`` so a typo never leaks raw SQL.
-        # Lookup is case-insensitive so "Week" / "MONTH" match ``week`` /
-        # ``month`` instead of silently falling through to daily aggregation.
-        date_trunc = _PERIOD_TRUNCS.get((period or "day").lower(), "date")
+        # Issue #92 (T3): reject unknown ``period`` values with an explicit
+        # error instead of silently falling back to ``day``. The silent
+        # fallback masked typos (``"weak"``, ``"yearly"``) by returning a
+        # plausible-looking daily aggregation, which is hostile to callers
+        # and makes the v1.0.0 SemVer freeze harder to keep honest. Lookup
+        # stays case-insensitive so ``"Week"`` / ``"MONTH"`` still resolve.
+        normalised = (period or "day").lower()
+        if normalised not in _PERIOD_TRUNCS:
+            accepted = ", ".join(sorted(_PERIOD_TRUNCS))
+            return f"Error: invalid period {period!r}; accepted values: {accepted}"
+        date_trunc = _PERIOD_TRUNCS[normalised]
         sql_parts = [
             f"SELECT {date_trunc} AS period, SUM(count) AS count, "
             "SUM(sum_value)/SUM(count) AS avg_value, "

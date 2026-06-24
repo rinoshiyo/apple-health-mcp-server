@@ -23,14 +23,19 @@ if TYPE_CHECKING:
 DESCRIPTION = (
     "Run a read-only SQL query (DuckDB dialect). Must start with SELECT or "
     "WITH. Tables: records (record_hash, record_type, value, unit, "
-    "source_name, device, start_date, end_date), workouts (workout_hash, "
-    "activity_type, duration, total_distance, total_energy_burned, "
-    "start_date, end_date), workout_events, workout_statistics, "
-    "activity_summaries, ecg_readings, ecg_samples, route_points (latitude, "
-    "longitude, elevation, timestamp, speed), daily_record_stats "
-    "(record_type, date, unit, count, avg_value, min_value, max_value, "
-    "sum_value), record_metadata (record_hash, key, value), state_of_mind "
-    "(record_hash, valence, kind, labels, associations), imports."
+    "source_name, device, start_date, end_date), record_metadata "
+    "(record_hash, key, value), workouts (workout_hash, activity_type, "
+    "duration, total_distance, total_energy_burned, start_date, end_date), "
+    "workout_events, workout_statistics, workout_metadata (workout_hash, "
+    "key, value), workout_routes, activity_summaries, ecg_readings, "
+    "ecg_samples, route_points (latitude, longitude, elevation, timestamp, "
+    "speed), heart_rate_samples, correlations, correlation_members "
+    "(correlation_hash, record_hash), daily_record_stats (record_type, "
+    "date, unit, count, avg_value, min_value, max_value, sum_value), "
+    "state_of_mind (record_hash, valence, kind, labels, associations), "
+    "imports, export_metadata (import_id, export_date, locale), "
+    "me_attributes (import_id, date_of_birth, biological_sex, blood_type, "
+    "fitzpatrick_skin_type, cardio_fitness_medications_use)."
 )
 
 

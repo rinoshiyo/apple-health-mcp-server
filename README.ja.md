@@ -262,8 +262,8 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
   |---|---|---|
   | `APPLE_HEALTH_TZ` | DuckDB セッションタイムゾーン。 `TIMESTAMPTZ` カラムのレンダリングに使用。 CLI の `--tz` 指定時はそちらが優先される | OS の TZ |
   | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | `import` の Phase 1 進捗 emitter の間隔。 整数秒、 範囲外の整数は 1..600 にクランプ、 非整数文字列は警告ログを出してデフォルトにフォールバック。 1 MB 未満のエクスポートは emitter 自体をスキップ | `10` |
-  | `LOG_LEVEL` | stdlib `logging` のルートロガーレベル (`DEBUG`/`INFO`/`WARNING`/`ERROR`)。 全ログは stderr 行き、 stdout は MCP stdio transport が占有 | `INFO` |
-  | `LOG_FORMAT` | ログフォーマッタ形式。 `human` はプレーンテキスト、 `json` は 1 行 1 オブジェクトの JSON でログアグリゲータ向け | `human` |
+  | `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` のルートロガーレベル (`DEBUG`/`INFO`/`WARNING`/`ERROR`)。 全ログは stderr 行き、 stdout は MCP stdio transport が占有 | `INFO` |
+  | `APPLE_HEALTH_LOG_FORMAT` | ログフォーマッタ形式。 `human` はプレーンテキスト、 `json` は 1 行 1 オブジェクトの JSON でログアグリゲータ向け | `human` |
 
   サーバは DB デフォルトパス解決時に OS 標準の `XDG_DATA_HOME` (Linux/macOS) と `LOCALAPPDATA` (Windows) も honour するが、 これらはプラットフォーム契約であってプロジェクト固有変数ではない。
 
@@ -292,10 +292,9 @@ FastMCP に登録される 17 ツールを系統別にまとめます。
 ヘルパー、 internal 例外）、 モジュール内部の定数 — は
 **public API ではなく**、 任意のリリースで変更されます。 特に:
 
-<!-- TODO(#101): when the LOG_LEVEL/LOG_FORMAT env vars get the APPLE_HEALTH_ prefix, update the names referenced in this bullet. -->
 - **ログ行のフォーマット** (例: `progress: xml NN% (X / Y MB, ~Z min remaining)`)
   は public API 契約の一部ではありません。 人間向けの表記は SemVer
-  バンプなしに変更され得ます。 `LOG_FORMAT=json` は現状、 同じ人間
+  バンプなしに変更され得ます。 `APPLE_HEALTH_LOG_FORMAT=json` は現状、 同じ人間
   向け文字列を JSON envelope の `message` フィールドに包むだけで、
   progress 専用の構造化フィールドはまだ emit していません。 機械的に
   パースしたい用途があれば issue を立ててください — 構造化 progress

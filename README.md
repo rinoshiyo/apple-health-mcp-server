@@ -277,8 +277,8 @@ The following are considered part of the **public API** under SemVer:
   |---|---|---|
   | `APPLE_HEALTH_TZ` | DuckDB session timezone used to render `TIMESTAMPTZ` columns. Overridden by `--tz` on the CLI when both are set. | OS timezone |
   | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB skip the emitter entirely. | `10` |
-  | `LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
-  | `LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
+  | `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
+  | `APPLE_HEALTH_LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
 
   The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path; those are part of the platform contract, not project-specific.
 
@@ -307,10 +307,9 @@ surface, identifiers prefixed with `_` (private constants, helpers,
 internal exceptions), and module-internal constants — is **not** part
 of the public API and may change in any release. In particular:
 
-<!-- TODO(#101): when the LOG_LEVEL/LOG_FORMAT env vars get the APPLE_HEALTH_ prefix, update the names referenced in this bullet. -->
 - **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
   is not part of the public API contract; the human-readable shape may
-  change between releases without a SemVer bump. `LOG_FORMAT=json`
+  change between releases without a SemVer bump. `APPLE_HEALTH_LOG_FORMAT=json`
   currently wraps the same human-readable string inside a JSON
   envelope's `message` field — it doesn't currently emit
   per-progress-event structured fields. If you need machine-parseable

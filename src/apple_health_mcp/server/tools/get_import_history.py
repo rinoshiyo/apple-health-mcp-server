@@ -14,7 +14,9 @@ if TYPE_CHECKING:
 
 DESCRIPTION = (
     "List all data imports. Returns: import_id, export_dir, imported_at, "
-    "record_count, workout_count, duration_secs."
+    "record_count, workout_count, duration_secs, export_xml_sha256 "
+    "(hex sha256 of the source export.xml; NULL on rows finalized before "
+    "the column was introduced)."
 )
 
 _SQL = "SELECT * FROM imports ORDER BY imported_at DESC"

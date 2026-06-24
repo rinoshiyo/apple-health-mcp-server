@@ -42,9 +42,16 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         if msg := require_imports_or_message(conn, lock=lock):
             return msg
         try:
+            # Issue #93 (T5): explicit column list keeps ``import_id`` (an
+            # internal join key) off the wire and pins the public response
+            # shape ahead of the v1.0.0 SemVer freeze.
             workout_rows = query_to_json(
                 conn,
-                "SELECT * FROM workouts WHERE workout_hash = ?",
+                "SELECT workout_hash, activity_type, duration, duration_unit, "
+                "total_distance, total_distance_unit, total_energy_burned, "
+                "total_energy_unit, source_name, source_version, device, "
+                "creation_date, start_date, end_date "
+                "FROM workouts WHERE workout_hash = ?",
                 [workout_hash],
                 lock=lock,
             )

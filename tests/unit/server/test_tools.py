@@ -57,8 +57,11 @@ def _call(fn: Any, **kwargs: Any) -> Any:
 def test_list_record_types(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_record_types, seeded_conn)
     rows = _call(fn)
-    types = {r["type"] for r in rows}
+    # Issue #91 (T1): wire field is ``record_type`` (was ``type``).
+    types = {r["record_type"] for r in rows}
     assert "HKQuantityTypeIdentifierHeartRate" in types
+    # The generic ``type`` key must not leak through any more.
+    assert all("type" not in r for r in rows)
 
 
 # --- query_records -----------------------------------------------------------
@@ -97,7 +100,7 @@ def test_query_records_clamps_limit(seeded_conn: duckdb.DuckDBPyConnection) -> N
 # --- get_record_statistics ---------------------------------------------------
 
 
-@pytest.mark.parametrize("period", [None, "day", "week", "month", "year", "bogus"])
+@pytest.mark.parametrize("period", [None, "day", "week", "month", "year", "DAY", "Week"])
 def test_get_record_statistics_period_whitelist(
     seeded_conn: duckdb.DuckDBPyConnection, period: str | None
 ) -> None:
@@ -108,6 +111,21 @@ def test_get_record_statistics_period_whitelist(
         period=period,
     )
     assert isinstance(rows, list)
+
+
+def test_get_record_statistics_invalid_period_errors(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Issue #92 (T3): bogus ``period`` returns an explicit error string."""
+    fn = _bind(get_record_statistics, seeded_conn)
+    out = asyncio.run(
+        fn(
+            record_type="HKQuantityTypeIdentifierHeartRate",
+            period="bogus",
+        )
+    )
+    assert out.startswith("Error: invalid period 'bogus'")
+    assert "day" in out and "week" in out
 
 
 def test_get_record_statistics_with_date_filters(
@@ -213,36 +231,110 @@ def test_get_activity_summaries_with_filters(
 
 
 def test_get_workout_route_default(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """Issue #95 (T7): the envelope reports total + has_more + next_offset."""
     fn = _bind(get_workout_route, seeded_conn)
-    rows = _call(fn, workout_hash="wh1")
-    assert len(rows) == 2
+    payload = _call(fn, workout_hash="wh1")
+    assert payload["total"] == 2
+    assert len(payload["points"]) == 2
+    assert payload["has_more"] is False
+    assert payload["next_offset"] is None
 
 
 def test_get_workout_route_pagination(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """A mid-route page advertises ``has_more`` + a usable ``next_offset``."""
     fn = _bind(get_workout_route, seeded_conn)
-    rows = _call(fn, workout_hash="wh1", limit=1, offset=1)
-    assert len(rows) == 1
+    payload = _call(fn, workout_hash="wh1", limit=1, offset=0)
+    assert len(payload["points"]) == 1
+    assert payload["total"] == 2
+    assert payload["has_more"] is True
+    assert payload["next_offset"] == 1
+    # Follow-up call exhausts the route and clears the flags.
+    payload2 = _call(fn, workout_hash="wh1", limit=1, offset=payload["next_offset"])
+    assert len(payload2["points"]) == 1
+    assert payload2["has_more"] is False
+    assert payload2["next_offset"] is None
 
 
 def test_get_workout_route_negative_offset(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(get_workout_route, seeded_conn)
-    rows = _call(fn, workout_hash="wh1", limit=100, offset=-10)
-    assert len(rows) == 2
+    payload = _call(fn, workout_hash="wh1", limit=100, offset=-10)
+    assert len(payload["points"]) == 2
+    assert payload["total"] == 2
+    assert payload["has_more"] is False
+
+
+def test_get_workout_route_unknown_hash_returns_empty_envelope(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A missing workout still returns a valid envelope (total=0)."""
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="nope")
+    assert payload == {"points": [], "total": 0, "has_more": False, "next_offset": None}
+
+
+def test_get_workout_route_db_error_path(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    """Downstream binder errors propagate as ``Error: ...`` strings."""
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+    )
+    empty_conn.execute("DROP TABLE route_points")
+    fn = _bind(get_workout_route, empty_conn)
+    out = asyncio.run(fn(workout_hash="wh1"))
+    assert out.startswith("Error: ")
 
 
 # --- get_heart_rate_samples --------------------------------------------------
 
 
 def test_get_heart_rate_samples(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """Issue #96 (T8): ``sample_time`` is normalised to a seconds float."""
     fn = _bind(get_heart_rate_samples, seeded_conn)
     rows = _call(fn, record_hash="rh1")
     assert len(rows) == 3
+    # Seeded values are 08:00:00.000 / 08:00:01.500 / 08:00:03.000 ->
+    # 28800.0 / 28801.5 / 28803.0 seconds after midnight.
+    assert rows[0]["sample_time"] == 28800.0
+    assert rows[1]["sample_time"] == 28801.5
+    assert rows[2]["sample_time"] == 28803.0
+    assert all(isinstance(r["sample_time"], float) for r in rows)
 
 
 def test_get_heart_rate_samples_limit(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(get_heart_rate_samples, seeded_conn)
     rows = _call(fn, record_hash="rh1", limit=2)
     assert len(rows) == 2
+
+
+def test_get_heart_rate_samples_malformed_sample_time_returns_none(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A bad ``sample_time`` literal falls back to ``None`` (no exception)."""
+    seeded_conn.execute(
+        "INSERT INTO heart_rate_samples VALUES ('rh1', 3, 76.0, 'not-a-time', 'imp1')"
+    )
+    seeded_conn.execute(
+        "INSERT INTO heart_rate_samples VALUES ('rh1', 4, 77.0, '12:34:abc', 'imp1')"
+    )
+    seeded_conn.execute("INSERT INTO heart_rate_samples VALUES ('rh1', 5, 78.0, NULL, 'imp1')")
+    fn = _bind(get_heart_rate_samples, seeded_conn)
+    rows = _call(fn, record_hash="rh1")
+    by_idx = {r["sample_idx"]: r["sample_time"] for r in rows}
+    assert by_idx[3] is None
+    assert by_idx[4] is None
+    assert by_idx[5] is None
+
+
+def test_get_heart_rate_samples_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
+    """Downstream binder errors propagate as ``Error: ...`` strings."""
+    empty_conn.execute(
+        "INSERT INTO imports VALUES "
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+    )
+    empty_conn.execute("DROP TABLE heart_rate_samples")
+    fn = _bind(get_heart_rate_samples, empty_conn)
+    out = asyncio.run(fn(record_hash="rh1"))
+    assert out.startswith("Error: ")
 
 
 # --- list_correlations -------------------------------------------------------
@@ -309,6 +401,22 @@ def test_list_ecg_readings_filters(seeded_conn: duckdb.DuckDBPyConnection) -> No
     fn = _bind(list_ecg_readings, seeded_conn)
     rows = _call(fn, start_date="2024-01-01", end_date="2024-01-31")
     assert rows[0]["ecg_hash"] == "ecg1"
+
+
+def test_list_ecg_readings_clamps_limit(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """Issue #97 (T11): ``limit`` clamps to the documented max (1000)."""
+    fn = _bind(list_ecg_readings, seeded_conn)
+    rows = _call(fn, limit=5_000)  # exceeds max -> clamped
+    assert len(rows) <= 1000
+
+
+def test_list_ecg_readings_limit_zero_returns_empty(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Issue #97 (T11): ``limit=0`` returns an empty list rather than erroring."""
+    fn = _bind(list_ecg_readings, seeded_conn)
+    rows = _call(fn, limit=0)
+    assert rows == []
 
 
 # --- get_ecg_data ------------------------------------------------------------
