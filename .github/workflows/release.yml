@@ -61,10 +61,38 @@ jobs:
         # ``server.type=binary`` + ``command=uvx`` setup the entire
         # bundle payload is just the manifest, so isolate it in a fresh
         # directory before packing. The resulting bundle is ~1 KB.
+        #
+        # The manifest's ``mcp_config.args`` is rewritten to pin the
+        # uvx fetch to the exact tag version (e.g. ``apple-health-mcp-
+        # server==0.3.0`` for tag ``v0.3.0``). Without the pin a user
+        # who installs an older bundle can be silently upgraded by
+        # uvx's cache-refresh path to a newer PyPI release — the
+        # bundle stops being a faithful snapshot of the tagged
+        # version. The version is the tag with the leading ``v``
+        # stripped; this also handles SemVer pre-release tags
+        # (``v0.3.0-rc1`` → ``apple-health-mcp-server==0.3.0-rc1``).
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           pack_dir="$(mktemp -d)"
           cp manifest.json "$pack_dir/"
+          tag_version="${GITHUB_REF_NAME#v}"
+          python3 - "$pack_dir/manifest.json" "$tag_version" <<'PY'
+          import json
+          import sys
+
+          manifest_path, version = sys.argv[1], sys.argv[2]
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              manifest = json.load(f)
+          manifest["server"]["mcp_config"]["args"] = [
+              f"apple-health-mcp-server=={version}",
+              "serve",
+          ]
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
           mcpb pack "$pack_dir" "apple-health-mcp-server-${{ github.ref_name }}.mcpb"
 
       - name: Upload bundle artifact

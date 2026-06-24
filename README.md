@@ -305,7 +305,19 @@ Anything not enumerated above — helper modules without an MCP-tool /
 CLI / DuckDB-schema / `__all__` / env-var / exit-code / DB-path
 surface, identifiers prefixed with `_` (private constants, helpers,
 internal exceptions), and module-internal constants — is **not** part
-of the public API and may change in any release.
+of the public API and may change in any release. In particular:
+
+- **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
+  is not part of the public API contract; the human-readable shape may
+  change between releases without a SemVer bump. Callers that need to
+  parse progress should set `LOG_FORMAT=json` and read the structured
+  fields, which are stable.
+- **MCP tool description text** (the LLM-facing prose embedded in each
+  tool registration) is not part of the public API contract;
+  descriptions may be tightened, reworded, or reorganised without a
+  SemVer bump as long as the parameter and return shape stay stable.
+  Clients that rely on a tool should lock onto its name and signature,
+  not its description prose.
 
 ### Deprecation policy
 
