@@ -194,12 +194,21 @@ jobs:
         # links readers at CHANGELOG.md for the full change list rather
         # than auto-generating release notes (the human-curated entry
         # is the canonical version-history record for this project).
+        #
+        # ``prerelease`` is derived from the tag: SemVer pre-release
+        # tags (``v0.3.0-rc1``, ``v1.0.0-beta.2``, etc.) carry a ``-``
+        # suffix, so ``contains(github.ref_name, '-')`` is the
+        # cheapest tag-name test that matches every pre-release form
+        # this workflow's trigger glob accepts. Stable tags
+        # (``v1.0.0``) keep ``prerelease: false`` and become the
+        # ``Latest`` release on GitHub.
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*
             mcpb/*.mcpb
           generate_release_notes: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             See [CHANGELOG.md at this tag](https://github.com/rinoshiyo/apple-health-mcp-server/blob/${{ github.ref_name }}/CHANGELOG.md) for the full change list pinned to this release (the `main` link rots as new versions ship).
 
@@ -214,6 +223,13 @@ jobs:
     # failed publish does not advertise a version on the LP that users
     # cannot actually install. The auto-commit pushes back to `main`,
     # not the tag — the tag itself stays immutable.
+    #
+    # ``if`` skips this job for pre-release tags (e.g. ``v0.3.0-rc1``)
+    # so the published landing page only ever advertises a stable
+    # release — surfacing ``v0.3.0-rc1`` in the LP footer would be
+    # confusing for first-time visitors arriving from Reddit /
+    # awesome-mcp-servers / the Anthropic MCP Directory.
+    if: ${{ !contains(github.ref_name, '-') }}
     needs: [publish, github_release]
     runs-on: ubuntu-latest
     permissions:
