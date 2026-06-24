@@ -216,8 +216,8 @@ faithfully.
 ## Compatibility
 
 `apple-health-mcp-server` follows
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting at
-v1.0.0. While the project remains in the v0.x.y series, breaking
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html) from v1.0.0
+onward. While the project remains in the v0.x.y series, breaking
 changes can land in any minor release; the project minimises them but
 does not formally guarantee against them yet.
 
@@ -225,21 +225,36 @@ does not formally guarantee against them yet.
 
 The following are considered part of the **public API** under SemVer:
 
-- **MCP tool names and parameter signatures** — adding a new tool is a
-  minor bump; renaming, removing, or changing the parameter list of an
-  existing tool is a major bump
-- **DuckDB schema column names and types** — adding a column is a minor
-  bump; renaming, removing, or changing the type of a column is a major
-  bump (relevant for `run_custom_query` consumers building SQL against
-  the tables)
-- **CLI subcommand names and their required flags** — same versioning
-  rules apply
+- **MCP tool names, parameter signatures (including defaults), and
+  top-level response field names** — adding a new tool, parameter, or
+  response field is a minor bump; renaming, removing, or changing the
+  type of an existing one is a major bump. Tool responses are consumed
+  by downstream LLM prompt templates, so renaming a returned key is as
+  breaking as renaming a parameter.
+- **DuckDB schema table names, column names, types, and NOT NULL
+  constraints** — adding a column is a minor bump; renaming, removing,
+  retyping, or relaxing a NOT NULL on an existing column (or renaming a
+  table) is a major bump. Relevant for `run_custom_query` consumers
+  building SQL against the tables — the v0.1.4 `imports.imported_at`
+  regression showed constraints are user-visible too, not just types.
+- **CLI subcommand names and their required parameters** (positional
+  arguments and required flags alike) — same versioning rules apply.
+- **Top-level Python identifiers exported via `__all__` from the
+  package root** (`apple_health_mcp`) — e.g. `__version__`, `REPO_URL`,
+  `ISSUES_URL`. Removing one of these or changing its type is a major
+  bump.
 
-Internal modules under `src/apple_health_mcp/` and any identifier
-prefixed with `_` (helpers, private constants, internal exceptions) are
-**not** part of the public API and may change in any release.
+Anything not enumerated above — helper modules without an MCP-tool /
+CLI / DuckDB-schema / `__all__` surface, identifiers prefixed with `_`
+(private constants, helpers, internal exceptions), and module-internal
+constants — is **not** part of the public API and may change in any
+release.
 
 ### Deprecation policy
+
+(Applies from v1.0.0 onward — during v0.x.y, breaking changes can land
+in any minor release without going through this cadence; see the
+headline above.)
 
 When something in the public API is scheduled for removal or rename:
 
