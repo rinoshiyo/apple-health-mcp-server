@@ -9,6 +9,105 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.3.0-rc1] - 2026-06-25
+
+First pre-release of the v0.3.0 cycle. v0.3.0 batches the breaking
+changes that came out of the v1.0.0 commitment audit so the eventual
+v1.0.0 release can freeze the public API surface (MCP tools / CLI /
+env vars / DB schema / exit codes) under SemVer with no further
+breakage required. Treat this rc as the dogfood baseline; the final
+v0.3.0 will ship after stability is confirmed.
+
+### Breaking
+
+- **`list_record_types` response field `type` is now `record_type`**
+  (issue #91, audit T1). The new name matches the canonical key used
+  across every other tool that exposes a record-type identifier.
+  Clients reading `row["type"]` must switch to `row["record_type"]`.
+- **`get_record_statistics` rejects unknown `period` values** (issue
+  #92, audit T3). Previously an unrecognised string silently fell back
+  to `day`, masking client typos. Invalid values now produce an
+  explicit error listing the accepted set (`day`, `week`, `month`,
+  `year`).
+- **`get_workout_details.workout` and `get_activity_summaries` no
+  longer return `SELECT *` rows** (issues #93 / #94, audit T5 / T6).
+  The internal `import_id` column has been dropped from both
+  responses; the remaining columns are listed explicitly so future
+  schema additions cannot leak through.
+- **`get_workout_route` now returns a pagination envelope** (issue #95,
+  audit T7). The bare array `[{latitude, ...}, ...]` is replaced by
+  `{points: [...], total: N, has_more: bool, next_offset: int | null}`
+  so clients can detect the end of the route without polling for an
+  empty response.
+- **`get_heart_rate_samples.sample_time` is now a float-seconds offset**
+  (issue #96, audit T8). The raw `HH:MM:SS.SSS` VARCHAR is preserved
+  in storage for round-trippability, but the tool normalises it to
+  seconds-from-the-parent-record's-start on the way out so LLMs do not
+  have to reason about Apple's wall-clock formatting.
+- **`get_ecg_data.reading` returns explicit columns** (issue #98,
+  audit T12). The internal `import_id` is dropped from the wire format
+  and the legacy "earlier versions had sample_count at top level"
+  description note is removed (v0.3.0 is the SemVer baseline; pre-0.3
+  callers are not supported).
+- **Logging environment variables now carry the `APPLE_HEALTH_`
+  prefix** (issue #101, audit ENV1). `LOG_LEVEL` and `LOG_FORMAT` are
+  replaced by `APPLE_HEALTH_LOG_LEVEL` and `APPLE_HEALTH_LOG_FORMAT`
+  so multiple MCP servers sharing one shell environment cannot
+  clobber each other's settings.
+
+### Added
+
+- **`list_ecg_readings` accepts an optional `limit` parameter** (issue
+  #97, audit T11). Defaults to 100, capped at 1000, matching the
+  signatures of every other `list_*` tool.
+- **`SECURITY.md`** (issue #88, mandatory PR-B). Introduces a private
+  vulnerability reporting channel via GitHub Security Advisory; the
+  README's existing "Security exception" pointer now resolves to a
+  concrete intake.
+- **Compatibility exclusions for log-line format and MCP tool
+  description text** (issues #89 / #90, mandatory PR-B). README.md and
+  README.ja.md Compatibility section explicitly carve these
+  human-facing surfaces out of the SemVer contract so future
+  improvements to progress prose or LLM-facing tool descriptions do
+  not trigger major bumps.
+- **Release workflow pre-release detection** (issue #87, PR-C). Tags
+  carrying a `-` suffix (e.g. `v0.3.0-rc1`) are now flagged as
+  GitHub Release "Pre-release" and skip the LP footer version sync.
+  Stable tags (`v1.0.0`) keep the previous "Latest" + LP-sync
+  behaviour.
+- **MCPB bundle args pin** (issue #78, mandatory PR-B). The release
+  workflow rewrites the bundled manifest's `mcp_config.args` to
+  `["--from", "apple-health-mcp-server==<tag-version>",
+  "apple-health-mcp-server", "serve"]` so a downloaded `.mcpb`
+  stays faithful to its tag and is not silently upgraded by uvx's
+  cache-refresh path. The `--from` form is the spelling that
+  forces uvx to honour the pin (see project memory entry on the
+  2026-06-23 cache-drift incident).
+
+### Changed
+
+- **`run_custom_query` and `get_import_history` descriptions match
+  the current schema** (issues #99 / #100, audit T13 / T15). The
+  table list in `run_custom_query` now includes `workout_metadata`,
+  `correlation_members`, `me_attributes`, and `export_metadata`; the
+  `get_import_history` description now mentions `export_xml_sha256`
+  (added in #62). These are description-only edits; the wire shapes
+  were already correct.
+- **DB schema gains explanatory SQL comments** (issue #102, audit
+  DB1+DB2). `records.value` / `records.text_value` are annotated with
+  the numeric-vs-text duality rule; `workouts.total_distance` /
+  `total_energy_burned` are annotated with the iOS 10 vs iOS 11+
+  back-fill behaviour. Comments only — no schema mutation.
+
+### Verification needed at first stable v0.3.0 push
+
+- LP install snippet in `docs/i18n/{ja,en}.json#desktop_step1`
+  hardcodes `apple-health-mcp-server-v0.2.0.mcpb`; `sync_docs_version`
+  currently only rewrites `footer.version`. v0.3.0-rc1 sidesteps this
+  because pre-release tags skip the sync job entirely, but the
+  v0.3.0 final tag will surface the drift if not fixed beforehand.
+  Tracked as a dogfood-period follow-up.
+
 ## [0.2.0] - 2026-06-24
 
 ### Added
