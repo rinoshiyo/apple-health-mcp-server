@@ -213,6 +213,44 @@ faithfully.
 | Metadata & ops | `list_data_sources`, `get_import_history` |
 | Escape hatch | `run_custom_query` (read-only validated SQL) |
 
+## Compatibility
+
+`apple-health-mcp-server` follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html) starting at
+v1.0.0. While the project remains in the v0.x.y series, breaking
+changes can land in any minor release; the project minimises them but
+does not formally guarantee against them yet.
+
+### Public API surface
+
+The following are considered part of the **public API** under SemVer:
+
+- **MCP tool names and parameter signatures** — adding a new tool is a
+  minor bump; renaming, removing, or changing the parameter list of an
+  existing tool is a major bump
+- **DuckDB schema column names and types** — adding a column is a minor
+  bump; renaming, removing, or changing the type of a column is a major
+  bump (relevant for `run_custom_query` consumers building SQL against
+  the tables)
+- **CLI subcommand names and their required flags** — same versioning
+  rules apply
+
+Internal modules under `src/apple_health_mcp/` and any identifier
+prefixed with `_` (helpers, private constants, internal exceptions) are
+**not** part of the public API and may change in any release.
+
+### Deprecation policy
+
+When something in the public API is scheduled for removal or rename:
+
+1. The deprecated item is marked in the CHANGELOG.md `Deprecated`
+   section of the release that announces it, alongside the planned
+   replacement and removal version
+2. The deprecated item keeps working for **at least one minor release**
+   before being removed (e.g. `1.5.0` announces deprecation, `1.6.x`
+   continues to ship the old name, `2.0.0` removes it)
+3. The actual removal lands in the next major version bump
+
 ## Updating
 
 `uvx` caches the package on first run and re-uses that cached copy on
