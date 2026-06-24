@@ -305,7 +305,24 @@ Anything not enumerated above — helper modules without an MCP-tool /
 CLI / DuckDB-schema / `__all__` / env-var / exit-code / DB-path
 surface, identifiers prefixed with `_` (private constants, helpers,
 internal exceptions), and module-internal constants — is **not** part
-of the public API and may change in any release.
+of the public API and may change in any release. In particular:
+
+<!-- TODO(#101): when the LOG_LEVEL/LOG_FORMAT env vars get the APPLE_HEALTH_ prefix, update the names referenced in this bullet. -->
+- **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
+  is not part of the public API contract; the human-readable shape may
+  change between releases without a SemVer bump. `LOG_FORMAT=json`
+  currently wraps the same human-readable string inside a JSON
+  envelope's `message` field — it doesn't currently emit
+  per-progress-event structured fields. If you need machine-parseable
+  progress, please open an issue describing the use case; until a
+  structured progress contract is published, treat all progress output
+  as informational only.
+- **MCP tool description text** (the LLM-facing prose embedded in each
+  tool registration) is not part of the public API contract;
+  descriptions may be tightened, reworded, or reorganised without a
+  SemVer bump as long as the parameter and return shape stay stable.
+  Clients that rely on a tool should lock onto its name and signature,
+  not its description prose.
 
 ### Deprecation policy
 

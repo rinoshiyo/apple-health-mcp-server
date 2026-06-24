@@ -61,10 +61,72 @@ jobs:
         # ``server.type=binary`` + ``command=uvx`` setup the entire
         # bundle payload is just the manifest, so isolate it in a fresh
         # directory before packing. The resulting bundle is ~1 KB.
+        #
+        # The manifest's ``mcp_config.args`` is rewritten to pin the
+        # uvx fetch to the exact tag version (e.g. ``apple-health-mcp-
+        # server==0.3.0`` for tag ``v0.3.0``). Without the pin a user
+        # who installs an older bundle can be silently upgraded by
+        # uvx's cache-refresh path to a newer PyPI release — the
+        # bundle stops being a faithful snapshot of the tagged
+        # version. The version is the tag with the leading ``v``
+        # stripped; this also handles SemVer pre-release tags
+        # (``v0.3.0-rc1`` → ``apple-health-mcp-server==0.3.0-rc1``).
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           pack_dir="$(mktemp -d)"
           cp manifest.json "$pack_dir/"
+          tag_version="${GITHUB_REF_NAME#v}"
+          # The Python step (a) asserts that manifest.json's existing
+          # ``version`` field matches the tag (the earlier validate /
+          # verify step already does this against the source manifest,
+          # but re-asserting on the packed copy guards against a future
+          # bug where the rewrite path drifts from the verify path) and
+          # (b) writes the pinned args. The write goes through a sibling
+          # tempfile + os.replace so the manifest in pack_dir is never
+          # left in a torn state if Python is killed mid-write.
+          python3 - "$pack_dir/manifest.json" "$tag_version" <<'PY'
+          import json
+          import os
+          import sys
+
+          manifest_path, version = sys.argv[1], sys.argv[2]
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              manifest = json.load(f)
+          existing_version = manifest.get("version")
+          if existing_version != version:
+              sys.exit(
+                  f"manifest.json version {existing_version!r} does not "
+                  f"match tag-derived version {version!r}; "
+                  f"bump manifest.json before tagging."
+              )
+          # ``uvx --from <name>==<ver> <name> ...`` is the form that
+          # forces uvx's cache-resolution path to honour the pin. The
+          # bare ``uvx <name>==<ver> ...`` form is documented in this
+          # project's memory as susceptible to silent-stale-cache
+          # resolution (2026-06-23 incident: ``uvx --refresh`` alone
+          # still ran 0.1.3 after 0.1.4 was published). The bundle is
+          # supposed to be a faithful snapshot; using ``--from`` is the
+          # difference between "pin advertised" and "pin enforced".
+          manifest["server"]["mcp_config"]["args"] = [
+              "--from",
+              f"apple-health-mcp-server=={version}",
+              "apple-health-mcp-server",
+              "serve",
+          ]
+          tmp_path = manifest_path + ".tmp"
+          with open(tmp_path, "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          os.replace(tmp_path, manifest_path)
+          PY
+          # Re-validate the packed manifest after the args rewrite. The
+          # earlier ``mcpb validate`` step gated the un-pinned source
+          # manifest; this second pass catches the case where the
+          # rewrite produced JSON that parses but fails a future
+          # mcp_config-args schema rule.
+          mcpb validate "$pack_dir/manifest.json"
           mcpb pack "$pack_dir" "apple-health-mcp-server-${{ github.ref_name }}.mcpb"
 
       - name: Upload bundle artifact
