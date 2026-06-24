@@ -269,12 +269,42 @@ The following are considered part of the **public API** under SemVer:
   package root** (`apple_health_mcp`) — e.g. `__version__`, `REPO_URL`,
   `ISSUES_URL`. Removing one of these or changing its type is a major
   bump.
+- **Environment variables** the server and importer read from the
+  process environment. The current set:
+
+  | Name | Purpose | Default |
+  |---|---|---|
+  | `APPLE_HEALTH_TZ` | DuckDB session timezone used to render `TIMESTAMPTZ` columns. Overridden by `--tz` on the CLI when both are set. | OS timezone |
+  | `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB skip the emitter entirely. | `10` |
+  | `LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
+  | `LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
+
+  The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path; those are part of the platform contract, not project-specific.
+
+  Renaming, removing, or changing the parsing rules of any of these is a major bump. Adding a new env var is a minor bump.
+- **CLI parameters** — used by callers that pipe `apple-health-mcp-server` into shell scripts, service supervisors, or wire it into Claude Desktop / Claude Code configs:
+
+  - **Subcommands**: `import <export-dir>`, `serve`
+  - **Top-level flags**: `--db <path>` (DB path override, applies to both subcommands), `--tz <name>` (overrides `APPLE_HEALTH_TZ`)
+  - **`serve` flags**: `--transport stdio|http` (default `stdio`), `--host <addr>` (HTTP bind host), `--port <int>` (HTTP port)
+
+  Renaming a subcommand or flag, removing one, or changing the semantics of an existing one is a major bump. Adding a new optional flag or subcommand is a minor bump.
+- **CLI exit codes** — observed by shell-script callers:
+
+  | Code | Meaning |
+  |---|---|
+  | `0` | Success |
+  | `1` | Any `AppleHealthMCPError` from the import or serve path (missing export, malformed DB, importer failure, server startup failure) |
+  | `2` | Usage error from the CLI argument parser (unknown subcommand, missing required argument, bad flag value) |
+
+  Adding a new specific exit code (e.g. carving off `3` for "DB locked by another process") is a minor bump; collapsing or repurposing an existing code is a major bump.
+- **DuckDB database file path conventions** (see [Database location](#database-location)) — the default XDG-resolved paths on each OS are part of the contract because users back them up, point monitoring at them, or symlink them across machines. Changing where the default DB lands is a major bump; supporting an additional override mechanism is a minor bump.
 
 Anything not enumerated above — helper modules without an MCP-tool /
-CLI / DuckDB-schema / `__all__` surface, identifiers prefixed with `_`
-(private constants, helpers, internal exceptions), and module-internal
-constants — is **not** part of the public API and may change in any
-release.
+CLI / DuckDB-schema / `__all__` / env-var / exit-code / DB-path
+surface, identifiers prefixed with `_` (private constants, helpers,
+internal exceptions), and module-internal constants — is **not** part
+of the public API and may change in any release.
 
 ### Deprecation policy
 
@@ -291,6 +321,20 @@ When something in the public API is scheduled for removal or rename:
    before being removed (e.g. `1.5.0` announces deprecation, `1.6.x`
    continues to ship the old name, `2.0.0` removes it)
 3. The actual removal lands in the next major version bump
+
+### Security exception
+
+A CVE-grade flaw inside a deprecated surface (e.g. a `run_custom_query`
+parameter that turns out to leak data, or a tool whose response shape
+exposes something it shouldn't) may break the deprecation cadence
+above: the fix can ship as a removal or breaking change in **any**
+release, including a patch. Such breaks are called out under a
+`Security` heading in CHANGELOG.md so downstream consumers can spot
+them in a single scan, and a security advisory is published on the
+GitHub repository's Security tab. Without this carve-out, the
+deprecation policy would bind the maintainer to keep a known-bad
+surface alive for a full minor cycle, which is worse than the surprise
+break it would prevent.
 
 ## Updating
 
