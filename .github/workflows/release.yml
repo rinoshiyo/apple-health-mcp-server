@@ -55,8 +55,17 @@ jobs:
         run: mcpb validate manifest.json
 
       - name: Pack bundle
-        # `mcpb pack` writes ``<name>-<version>.mcpb`` next to manifest.
-        run: mcpb pack . apple-health-mcp-server-${{ github.ref_name }}.mcpb
+        # ``mcpb pack`` from the repo root would include EVERY file in
+        # the tree (.venv, tests/, fixtures, docs) — the v0.2.0 release
+        # accidentally produced a 265 MB bundle because of this. For a
+        # ``server.type=binary`` + ``command=uvx`` setup the entire
+        # bundle payload is just the manifest, so isolate it in a fresh
+        # directory before packing. The resulting bundle is ~1 KB.
+        run: |
+          set -euo pipefail
+          pack_dir="$(mktemp -d)"
+          cp manifest.json "$pack_dir/"
+          mcpb pack "$pack_dir" "apple-health-mcp-server-${{ github.ref_name }}.mcpb"
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
