@@ -108,8 +108,14 @@ def run_import(
         # Tier 1 requires the ``imports.export_xml_sha256`` column. The
         # migration is idempotent on a fresh DB (``ADD COLUMN IF NOT
         # EXISTS`` no-ops because ``ensure_schema`` already declared it)
-        # and patches a pre-#62 on-disk DB to v2.
-        apply_pending_migrations(conn)
+        # and patches a pre-#62 on-disk DB to v2. ``db_path`` is
+        # threaded through so the v0.3.0 (#124) re-import ConfigError
+        # surfaces the user's actual path in the recovery command --
+        # particularly important on the import path because the error
+        # message includes "apple-health-mcp-server --db <path> import
+        # <export>" which would otherwise echo the literal "<path>"
+        # placeholder back at a user who just typed the real one.
+        apply_pending_migrations(conn, db_path=db_path)
 
         # Tier 1: sha256 fast path. Skip the whole import when the
         # incoming export.xml is byte-identical to the last successful

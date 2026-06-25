@@ -17,6 +17,7 @@ from apple_health_mcp.db.connection import (
     get_connection,
     get_in_memory_connection,
 )
+from apple_health_mcp.exceptions import ConfigError
 
 if TYPE_CHECKING:
     from pytest import LogCaptureFixture, MonkeyPatch
@@ -244,20 +245,22 @@ def test_get_connection_read_only_preserves_existing_data_after_bootstrap(
 
 
 def _seed_legacy_v2_db(db_path: Path) -> None:
-    """Build a v0.2.x-shaped DB file at ``db_path`` for the F1 migration tests.
+    """Build a v0.2.x-shaped DB file at ``db_path`` for the issue #124 tests.
 
     Builds the canonical schema, then drops ``heart_rate_samples`` and
     recreates it with the legacy VARCHAR ``sample_time`` column so the
-    v=3 migration has something to convert. Stamps ``schema_version=2``
-    so :func:`apply_pending_migrations` re-runs the v=3 step on the next
-    open. The resulting file is what a user who imported under v0.2.x
-    and then upgraded the package to v0.3.0+ would have on disk.
+    file plausibly represents what a user who imported under v0.2.x and
+    then upgraded the package to v0.3.0 would have on disk. Stamps
+    ``schema_version=2`` so :func:`apply_pending_migrations` -- and
+    therefore :func:`_migrate_if_needed` -- raises the canonical
+    re-import :class:`ConfigError` instead of silently bumping the
+    sentinel.
 
     Each phase runs on its own DuckDB connection + CHECKPOINT so the
     next read-only open does not inherit a stale catalog snapshot from
     the v=3 ensure_schema -> v=2 downgrade rewrite (DuckDB's MVCC
-    otherwise treats the migration's ALTER as a conflict against the
-    seeder's ALTER on the same logical table).
+    otherwise treats the legacy DROP as a conflict against the
+    seeder's ensure_schema on the same logical table).
     """
     from apple_health_mcp.db.migrations import (
         set_current_version,
@@ -304,57 +307,57 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
         seeder.close()
 
 
-def test_get_connection_read_only_migrates_legacy_v2_db_in_place(
-    tmp_path: Path, caplog: LogCaptureFixture
+def test_get_connection_read_only_rejects_legacy_v2_db_with_reimport_guidance(
+    tmp_path: Path,
 ) -> None:
-    """Issue #109 (PR-F /code-review F1): a v0.2.x DB opened by ``serve``
-    must have its schema migrated to the package's current version, even
-    though the eventual handle is read-only.
+    """Issue #124 (v0.3.0): a v0.2.x DB opened by ``serve`` raises
+    :class:`ConfigError` carrying the re-import guidance instead of
+    attempting an in-place upgrade.
 
-    Without ``_migrate_if_needed`` the read-only open would land on the
-    legacy VARCHAR ``sample_time`` column and ``get_heart_rate_samples``
-    would wire strings instead of floats.
+    v0.3.0 dropped the automatic v0.2.x -> v0.3.0 migration because the
+    ``ALTER COLUMN ... TYPE`` step collided with the importer-created
+    ``idx_heart_rate_samples_parent`` index. The new contract: the
+    server refuses to start against a pre-v0.3.0 DB and points the
+    operator at the re-import recovery flow.
+
+    Post-/code-review fix: the error message must contain the resolved
+    ``db_path`` verbatim so the user can copy-paste the recovery
+    commands without manually substituting ``<db>`` placeholders. This
+    closes the README-vs-runtime drift the original implementation
+    surfaced.
     """
+    from apple_health_mcp.db.migrations import _reimport_required_message
+
     db_path = tmp_path / "legacy_v2.duckdb"
     _seed_legacy_v2_db(db_path)
 
-    with caplog.at_level(logging.INFO, logger=connection_module.__name__):
-        conn = get_connection(db_path, read_only=True)
-    try:
-        # The v=3 migration converted VARCHAR -> DOUBLE in place.
-        type_row = conn.execute(
-            "SELECT type FROM pragma_table_info('heart_rate_samples') WHERE name = 'sample_time'"
-        ).fetchone()
-        assert type_row is not None
-        assert str(type_row[0]).upper() == "DOUBLE"
-        # The single legacy row's ``08:00:00.000`` literal is now
-        # 28800.0 seconds-of-day.
-        row = conn.execute(
-            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == 28800.0
-    finally:
-        conn.close()
-
-    # The probe announced itself so an operator watching stderr knows the
-    # migration ran on serve startup.
-    infos = [
-        r
-        for r in caplog.records
-        if r.levelno == logging.INFO and "migrating existing DB" in r.getMessage()
-    ]
-    assert len(infos) == 1
+    with pytest.raises(ConfigError) as excinfo:
+        get_connection(db_path, read_only=True)
+    # Anchor on the canonical message rather than substring fragments
+    # so a future drift in the wording (extra prefix, reordered
+    # phrases, accidental duplicate URL) breaks the test.
+    assert str(excinfo.value) == _reimport_required_message(2, db_path)
+    # And spot-check that the literal path made it through (defends
+    # against a future refactor that accidentally re-introduces the
+    # ``<db>`` placeholder by dropping the path argument somewhere
+    # along the call chain).
+    assert str(db_path) in str(excinfo.value)
+    assert "<db>" not in str(excinfo.value)
 
 
-def test_get_connection_read_only_does_not_migrate_when_already_current(
+def test_get_connection_read_only_returns_quietly_on_current_db(
     tmp_path: Path, caplog: LogCaptureFixture
 ) -> None:
-    """Already-current DBs skip the migration log entirely.
+    """Already-current DBs reach the read-only handle without log noise.
 
-    Confirms the gating ``current >= CURRENT_SCHEMA_VERSION`` branch in
-    :func:`_migrate_if_needed`; without it every serve invocation would
-    emit a misleading "migrating" log on a fresh DB.
+    Pre-/code-review this asserted absence of a literal "migrating
+    existing DB" log line that the v0.3.0 cleanup deleted; the
+    assertion became a tautology that always passed. The post-fix
+    invariant is positive: ``_migrate_if_needed`` returns silently
+    on a current DB, so the connection module's logger emits NO
+    INFO/WARNING records at all when ``read_only=True`` is opened
+    against a current DB. A future contributor that adds a noisy
+    startup log will fail this test.
     """
     from apple_health_mcp.db.migrations import apply_pending_migrations
     from apple_health_mcp.db.schema import ensure_schema
@@ -379,12 +382,19 @@ def test_get_connection_read_only_does_not_migrate_when_already_current(
     finally:
         conn.close()
 
-    infos = [
+    # Positive invariant: NO INFO/WARNING from the connection module
+    # on the current-DB happy path. A future contributor that adds a
+    # noisy probe log (the kind that crept in pre-/code-review and
+    # was deleted) will trip this assertion.
+    noise = [
         r
         for r in caplog.records
-        if r.levelno == logging.INFO and "migrating existing DB" in r.getMessage()
+        if r.name == connection_module.__name__ and r.levelno >= logging.INFO
     ]
-    assert infos == []
+    assert noise == [], (
+        "current-DB read-only open should be silent; "
+        f"got {[(r.levelname, r.getMessage()) for r in noise]}"
+    )
 
 
 def test_get_connection_read_only_skips_migration_when_imports_table_missing(
@@ -441,8 +451,6 @@ def test_get_in_memory_connection_rejects_invalid_session_tz(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """Garbage in the env var is rejected before the SET TimeZone interpolation."""
-    from apple_health_mcp.exceptions import ConfigError
-
     # A semicolon would be a SQL-injection vector if the connection layer
     # interpolated the env value directly; the validation regex rejects it.
     monkeypatch.setenv("APPLE_HEALTH_TZ", "Asia/Tokyo'; DROP TABLE x;--")

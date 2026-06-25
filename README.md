@@ -429,6 +429,29 @@ automatically. Pick one:
 
 See [CHANGELOG.md](./CHANGELOG.md) for the per-release notes.
 
+### Upgrading from < v0.3.0
+
+v0.3.0 dropped automatic in-place schema upgrades from pre-v0.3.0
+databases (see [issue #124](https://github.com/rinoshiyo/apple-health-mcp-server/issues/124)).
+The first `apple-health-mcp-server serve` against an older DB now exits
+with a `ConfigError` that names the path and shows the recovery command;
+your data on disk is left untouched.
+
+Recovery is a one-time re-import:
+
+```bash
+# Remove the pre-v0.3.0 DB (the default location, override with --db).
+rm ~/.local/share/apple-health-mcp/health.duckdb
+
+# Re-import from the latest Apple Health export.zip you extracted.
+uvx apple-health-mcp-server@latest import /path/to/apple_health_export
+```
+
+The importer takes a couple of minutes on a multi-GB `export.xml` and
+the data never leaves your machine. After the re-import, every
+subsequent `serve` invocation runs against the v0.3.0 schema and the
+ConfigError no longer fires.
+
 ## Troubleshooting
 
 **Every tool returns "No Apple Health data has been imported yet."**
