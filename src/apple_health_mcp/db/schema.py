@@ -217,6 +217,16 @@ CREATE TABLE IF NOT EXISTS imports (
     import_id          VARCHAR,
     export_dir         VARCHAR NOT NULL,
     imported_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- ``record_count`` counts Apple Health ``<Record>`` elements parsed
+    -- in Phase 1 BEFORE Phase 4's Correlation-child dedup runs (Apple
+    -- duplicates Correlation children at the top level by spec; see
+    -- CLAUDE.md §5). ``records_after_dedup`` (last column, added in
+    -- v0.3.0 / issue #129) counts the surviving rows in the ``records``
+    -- table for this import after that dedup, so
+    -- ``record_count - records_after_dedup`` is the number of
+    -- Correlation-derived duplicates collapsed. Both fields exist so
+    -- "import history" diagnostics can show the dedup ratio without
+    -- the operator having to grep the importer logs.
     record_count       BIGINT,
     workout_count      BIGINT,
     duration_secs      DOUBLE,
@@ -224,7 +234,11 @@ CREATE TABLE IF NOT EXISTS imports (
     -- the column was introduced (#62); a fresh import always stamps it so
     -- the orchestrator can match a subsequent re-import against the most
     -- recent stamped row and exit early when the file is byte-identical.
-    export_xml_sha256  VARCHAR
+    export_xml_sha256  VARCHAR,
+    -- Phase-4 post-dedup row count (see ``record_count`` block comment).
+    -- NULL on rows finalized before v0.3.0 / #129; fresh imports always
+    -- populate it.
+    records_after_dedup BIGINT
 );
 
 -- Captures the root <HealthData locale="..."> attribute and the

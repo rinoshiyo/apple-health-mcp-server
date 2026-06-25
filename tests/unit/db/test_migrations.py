@@ -242,6 +242,28 @@ def test_apply_pending_migrations_raises_reimport_required_on_pre_v3_db() -> Non
         conn.close()
 
 
+def test_apply_pending_migrations_rejects_v3_db_after_v0_3_0_records_after_dedup_bump() -> None:
+    """A v=3 DB (the post-#126 fresh-start baseline) is rejected by the
+    v0.3.0 / PR-D (issue #129) ``CURRENT_SCHEMA_VERSION = 4`` bump.
+
+    The bump adds the ``imports.records_after_dedup`` column with no
+    in-place migration registered for v=3 -> v=4; the same fresh-start
+    contract that PR #126 introduced for v=2 -> v=3 applies here.
+    Pinning this case (in addition to the v=2 test above) makes the
+    "every CURRENT bump that adds a column needs a re-import" rule
+    visible at test time rather than at first-user-hits-it time.
+    """
+    db_path = "/tmp/example-v3.duckdb"
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, 3)
+        with pytest.raises(ConfigError) as excinfo:
+            apply_pending_migrations(conn, db_path=db_path)
+        assert str(excinfo.value) == _reimport_required_message(3, db_path)
+    finally:
+        conn.close()
+
+
 def test_apply_pending_migrations_does_not_raise_when_max_target_reaches_current(
     monkeypatch: MonkeyPatch,
 ) -> None:

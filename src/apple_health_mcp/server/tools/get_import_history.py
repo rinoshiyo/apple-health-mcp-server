@@ -14,9 +14,13 @@ if TYPE_CHECKING:
 
 DESCRIPTION = (
     "List all data imports. Returns: import_id, export_dir, imported_at, "
-    "record_count, workout_count, duration_secs, export_xml_sha256 "
-    "(hex sha256 of the source export.xml; NULL on rows finalized before "
-    "the column was introduced)."
+    "record_count (Phase-1 parse count of Apple Health <Record> elements, "
+    "BEFORE Correlation-child dedup), records_after_dedup (surviving rows "
+    "in the records table after Phase 4 dedup; their difference is the "
+    "number of Correlation duplicates collapsed -- Apple duplicates "
+    "Correlation children at the top level by spec), workout_count, "
+    "duration_secs, export_xml_sha256 (hex sha256 of the source "
+    "export.xml; NULL on rows finalized before the column was introduced)."
 )
 
 # Explicit column list (rather than ``SELECT *``) mirrors the audit-batch
@@ -26,7 +30,7 @@ DESCRIPTION = (
 # the LLM-facing prose and SQL projection stay in sync.
 _SQL = (
     "SELECT import_id, export_dir, imported_at, record_count, "
-    "workout_count, duration_secs, export_xml_sha256 "
+    "workout_count, duration_secs, export_xml_sha256, records_after_dedup "
     "FROM imports ORDER BY imported_at DESC"
 )
 

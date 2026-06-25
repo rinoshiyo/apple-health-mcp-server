@@ -181,12 +181,29 @@ def run_import(
         finalize_import(conn, skip_dedup=existing is not None)
 
         duration_secs = time.monotonic() - start
+        # Issue #129: ``record_count`` is the Phase-1 parse count
+        # (BEFORE Phase 4's Correlation-child dedup). To populate
+        # ``records_after_dedup`` we need the post-dedup count for THIS
+        # import specifically -- ``finalize_import`` has already run
+        # above, so the surviving rows in ``records`` for our
+        # ``actual_import_id`` reflect the dedup outcome. The query is
+        # cheap (single ``COUNT(*)`` on an indexed predicate); doing it
+        # here keeps the import-history diagnostic accurate without
+        # requiring the dedup step to thread the number back through
+        # ``finalize_import``'s return type.
+        post_dedup_row = conn.execute(
+            "SELECT COUNT(*) FROM records WHERE import_id = ?",
+            [actual_import_id],
+        ).fetchone()
+        records_after_dedup = (
+            int(post_dedup_row[0]) if post_dedup_row and post_dedup_row[0] is not None else 0
+        )
         conn.execute(
             """
             INSERT INTO imports (
                 import_id, export_dir, record_count, workout_count, duration_secs,
-                export_xml_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                export_xml_sha256, records_after_dedup
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
@@ -195,6 +212,7 @@ def run_import(
                 stats.workouts,
                 duration_secs,
                 export_sha,
+                records_after_dedup,
             ],
         )
 
