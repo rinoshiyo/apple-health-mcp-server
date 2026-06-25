@@ -103,7 +103,7 @@
     "code_body": "<code>~/.claude.json</code> の <code>mcpServers</code> に追加してください。",
     "code_note": "<code>@latest</code> を付けると、 serve を起動するたびに最新版が解決されます。 詳しくは README の「Updating」 をご覧ください。",
     "desktop_title": "Claude Desktop (.mcpb bundle)",
-    "desktop_step1": "1. GitHub Releases から <code>apple-health-mcp-server-v0.2.0.mcpb</code> をダウンロード",
+    "desktop_step1": "1. <a href=\"https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest\">GitHub Releases</a> から最新の <code>.mcpb</code> バンドルをダウンロード",
     "desktop_step2": "2. Claude Desktop の設定 &rarr; Extensions に <code>.mcpb</code> をドラッグ&ドロップ",
     "desktop_step3": "3. 初回のみ import コマンドだけはターミナルで実行 (export.xml の場所を指定)",
     "desktop_note": "Linux では Claude Desktop が提供されていないため、 Claude Code または Codex CLI をお使いください。",

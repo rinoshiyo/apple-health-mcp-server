@@ -9,6 +9,17 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Changed
+
+- **LP install step now points at the GitHub Releases latest page**
+  (issue #111). The Claude Desktop install step previously hard-coded
+  the v0.2.0 bundle filename, which would 404 the moment the v0.3.0
+  stable tag lands and the LP footer auto-syncs. The step now links
+  to <https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest>
+  in both `docs/i18n/en.json` and `docs/i18n/ja.json` so the install
+  link never goes stale, regardless of release cadence. Layer 2
+  (LP copy / install ergonomics), not a wire-contract change.
+
 ## [0.3.0-rc1] - 2026-06-25
 
 First pre-release of the v0.3.0 cycle. v0.3.0 batches the breaking

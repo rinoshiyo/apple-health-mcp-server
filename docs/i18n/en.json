@@ -103,7 +103,7 @@
     "code_body": "Add to <code>mcpServers</code> in <code>~/.claude.json</code>.",
     "code_note": "Append <code>@latest</code> to re-resolve the newest version on every serve. See README \"Updating\" for details.",
     "desktop_title": "Claude Desktop (.mcpb bundle)",
-    "desktop_step1": "1. Download <code>apple-health-mcp-server-v0.2.0.mcpb</code> from GitHub Releases",
+    "desktop_step1": "1. Download the latest <code>.mcpb</code> bundle from <a href=\"https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest\">GitHub Releases</a>",
     "desktop_step2": "2. Drag & drop the <code>.mcpb</code> onto Claude Desktop &rarr; Settings &rarr; Extensions",
     "desktop_step3": "3. Run the import command in your terminal once (point it at your export.xml folder)",
     "desktop_note": "Claude Desktop is not available on Linux &mdash; use Claude Code or Codex CLI instead.",
