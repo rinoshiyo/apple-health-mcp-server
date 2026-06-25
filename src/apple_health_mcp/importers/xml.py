@@ -190,6 +190,29 @@ def _parse_opt_float(raw: str | None) -> float | None:
     return value
 
 
+def _parse_sample_time(raw: str | None) -> float | None:
+    """Convert Apple's ``HH:MM:SS.SSS`` literal to seconds-of-day.
+
+    Issue #109 (PR-F): aligns the importer's on-disk storage with the
+    ``get_heart_rate_samples`` wire contract (DOUBLE seconds-of-day since
+    00:00 local). Returns ``None`` on any malformed shape so one bad row
+    cannot abort the whole import; the matching DB migration applies the
+    same fallback to legacy VARCHAR rows.
+    """
+    if raw is None:
+        return None
+    parts = raw.split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    except ValueError:
+        return None
+    return float(hours * 3600 + minutes * 60) + seconds
+
+
 # XML date attributes go through the shared ``importers/_tz.py`` helpers
 # so the ECG importer applies the identical normalisation — a JST row from
 # the XML feed and the same JST row from an ECG CSV must land as the same
@@ -825,7 +848,10 @@ class _XmlImporter:
         if self._current_record_hash is None:
             return
         bpm = _parse_opt_float(attr.get("bpm"))
-        sample_time = attr.get("time")
+        # Issue #109 (PR-F): Apple's ``HH:MM:SS.SSS`` literal is normalised
+        # to seconds-of-day at import time so the column lands DOUBLE and
+        # ``get_heart_rate_samples`` reads it verbatim.
+        sample_time = _parse_sample_time(attr.get("time"))
         self._heart_rate_samples.append(
             (
                 self._current_record_hash,

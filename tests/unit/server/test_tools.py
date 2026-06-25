@@ -454,11 +454,18 @@ def test_get_workout_route_envelope_offset_past_end_keeps_total(
 
 
 def test_get_heart_rate_samples(seeded_conn: duckdb.DuckDBPyConnection) -> None:
-    """Issue #96 (T8): ``sample_time`` is normalised to a seconds float."""
+    """Issue #109 (PR-F): ``sample_time`` is read verbatim as DOUBLE.
+
+    Pre-PR-F (issue #96 / T8) the column was a VARCHAR ``HH:MM:SS.SSS``
+    literal and the tool normalised it on the way out. PR-F moves the
+    normalisation to import time and stores DOUBLE seconds-of-day, so
+    the same wire values fall out of a plain ``SELECT`` with no
+    ``row_transform`` shim.
+    """
     fn = _bind(get_heart_rate_samples, seeded_conn)
     rows = _items(fn, record_hash="rh1")
     assert len(rows) == 3
-    # Seeded values are 08:00:00.000 / 08:00:01.500 / 08:00:03.000 ->
+    # Seeded values map to 08:00:00.000 / 08:00:01.500 / 08:00:03.000 =
     # 28800.0 / 28801.5 / 28803.0 seconds after midnight.
     assert rows[0]["sample_time"] == 28800.0
     assert rows[1]["sample_time"] == 28801.5
@@ -487,22 +494,22 @@ def test_get_heart_rate_samples_envelope_pagination(
     assert page2["next_offset"] is None
 
 
-def test_get_heart_rate_samples_malformed_sample_time_returns_none(
+def test_get_heart_rate_samples_null_sample_time_returns_none(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """A bad ``sample_time`` literal falls back to ``None`` (no exception)."""
-    seeded_conn.execute(
-        "INSERT INTO heart_rate_samples VALUES ('rh1', 3, 76.0, 'not-a-time', 'imp1')"
-    )
-    seeded_conn.execute(
-        "INSERT INTO heart_rate_samples VALUES ('rh1', 4, 77.0, '12:34:abc', 'imp1')"
-    )
+    """A NULL ``sample_time`` surfaces as ``None`` (no exception).
+
+    Issue #109 (PR-F): the column is now DOUBLE, so malformed-string
+    inputs can no longer reach storage -- the importer's
+    ``_parse_sample_time`` and the DB migration's TRY_CAST both lower a
+    malformed literal to NULL before it touches the column. We keep a
+    NULL-pass-through assertion as the post-PR-F equivalent: nothing on
+    the read path should choke when the underlying value is NULL.
+    """
     seeded_conn.execute("INSERT INTO heart_rate_samples VALUES ('rh1', 5, 78.0, NULL, 'imp1')")
     fn = _bind(get_heart_rate_samples, seeded_conn)
     rows = _items(fn, record_hash="rh1")
     by_idx = {r["sample_idx"]: r["sample_time"] for r in rows}
-    assert by_idx[3] is None
-    assert by_idx[4] is None
     assert by_idx[5] is None
 
 

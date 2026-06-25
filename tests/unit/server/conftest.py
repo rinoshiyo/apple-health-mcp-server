@@ -64,9 +64,13 @@ INSERT INTO workout_routes VALUES
     ('wh1', '/workout-routes/route_2024-01-01.gpx', 'Apple Watch', '10.0',
      NULL, TIMESTAMP '2024-01-01 10:30:00', TIMESTAMP '2024-01-01 10:00:00',
      TIMESTAMP '2024-01-01 10:30:00', 'imp1');
-INSERT INTO heart_rate_samples VALUES ('rh1', 0, 70.0, '08:00:00.000', 'imp1');
-INSERT INTO heart_rate_samples VALUES ('rh1', 1, 72.5, '08:00:01.500', 'imp1');
-INSERT INTO heart_rate_samples VALUES ('rh1', 2, 75.0, '08:00:03.000', 'imp1');
+-- Issue #109 (PR-F): ``sample_time`` is stored DOUBLE (seconds-of-day)
+-- since 00:00 local. 28800.0 / 28801.5 / 28803.0 = 08:00:00.000 /
+-- 08:00:01.500 / 08:00:03.000 -- same wall-clock values as before, now
+-- pre-normalised to match the post-PR-F storage shape.
+INSERT INTO heart_rate_samples VALUES ('rh1', 0, 70.0, 28800.0, 'imp1');
+INSERT INTO heart_rate_samples VALUES ('rh1', 1, 72.5, 28801.5, 'imp1');
+INSERT INTO heart_rate_samples VALUES ('rh1', 2, 75.0, 28803.0, 'imp1');
 INSERT INTO records VALUES
     ('rbp_s', 'HKQuantityTypeIdentifierBloodPressureSystolic', 130.0, NULL,
      'mmHg', 'BP', '1.0', NULL, NULL,

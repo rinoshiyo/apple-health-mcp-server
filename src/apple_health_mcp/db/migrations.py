@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 Migration = Callable[["duckdb.DuckDBPyConnection"], None]
 
@@ -61,7 +61,92 @@ def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("ALTER TABLE imports ADD COLUMN IF NOT EXISTS export_xml_sha256 VARCHAR;")
 
 
-MIGRATIONS: Sequence[tuple[int, Migration]] = ((2, _add_export_xml_sha256_column),)
+def _convert_heart_rate_sample_time_to_double(conn: duckdb.DuckDBPyConnection) -> None:
+    """Convert ``heart_rate_samples.sample_time`` from VARCHAR to DOUBLE.
+
+    Issue #109 (PR-F): aligns the on-disk storage with the wire contract
+    that ``get_heart_rate_samples`` exposes (seconds-of-day since 00:00
+    local). Pre-PR-F databases stored Apple's raw ``HH:MM:SS.SSS`` literal
+    and parsed it on the way out; from PR-F forward the importer writes
+    DOUBLE directly and the tool reads it verbatim.
+
+    Idempotent:
+    * If the table is missing (a connection whose ``ensure_schema`` has
+      not yet run), skip entirely; the next ensure_schema call creates
+      it in the new shape.
+    * If the column is already DOUBLE (already-migrated DB, or a fresh
+      DB whose ensure_schema landed under the PR-F schema), skip.
+    * If the table is empty, skip the populate step but still perform
+      the column swap so a legacy empty DB lands in the new shape.
+
+    Malformed legacy rows (any value where ``split_part`` + ``TRY_CAST``
+    cannot recover three numeric segments) become ``NULL`` and a single
+    WARNING is logged with the count. The warning never lists the
+    offending values because they could carry user wall-clock data; the
+    count alone is enough for the operator to investigate.
+    """
+    # Skip when the table has not been created yet (the migration registry
+    # can be invoked on a connection whose ``ensure_schema`` has not yet
+    # run -- the version sentinel only needs the ``schema_version`` table,
+    # not the full canonical schema).
+    table_row = conn.execute(
+        "SELECT 1 FROM duckdb_tables() "
+        "WHERE table_name = 'heart_rate_samples' AND schema_name = 'main' LIMIT 1"
+    ).fetchone()
+    if table_row is None:
+        return
+
+    # Probe the current type. ``pragma_table_info`` reports the canonical
+    # DuckDB type name (``VARCHAR`` or ``DOUBLE``). Already-DOUBLE rows
+    # are a no-op so the migration is rerunnable across restarts even if
+    # ``apply_pending_migrations`` is called twice (defensive against
+    # callers that forget to gate on ``get_current_version``).
+    type_row = conn.execute(
+        "SELECT type FROM pragma_table_info('heart_rate_samples') WHERE name = 'sample_time'"
+    ).fetchone()
+    if type_row is None or str(type_row[0]).upper() == "DOUBLE":
+        return
+
+    # Add the new DOUBLE column alongside the legacy VARCHAR one, then
+    # populate it from the literal. ``TRY_CAST`` keeps malformed rows
+    # from aborting the migration -- they land as NULL and we log the
+    # count below.
+    conn.execute("ALTER TABLE heart_rate_samples ADD COLUMN sample_time_seconds DOUBLE;")
+    row_count_row = conn.execute("SELECT COUNT(*) FROM heart_rate_samples").fetchone()
+    row_count = int(row_count_row[0]) if row_count_row is not None else 0
+    if row_count > 0:
+        conn.execute(
+            """
+            UPDATE heart_rate_samples
+            SET sample_time_seconds =
+                TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
+              + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
+              + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)
+            """
+        )
+        malformed_row = conn.execute(
+            "SELECT COUNT(*) FROM heart_rate_samples "
+            "WHERE sample_time_seconds IS NULL AND sample_time IS NOT NULL"
+        ).fetchone()
+        malformed = int(malformed_row[0]) if malformed_row is not None else 0
+        if malformed > 0:
+            _logger.warning(
+                "heart_rate_samples migration: %d row(s) had malformed sample_time "
+                "literals and were converted to NULL",
+                malformed,
+            )
+
+    # Drop the legacy column and rename the new one in. DuckDB rejects
+    # ``ALTER TABLE ... RENAME COLUMN`` while the target name still
+    # exists, so the DROP must happen first.
+    conn.execute("ALTER TABLE heart_rate_samples DROP COLUMN sample_time;")
+    conn.execute("ALTER TABLE heart_rate_samples RENAME COLUMN sample_time_seconds TO sample_time;")
+
+
+MIGRATIONS: Sequence[tuple[int, Migration]] = (
+    (2, _add_export_xml_sha256_column),
+    (3, _convert_heart_rate_sample_time_to_double),
+)
 
 
 def _ensure_version_table(conn: duckdb.DuckDBPyConnection) -> None:

@@ -165,7 +165,9 @@ SCHEMAS: dict[str, pa.Schema] = {
             ("parent_record_hash", _str),
             ("sample_idx", _i32),
             ("bpm", _f64),
-            ("sample_time", _str),
+            # Issue #109 (PR-F): seconds-of-day since 00:00 local,
+            # normalised at import time from Apple's raw ``HH:MM:SS.SSS``.
+            ("sample_time", _f64),
             ("import_id", _str),
         ]
     ),

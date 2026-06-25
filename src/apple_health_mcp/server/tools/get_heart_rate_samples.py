@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from threading import Lock
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
@@ -39,32 +39,6 @@ _DEFAULT_LIMIT = 1000
 _MAX_LIMIT = 10_000
 
 
-def _parse_sample_time(value: str | None) -> float | None:
-    """Convert the stored ``HH:MM:SS.SSS`` offset to a seconds float.
-
-    Issue #96 (T8): the column is stored verbatim as Apple emits it so a
-    round-trip back into the export stays byte-identical, but the wire
-    contract surfaces a numeric offset so downstream LLM math (window
-    arithmetic, RMSSD calculations) does not have to re-parse the string.
-
-    Defensive against unexpected shapes -- a malformed row falls back to
-    ``None`` rather than raising, so one bad sample cannot poison the
-    whole response.
-    """
-    if value is None:
-        return None
-    parts = value.split(":")
-    if len(parts) != 3:
-        return None
-    try:
-        hours = int(parts[0])
-        minutes = int(parts[1])
-        seconds = float(parts[2])
-    except ValueError:
-        return None
-    return float(hours * 3600 + minutes * 60) + seconds
-
-
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_heart_rate_samples(
@@ -91,24 +65,18 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             )
         except ValueError as exc:
             return f"Error: {exc}"
+        # Issue #109 (PR-F): ``sample_time`` is now stored DOUBLE
+        # (seconds-of-day since 00:00 local) at import time, so the
+        # tool returns the column verbatim without a per-row transform.
         sql = (
             "SELECT sample_idx, bpm, sample_time, COUNT(*) OVER () AS _total "
             "FROM heart_rate_samples WHERE parent_record_hash = ? "
             f"ORDER BY sample_idx LIMIT {effective_limit} OFFSET {effective_offset}"
         )
-
-        # Issue #96 (T8): normalise ``sample_time`` on the way out only
-        # (the underlying VARCHAR column stays as Apple's raw string so a
-        # future round-trip exporter has the literal value to write back).
-        def _transform(row: dict[str, Any]) -> dict[str, Any]:
-            row["sample_time"] = _parse_sample_time(row.get("sample_time"))
-            return row
-
         return run_query_envelope(
             conn,
             sql,
             [record_hash],
             offset=effective_offset,
             lock=lock,
-            row_transform=_transform,
         )

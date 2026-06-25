@@ -204,6 +204,52 @@ def test_import_xml_instantaneous_bpm_under_hr_record(
     assert stats.heart_rate_samples == 3
     row = conn.execute("SELECT MIN(sample_idx), MAX(sample_idx) FROM heart_rate_samples").fetchone()
     assert row == (0, 2)
+    # Issue #109 (PR-F): sample_time is normalised to DOUBLE seconds-of-day
+    # at import time. 08:00:00 / 08:00:10 / 08:00:20 = 28800.0 / 28810.0 /
+    # 28820.0. The on-disk column type is DOUBLE.
+    type_row = conn.execute(
+        "SELECT type FROM pragma_table_info('heart_rate_samples') WHERE name = 'sample_time'"
+    ).fetchone()
+    assert type_row is not None
+    assert str(type_row[0]).upper() == "DOUBLE"
+    times = [
+        r[0]
+        for r in conn.execute(
+            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+        ).fetchall()
+    ]
+    assert times == [28800.0, 28810.0, 28820.0]
+
+
+def test_import_xml_malformed_instantaneous_bpm_time_returns_null(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path
+) -> None:
+    """Issue #109 (PR-F): a malformed ``time`` literal lowers to NULL at parse time.
+
+    The importer's ``_parse_sample_time`` mirrors the
+    ``_parse_sample_time`` helper that the wire-side tool used to host:
+    any value that does not split into three numeric ``HH:MM:SS.SSS``
+    segments becomes NULL rather than raising, so one bad row cannot
+    abort the import. A missing ``time`` attribute is also defensively
+    lowered to NULL via the same path (covers the ``raw is None`` branch).
+    """
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="68" startDate="2024-02-02 08:00:00 +0000" endDate="2024-02-02 08:00:30 +0000">
+  <InstantaneousBeatsPerMinute bpm="66" time="not-a-time"/>
+  <InstantaneousBeatsPerMinute bpm="68" time="12:34:abc"/>
+  <InstantaneousBeatsPerMinute bpm="69"/>
+  <InstantaneousBeatsPerMinute bpm="70" time="08:00:20.000"/>
+ </Record>
+</HealthData>"""
+    import_xml(conn, _write_xml(tmp_path, xml), "imp_hr_bad")
+    times = [
+        r[0]
+        for r in conn.execute(
+            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+        ).fetchall()
+    ]
+    assert times == [None, None, None, 28820.0]
 
 
 def test_import_xml_hrv_metadata_list_samples(

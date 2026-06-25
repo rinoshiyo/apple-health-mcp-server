@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,6 +11,7 @@ from apple_health_mcp.db import get_in_memory_connection
 from apple_health_mcp.db import migrations as migrations_module
 from apple_health_mcp.db.migrations import (
     CURRENT_SCHEMA_VERSION,
+    _convert_heart_rate_sample_time_to_double,
     apply_pending_migrations,
     get_current_version,
     set_current_version,
@@ -17,7 +19,37 @@ from apple_health_mcp.db.migrations import (
 from apple_health_mcp.exceptions import DatabaseError
 
 if TYPE_CHECKING:
-    from pytest import MonkeyPatch
+    from pytest import LogCaptureFixture, MonkeyPatch
+
+
+# --- helpers for the PR-F heart_rate_samples sample_time migration -----------
+
+
+def _create_legacy_heart_rate_samples_table(conn: object) -> None:
+    """Create the pre-PR-F ``heart_rate_samples`` shape (VARCHAR sample_time).
+
+    Mirrors the layout that ``ensure_schema`` shipped through v0.2.x so the
+    migration has a realistic starting state to upgrade in place.
+    """
+    conn.execute(  # type: ignore[attr-defined]
+        """
+        CREATE TABLE heart_rate_samples (
+            parent_record_hash  VARCHAR NOT NULL,
+            sample_idx          INTEGER NOT NULL,
+            bpm                 DOUBLE,
+            sample_time         VARCHAR,
+            import_id           VARCHAR NOT NULL
+        );
+        """
+    )
+
+
+def _sample_time_column_type(conn: object) -> str:
+    row = conn.execute(  # type: ignore[attr-defined]
+        "SELECT type FROM pragma_table_info('heart_rate_samples') WHERE name = 'sample_time'"
+    ).fetchone()
+    assert row is not None
+    return str(row[0]).upper()
 
 
 def test_fresh_database_reports_version_zero() -> None:
@@ -190,5 +222,127 @@ def test_apply_pending_migrations_rolls_back_on_migration_failure(
         # inner BEGIN raises.
         monkeypatch.setattr(migrations_module, "MIGRATIONS", ())
         assert apply_pending_migrations(conn) == 2
+    finally:
+        conn.close()
+
+
+# --- PR-F: heart_rate_samples.sample_time VARCHAR -> DOUBLE ------------------
+
+
+def test_heart_rate_sample_time_migration_idempotent_on_missing_table() -> None:
+    """Skip cleanly when ``heart_rate_samples`` does not exist yet.
+
+    The migration registry can be invoked on a connection whose
+    ``ensure_schema`` has not yet run; the step must be a no-op there.
+    """
+    conn = get_in_memory_connection()
+    try:
+        _convert_heart_rate_sample_time_to_double(conn)
+        # No exception, and the table still does not exist.
+        row = conn.execute(
+            "SELECT 1 FROM duckdb_tables() WHERE table_name = 'heart_rate_samples' LIMIT 1"
+        ).fetchone()
+        assert row is None
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_handles_empty_table() -> None:
+    """Empty legacy table still gets the column swapped to DOUBLE."""
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        assert _sample_time_column_type(conn) == "VARCHAR"
+        _convert_heart_rate_sample_time_to_double(conn)
+        assert _sample_time_column_type(conn) == "DOUBLE"
+        # No surprise leftover columns from the rename dance.
+        cols = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM pragma_table_info('heart_rate_samples')"
+            ).fetchall()
+        }
+        assert "sample_time" in cols
+        assert "sample_time_seconds" not in cols
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_converts_valid_varchar_rows() -> None:
+    """Legacy ``HH:MM:SS.SSS`` rows convert to seconds-of-day DOUBLE."""
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute(
+            "INSERT INTO heart_rate_samples VALUES "
+            "('rh', 0, 70.0, '00:00:00.000', 'imp'),"
+            "('rh', 1, 72.0, '01:30:45.500', 'imp'),"
+            "('rh', 2, 75.0, '23:59:59.999', 'imp')"
+        )
+        _convert_heart_rate_sample_time_to_double(conn)
+        assert _sample_time_column_type(conn) == "DOUBLE"
+        times = [
+            row[0]
+            for row in conn.execute(
+                "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+            ).fetchall()
+        ]
+        assert times[0] == 0.0
+        assert times[1] == 5445.5
+        # Allow a tiny FP tolerance on the boundary value but the value is
+        # representable exactly enough that == still holds in practice.
+        assert times[2] == pytest.approx(86399.999, rel=0, abs=1e-9)
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_handles_malformed_rows_with_warning(
+    caplog: LogCaptureFixture,
+) -> None:
+    """Malformed legacy values become NULL and emit exactly one WARNING."""
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute(
+            "INSERT INTO heart_rate_samples VALUES "
+            "('rh', 0, 70.0, '08:00:00.000', 'imp'),"
+            "('rh', 1, 72.0, 'not-a-time', 'imp')"
+        )
+        with caplog.at_level(logging.WARNING, logger=migrations_module.__name__):
+            _convert_heart_rate_sample_time_to_double(conn)
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "1" in warnings[0].getMessage()
+        assert "malformed" in warnings[0].getMessage()
+        times = [
+            row[0]
+            for row in conn.execute(
+                "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+            ).fetchall()
+        ]
+        assert times == [28800.0, None]
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_is_rerunnable() -> None:
+    """Running the migration twice is a no-op the second time around."""
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute("INSERT INTO heart_rate_samples VALUES ('rh', 0, 70.0, '08:00:00.000', 'imp')")
+        _convert_heart_rate_sample_time_to_double(conn)
+        assert _sample_time_column_type(conn) == "DOUBLE"
+        before = conn.execute(
+            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+        ).fetchall()
+        # Second call must not raise and must leave the column DOUBLE with
+        # identical content.
+        _convert_heart_rate_sample_time_to_double(conn)
+        assert _sample_time_column_type(conn) == "DOUBLE"
+        after = conn.execute(
+            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+        ).fetchall()
+        assert before == after
     finally:
         conn.close()
