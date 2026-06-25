@@ -44,7 +44,6 @@
     "src": "MCP",
     "dst": "Local"
   },
-
   "why": {
     "eyebrow": "Why this exists",
     "title": "Your full Apple Health export, given to Claude — locally.",
@@ -58,7 +57,6 @@
     "card4_title": "Three Claude environments",
     "card4_body": "Claude Code / Claude Desktop / Codex CLI — same data, any entry point."
   },
-
   "usecases": {
     "eyebrow": "What you can do",
     "title": "Ask your own data anything.",
@@ -73,7 +71,6 @@
     "card3_a_html": "VO2Max shows a clear seasonal dip in winter, recovers in spring. Body weight tends to spike +1.2 kg after long holidays. Sleep duration is &plus;42 min only on weekends.",
     "card3_meta": "long-term trends · seasonality"
   },
-
   "export": {
     "eyebrow": "Export your data first",
     "title": "Export your Health data first.",
@@ -85,7 +82,6 @@
     "step5": "Send to your Mac / PC via AirDrop or cloud, then unzip the archive",
     "note_html": "Unzipping gives you an <code>apple_health_export/</code> folder &mdash; <code>export.xml</code> plus the ECG CSVs and GPX routes. Hand the whole folder to the import command."
   },
-
   "install": {
     "eyebrow": "Install",
     "title": "Three environments, same data.",
@@ -110,7 +106,6 @@
     "codex_title": "Codex CLI",
     "codex_body": "Register as an MCP server in <code>~/.codex/config.toml</code>."
   },
-
   "tools": {
     "eyebrow": "18 tools",
     "title": "A read-oriented, broad query surface.",
@@ -149,7 +144,6 @@
     "g8_desc": "Direct DuckDB query (read-only).",
     "t_run_custom_query": "Run an arbitrary SELECT (writes are rejected at the parser level)."
   },
-
   "privacy": {
     "eyebrow": "Privacy",
     "title": "Not a byte leaves your laptop.",
@@ -165,7 +159,6 @@
     "point3_title": "100% open source",
     "point3_body": "MIT licensed. Every line on GitHub, fully auditable."
   },
-
   "faq": {
     "eyebrow": "FAQ",
     "title": "Frequently asked",
@@ -180,7 +173,6 @@
     "q5": "What happens if I re-import the same export?",
     "a5": "Idempotent. Duplicate rows are deduped by content hash, so re-running yields the same DB."
   },
-
   "footer": {
     "tagline": "Make Claude your personal health AI &mdash; locally.",
     "col_resources": "Resources",
@@ -194,7 +186,7 @@
     "col_legal": "License & author",
     "license": "MIT License",
     "author": "Author: rinoshiyo",
-    "version": "",
+    "version": "v0.3.0",
     "copyright": "© 2026 rinoshiyo · Made with care for the local-first AI movement."
   }
 }

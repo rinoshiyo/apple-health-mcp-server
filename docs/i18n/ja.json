@@ -44,7 +44,6 @@
     "src": "MCP",
     "dst": "Local"
   },
-
   "why": {
     "eyebrow": "なぜ作ったか",
     "title": "Apple ヘルスケアのフルデータを、ローカルで Claude に。",
@@ -58,7 +57,6 @@
     "card4_title": "Claude 三環境対応",
     "card4_body": "Claude Code でも Claude Desktop でも Codex CLI でも、 同じデータをそのまま使えます。"
   },
-
   "usecases": {
     "eyebrow": "使い道",
     "title": "「自分のデータで質問できる」 ということ。",
@@ -73,7 +71,6 @@
     "card3_a_html": "VO2Max は冬に下がって春に戻る季節性がはっきり出ています。 体重は連休明けに +1.2 kg ほど上振れする傾向があります。 睡眠時間は週末だけ &plus;42 分です。",
     "card3_meta": "long-term trends · seasonality"
   },
-
   "export": {
     "eyebrow": "データのエクスポート",
     "title": "ヘルスケアのデータを、 まず書き出す。",
@@ -85,7 +82,6 @@
     "step5": "AirDrop / クラウド経由で Mac / PC に転送、 zip を解凍",
     "note_html": "解凍すると <code>apple_health_export/</code> ができます。 中身は <code>export.xml</code> と、 ECG の CSV、 ワークアウトの GPX ルートです。 次の import コマンドには、 このフォルダごと渡してください。"
   },
-
   "install": {
     "eyebrow": "インストール",
     "title": "3 つの環境、 同じデータ。",
@@ -110,7 +106,6 @@
     "codex_title": "Codex CLI",
     "codex_body": "<code>~/.codex/config.toml</code> に MCP サーバーとして登録します。"
   },
-
   "tools": {
     "eyebrow": "17 個のツール",
     "title": "読み取り中心の、 幅広いクエリ。",
@@ -149,7 +144,6 @@
     "g8_desc": "DuckDB に直接 SQL を投げられます (読み取り専用)。",
     "t_run_custom_query": "任意の SELECT 文を実行します。 書き込み系は構文レベルで拒否します。"
   },
-
   "privacy": {
     "eyebrow": "プライバシー",
     "title": "クラウドに 1 バイトも送らない。",
@@ -165,7 +159,6 @@
     "point3_title": "100% オープンソース",
     "point3_body": "MIT ライセンスで公開しています。 ソースコードはすべて GitHub にあり、 自由に監査できます。"
   },
-
   "faq": {
     "eyebrow": "よくある質問",
     "title": "FAQ",
@@ -180,7 +173,6 @@
     "q5": "export を再 import したら?",
     "a5": "何度実行しても大丈夫です。 重複レコードは内容ハッシュをもとに自動的にまとめられるので、 結果は変わりません。"
   },
-
   "footer": {
     "tagline": "Make Claude your personal health AI &mdash; locally.",
     "col_resources": "リソース",
@@ -194,7 +186,7 @@
     "col_legal": "ライセンス・作者",
     "license": "MIT License",
     "author": "Author: rinoshiyo",
-    "version": "",
+    "version": "v0.3.0",
     "copyright": "© 2026 rinoshiyo · Made with care for the local-first AI movement."
   }
 }
