@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-26
+
 ### Documentation
 
 - **README work-arounds bundled for the v0.3.0 stable release**
