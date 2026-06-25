@@ -25,6 +25,24 @@ the maintainer's discretion (see Pass/Fail rollup at the end).
 
 ---
 
+## Common setup
+
+All scenarios invoke the rc2 build via uvx. Define a shell alias once so
+that bumping to rc3 / v0.3.0 stable / v1.0.0 requires editing a single
+line instead of every invocation block in this document:
+
+```bash
+export RC2_PIN='apple-health-mcp-server==0.3.0rc2'
+# Then everywhere the plan writes `uvx --from 'apple-health-mcp-server==0.3.0rc2'`
+# the operator may equivalently use `uvx --from "$RC2_PIN"`.
+```
+
+The remainder of the plan keeps the literal `apple-health-mcp-server==0.3.0rc2`
+form inline for self-contained readability of each scenario; the
+alias above is the single-point bump for the next release cycle.
+
+---
+
 ## A. Setup verification
 
 ### A1. Fresh import of a real Apple Health export
@@ -141,9 +159,11 @@ parsing the XML or writing to the DB.
 **Pass/Fail criteria**
 
 - Process exit code is `0`.
-- Wall-clock ≤ 5 s (single disk read of the XML for the sha256, no parse).
-- `/tmp/dogfood-replay.log` contains the literal substring `Skipping import:
-  export.xml is byte-identical`.
+- Wall-clock ≤ 15 s (single disk read of the 1.2 GB XML for the sha256,
+  no parse — on a cold-cache consumer SSD a 1 GB read is ~2-5 s, plus
+  uvx startup overhead; the gate is generous to absorb jitter).
+- `/tmp/dogfood-replay.log` contains the literal substring `Skipping
+  import: export.xml is byte-identical`.
 - `SELECT COUNT(*) FROM imports` still returns `1` (no new row).
 - `imports.imported_at` is unchanged from the A1 value.
 
@@ -170,9 +190,12 @@ uvx --from 'apple-health-mcp-server==0.3.0rc2' \
 **Expected behaviour**
 
 The Tier 1 sha256 skip is bypassed (Phase 1 runs), but the Tier 2
-existing-hash snapshot suppresses all duplicate inserts so Phase 4 dedup
-auto-skips (per CHANGELOG v0.1.6 entry). Wall-clock should be
-substantially lower than A1 because Phase 4 short-circuits.
+existing-hash snapshot suppresses duplicate inserts during Phase 1
+(the dominant saving — XML is still parsed but no rows are written
+for already-seen hashes), and Phase 4 dedup auto-skips because nothing
+new landed (per CHANGELOG v0.1.6 entry). Wall-clock should be
+measurably lower than A1; the saving comes from the Phase 1 no-INSERT
+path, not from Phase 4 — Phase 4 is only ~5 s of the baseline.
 
 **Pass/Fail criteria**
 
@@ -342,21 +365,21 @@ APPLE_HEALTH_LOG_LEVEL=DEBUG \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
     apple-health-mcp-server serve --db /tmp/empty.duckdb \
     2> /tmp/dogfood-env-new.log &
-sleep 1 && kill %1
+PID=$!; sleep 1; kill "$PID"; wait
 
 # (b) new prefixed JSON format works.
 APPLE_HEALTH_LOG_FORMAT=json \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
     apple-health-mcp-server serve --db /tmp/empty.duckdb \
     2> /tmp/dogfood-env-json.log &
-sleep 1 && kill %1
+PID=$!; sleep 1; kill "$PID"; wait
 
 # (c) OLD unprefixed names MUST no-op (not silently honoured).
 LOG_LEVEL=DEBUG LOG_FORMAT=json \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
     apple-health-mcp-server serve --db /tmp/empty.duckdb \
     2> /tmp/dogfood-env-old.log &
-sleep 1 && kill %1
+PID=$!; sleep 1; kill "$PID"; wait
 ```
 
 **Expected behaviour**
@@ -648,8 +671,10 @@ correlation_members WHERE correlation_hash = ?`.
 
 1. *Happy path.* Call with no args. **Pass/Fail:**
    - Envelope shape `{items, total, next_offset}`.
-   - Each `items[i]` carries `ecg_hash`, `start_date`,
-     `classification`, `sample_count`, `sampling_frequency`.
+   - Each `items[i]` carries exactly five keys: `ecg_hash`,
+     `recorded_date`, `classification`, `device`, `sample_rate_hz`
+     (per the projection in
+     `src/apple_health_mcp/server/tools/list_ecg_readings.py:63-64`).
 2. *New `limit` parameter (audit T11).* Call with `limit=5`.
    **Pass/Fail:**
    - `len(items)` ≤ 5.
@@ -772,13 +797,14 @@ written artefact).
    - Each `items[i]` has `start_date`, `valence`, `kind`, and optionally
      `labels`, `associations`.
 2. *Labels surfaced.* Within the same date-range response, on at least
-   one item `labels` is a non-empty list / object derived from
-   `record_metadata` per the schema comment in `db/schema.py` (rc1
-   audit DB1+DB2 documentation). Note: this tool exposes ONLY
-   `start_date`, `end_date`, `limit`, `offset` parameters per
-   `server/tools/list_state_of_mind.py:46-73`; no `min_valence` filter
-   is available, so any valence-side check is read-only against the
-   returned `items`.
+   one item `labels` is a non-empty VARCHAR string (the column is
+   `labels VARCHAR` per `db/schema.py:257`; the XML importer writes the
+   raw delimited string as-is per rc1 audit DB1+DB2 documentation —
+   asserting list/object shape would mis-flag a correct build). Note:
+   this tool exposes ONLY `start_date`, `end_date`, `limit`, `offset`
+   parameters per `server/tools/list_state_of_mind.py:47-63`; no
+   `min_valence` filter is available, so any valence-side check is
+   read-only against the returned `items`.
 
 **Artefacts:** envelope JSON; the underlying `record_metadata` rows for
 that record.
@@ -908,25 +934,40 @@ expanding the bare upper bound to `2024-06-22 23:59:59.999999`.
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
     apple-health-mcp-server serve --db /tmp/legacy.duckdb \
     2> /tmp/serve-A.log &
+PID_A=$!
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
     apple-health-mcp-server serve --db /tmp/legacy.duckdb \
     2> /tmp/serve-B.log &
+PID_B=$!
+sleep 3  # let one of them acquire the writer lock and migrate.
 ```
 
-**Expected behaviour:** The first to acquire the DB runs
-`_migrate_if_needed`, migrates to `schema_version=3`. The second's
-`_migrate_if_needed` sees `current >= CURRENT_SCHEMA_VERSION`, skips the
-loop, and does NOT re-run the migration.
+After observing, stop both: `kill "$PID_A" "$PID_B" 2>/dev/null; wait`.
+
+**Expected behaviour:** The first to acquire the DuckDB writer lock
+runs `_migrate_if_needed` and migrates to `schema_version=3`. The
+second's outcome depends on which step it reaches first:
+
+- If it lost the writer-lock race **before** the migration completed,
+  it MAY exit with a DuckDB writer-lock error (acceptable — the
+  operator restarts after the winner finishes).
+- If it acquired the writer lock **after** the migration completed,
+  `_migrate_if_needed` sees `current >= CURRENT_SCHEMA_VERSION`, skips
+  the loop, and does NOT re-run the migration.
 
 **Pass/Fail criteria**
 
-- Both `serve` processes start without error.
+- At least one `serve` process starts and reaches the tool-loop without
+  error.
 - Exactly ONE of the two logs contains `Applying migration to schema
-  version 3`. The other does NOT.
-- Neither process logs `TransactionException` or
-  `MVCC` errors.
-- `SELECT MAX(version) FROM schema_version` returns `3` after both
-  processes are running.
+  version 3`. The other either skips silently OR exits cleanly with a
+  single writer-lock error (no `TransactionException` traceback, no
+  partial migration).
+- After both processes are stopped, `SELECT MAX(version) FROM
+  schema_version` returns `3`.
+- Restarting either process against the now-migrated DB succeeds and
+  emits NO migration line (proves the loser-process never silently
+  re-ran the migration).
 
 **Artefacts:** `/tmp/serve-A.log`, `/tmp/serve-B.log`.
 
@@ -996,8 +1037,12 @@ Each response is an object with exactly three top-level keys: `items`,
 - `set(response.keys()) == {"items", "total", "next_offset"}`.
 - `"has_more" not in response`.
 - `get_workout_route` uses the key `items`, NOT the rc1-era `points`.
-- Call with `offset=10**9` → `items == []` and `total > 0` on a non-empty
-  table.
+- Call with `offset=10**9` AND filter values known to match ≥ 1 row
+  (the fallback `_count_sql_from_page_sql` is filter-scoped — calling
+  with a date range that matches zero rows legitimately returns
+  `total=0`, so the operator must pre-pick filter values via
+  `query_records` / `list_workouts` / etc. that the unfiltered tool
+  already returned data for) → `items == []` and `total > 0`.
 - Call with `limit=0` → `Error: limit must be >= 1`.
 
 **Artefacts:** the 7 response JSON shapes.
@@ -1189,6 +1234,10 @@ the 17 tools appear in Claude's tool list.
   "apple-health-mcp-server", "serve"]` — proves the release workflow's
   args rewrite (audit #78 mandatory PR-B) fired correctly so uvx pins to
   rc2 and is NOT silently upgraded by uvx's cache-refresh path.
+  **Important:** compare against the manifest **extracted from the
+  downloaded `.mcpb` zip**, NOT the repo-root `manifest.json` (which
+  intentionally ships the unpinned form `["apple-health-mcp-server",
+  "serve"]`; the release workflow rewrites the pin at pack time only).
 
 **Artefacts:** screenshot of Claude Desktop's connector panel showing
 the pinned version; `unzip -p <bundle>.mcpb manifest.json | jq .mcp_config`.
