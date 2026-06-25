@@ -325,6 +325,111 @@ def test_heart_rate_sample_time_migration_handles_malformed_rows_with_warning(
         conn.close()
 
 
+def test_heart_rate_sample_time_migration_parity_with_importer_on_fractional() -> None:
+    """Issue #109 (PR-F /code-review F2): importer and migration produce
+    identical seconds-of-day for a fractional ``HH:MM:SS`` input.
+
+    Bridges the two code paths from the same VARCHAR literal:
+
+    * Migration: ``TRY_CAST(split_part(...) AS DOUBLE)`` arithmetic in SQL.
+    * Importer: ``float(parts[0])`` arithmetic in Python.
+
+    A divergence here would break the CHANGELOG's "matching fallback"
+    claim.
+    """
+    from apple_health_mcp.importers.xml import _parse_sample_time
+
+    raw = "1.5:30:00.500"
+    importer_value = _parse_sample_time(raw)
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute(
+            "INSERT INTO heart_rate_samples VALUES ('rh', 0, 70.0, ?, 'imp')",
+            [raw],
+        )
+        _convert_heart_rate_sample_time_to_double(conn)
+        migration_row = conn.execute(
+            "SELECT sample_time FROM heart_rate_samples ORDER BY sample_idx"
+        ).fetchone()
+        assert migration_row is not None
+        migration_value = migration_row[0]
+    finally:
+        conn.close()
+    assert importer_value is not None
+    assert migration_value is not None
+    assert importer_value == pytest.approx(migration_value)
+
+
+def test_heart_rate_sample_time_migration_logs_progress_on_non_empty_table(
+    caplog: LogCaptureFixture,
+) -> None:
+    """Issue #109 (PR-F /code-review F4): emit one INFO log on non-empty
+    tables so a 10M-row migration does not look like a silent hang.
+    """
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute("INSERT INTO heart_rate_samples VALUES ('rh', 0, 70.0, '08:00:00.000', 'imp')")
+        with caplog.at_level(logging.INFO, logger=migrations_module.__name__):
+            _convert_heart_rate_sample_time_to_double(conn)
+        infos = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and "heart_rate_samples migration" in r.getMessage()
+        ]
+        assert len(infos) == 1
+        assert "1" in infos[0].getMessage()
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_silent_on_empty_table(
+    caplog: LogCaptureFixture,
+) -> None:
+    """No progress log on empty tables -- the converting-N-rows INFO is
+    gated on ``row_count > 0`` so a fresh-DB migration stays silent.
+    """
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        with caplog.at_level(logging.INFO, logger=migrations_module.__name__):
+            _convert_heart_rate_sample_time_to_double(conn)
+        infos = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and "heart_rate_samples migration" in r.getMessage()
+        ]
+        assert infos == []
+    finally:
+        conn.close()
+
+
+def test_heart_rate_sample_time_migration_recovers_from_residue_column() -> None:
+    """Issue #109 (PR-F /code-review F6): a half-completed prior run that
+    left ``sample_time_seconds`` behind does not crash direct invocation.
+
+    The production path is transaction-wrapped, but unit tests and any
+    future direct caller exercise the function outside the transaction
+    -- the defensive ``DROP COLUMN IF EXISTS`` keeps that surface
+    idempotent.
+    """
+    conn = get_in_memory_connection()
+    try:
+        _create_legacy_heart_rate_samples_table(conn)
+        conn.execute("INSERT INTO heart_rate_samples VALUES ('rh', 0, 70.0, '08:00:00.000', 'imp')")
+        # Simulate a previous run that crashed after ADD COLUMN but
+        # before DROP / RENAME.
+        conn.execute("ALTER TABLE heart_rate_samples ADD COLUMN sample_time_seconds DOUBLE;")
+        _convert_heart_rate_sample_time_to_double(conn)
+        assert _sample_time_column_type(conn) == "DOUBLE"
+        row = conn.execute("SELECT sample_time FROM heart_rate_samples").fetchone()
+        assert row is not None
+        assert row[0] == 28800.0
+    finally:
+        conn.close()
+
+
 def test_heart_rate_sample_time_migration_is_rerunnable() -> None:
     """Running the migration twice is a no-op the second time around."""
     conn = get_in_memory_connection()

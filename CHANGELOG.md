@@ -43,9 +43,11 @@ v0.x.y disclaimer and the public-API scope.
   directly as seconds-of-day since 00:00 local and read without
   conversion. Existing v0.1.x / v0.2.x databases are migrated in-place
   by `db/migrations.py` (idempotent, malformed rows become NULL with a
-  single warning). `run_custom_query` callers no longer see the raw
-  VARCHAR. Per the SemVer Layer 1/2 split (PR #107), DB schema changes
-  ship as minor / pre-release bumps rather than majors.
+  single warning). Original VARCHAR `HH:MM:SS.SSS` literals are not
+  preserved through the migration; re-import from `export.xml` if you
+  need literal-form fidelity. `run_custom_query` callers no longer see
+  the raw VARCHAR. Per the SemVer Layer 1/2 split (PR #107), DB schema
+  changes ship as minor / pre-release bumps rather than majors.
 - **LP install step now points at the GitHub Releases latest page**
   (issue #111). The Claude Desktop install step previously hard-coded
   the v0.2.0 bundle filename, which would 404 the moment the v0.3.0

@@ -104,11 +104,21 @@ def get_connection(
     tool can surface the standard "run import first" guidance. A WARNING
     is logged when the bootstrap fires so a typo'd ``--db`` does not
     silently masquerade as a successful install.
+
+    Issue #109 follow-up (PR-F /code-review F1): when ``read_only=True``
+    against an existing file, probe :func:`_migrate_if_needed` first.
+    Read-only handles cannot run ALTER TABLE, so a v0.2.x DB upgraded to
+    a v0.3.0+ package would otherwise serve the old shape (VARCHAR
+    ``heart_rate_samples.sample_time``) instead of the new one (DOUBLE).
+    The probe opens the file briefly in writable mode, runs any pending
+    migrations, then closes and re-opens read-only.
     """
     resolved = db_path if db_path is not None else default_db_path()
     if read_only:
         if not resolved.exists():
             _materialise_empty_db(resolved)
+        else:
+            _migrate_if_needed(resolved)
     else:
         _ensure_parent_dir(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
@@ -116,6 +126,74 @@ def get_connection(
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
     _apply_session_tz(conn)
     return conn
+
+
+def _migrate_if_needed(db_path: Path) -> None:
+    """Run pending migrations on ``db_path`` when the on-disk schema is behind.
+
+    Read-only ``serve`` callers cannot ALTER TABLE in-place, so a DB that
+    was last touched by an older package version would otherwise keep
+    serving the old schema (e.g. VARCHAR ``heart_rate_samples.sample_time``
+    after a v0.2.x → v0.3.0 upgrade). We briefly open ``db_path`` in
+    writable mode, probe ``imports.schema_version`` via the migration
+    layer, and apply pending steps only when the persisted version trails
+    :data:`CURRENT_SCHEMA_VERSION`. Already-current DBs avoid the write
+    open entirely.
+
+    Skip cases:
+
+    * Very-pre-v0.1.4 DBs that lack the ``imports`` table fall through to
+      the existing tool-level error handling rather than crash here. The
+      probe is also a useful guard against opening a writable handle on
+      a file that is not actually our DB (DuckDB raises clearly if the
+      magic does not match, but skipping the probe early keeps the
+      common case cheap).
+    * Already-current DBs (``current == CURRENT_SCHEMA_VERSION``) skip
+      the writable reopen entirely.
+
+    Imported lazily to avoid a top-level circular import between
+    ``db.connection`` and ``db.migrations``.
+    """
+    from apple_health_mcp.db.migrations import (
+        CURRENT_SCHEMA_VERSION,
+        apply_pending_migrations,
+        get_current_version,
+    )
+
+    probe = duckdb.connect(str(db_path), read_only=False)
+    try:
+        # Defer to the tool-level error path when the DB pre-dates the
+        # ``imports`` table; a probe-time crash here would hide the
+        # better "run import first" guidance the tool layer would give.
+        if not _table_exists_in_main_conn(probe, "imports"):
+            return
+        current = get_current_version(probe)
+        if current >= CURRENT_SCHEMA_VERSION:
+            return
+        _logger.info(
+            "migrating existing DB from schema v%d to v%d before opening read-only",
+            current,
+            CURRENT_SCHEMA_VERSION,
+        )
+        apply_pending_migrations(probe)
+    finally:
+        probe.close()
+
+
+def _table_exists_in_main_conn(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
+    """Return True when ``name`` exists as a table in the connection's ``main`` schema.
+
+    Local duplicate of :func:`db.migrations._table_exists_in_main` so the
+    ``connection`` module can probe without importing the migrations
+    module at parse time (the lazy import inside
+    :func:`_migrate_if_needed` is the load-bearing one; this helper runs
+    on every read-only open).
+    """
+    row = conn.execute(
+        "SELECT 1 FROM duckdb_tables() WHERE table_name = ? AND schema_name = 'main' LIMIT 1",
+        [name],
+    ).fetchone()
+    return row is not None
 
 
 def _materialise_empty_db(db_path: Path) -> None:

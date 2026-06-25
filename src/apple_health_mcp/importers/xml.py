@@ -198,6 +198,14 @@ def _parse_sample_time(raw: str | None) -> float | None:
     00:00 local). Returns ``None`` on any malformed shape so one bad row
     cannot abort the whole import; the matching DB migration applies the
     same fallback to legacy VARCHAR rows.
+
+    Each segment is parsed via ``float`` (not ``int``) so the importer
+    accepts the same fractional-segment inputs as the migration's
+    ``TRY_CAST(... AS DOUBLE)`` path. Apple's own emitter only ever
+    produces integer hours and minutes, but mirroring the migration's
+    semantics keeps the CHANGELOG's "matching fallback" claim honest
+    and avoids importer-vs-migration divergence on third-party
+    HealthKit contributors that emit fractional values.
     """
     if raw is None:
         return None
@@ -205,12 +213,12 @@ def _parse_sample_time(raw: str | None) -> float | None:
     if len(parts) != 3:
         return None
     try:
-        hours = int(parts[0])
-        minutes = int(parts[1])
+        hours = float(parts[0])
+        minutes = float(parts[1])
         seconds = float(parts[2])
     except ValueError:
         return None
-    return float(hours * 3600 + minutes * 60) + seconds
+    return hours * 3600.0 + minutes * 60.0 + seconds
 
 
 # XML date attributes go through the shared ``importers/_tz.py`` helpers
@@ -313,6 +321,15 @@ class _XmlImporter:
         # Record end event.
         self._current_state_of_mind: dict[str, object] | None = None
 
+        # Issue #109 (PR-F): tally InstantaneousBeatsPerMinute rows whose
+        # ``time`` attribute could not be parsed to seconds-of-day.
+        # Mirrors the migration's malformed-row counter so the import and
+        # migration paths produce a symmetric "N row(s) had unparseable
+        # sample_time" WARNING. The counter is emitted once at end of run
+        # (only when > 0) so an import that touches no malformed rows
+        # stays silent.
+        self._malformed_sample_time_count: int = 0
+
         # Correlation children share the top-level Record structure but their
         # row is recorded by the top-level scanner; here we only capture the
         # linkage.
@@ -373,6 +390,14 @@ class _XmlImporter:
             fp.close()
 
         self._flush_all()
+        # Issue #109 (PR-F): mirror the migration's malformed-row WARNING
+        # so the importer path is observably symmetric. Fires only when
+        # at least one row was malformed -- a clean import stays silent.
+        if self._malformed_sample_time_count > 0:
+            _logger.warning(
+                "heart_rate_samples import: %d row(s) had unparseable sample_time, stored as NULL",
+                self._malformed_sample_time_count,
+            )
         _logger.info(
             "XML import complete: %d records, %d workouts (%d metadata entries, %d routes),"
             " %d activity summaries, %d correlations (%d members), %d heart-rate samples",
@@ -850,8 +875,16 @@ class _XmlImporter:
         bpm = _parse_opt_float(attr.get("bpm"))
         # Issue #109 (PR-F): Apple's ``HH:MM:SS.SSS`` literal is normalised
         # to seconds-of-day at import time so the column lands DOUBLE and
-        # ``get_heart_rate_samples`` reads it verbatim.
-        sample_time = _parse_sample_time(attr.get("time"))
+        # ``get_heart_rate_samples`` reads it verbatim. A raw ``time`` that
+        # was present in the source but could not be parsed lands as NULL
+        # AND increments the malformed counter so the end-of-run WARNING
+        # mirrors the migration's malformed-row signal -- a missing
+        # attribute (``raw is None``) is not counted because the source
+        # supplied nothing to parse.
+        raw_time = attr.get("time")
+        sample_time = _parse_sample_time(raw_time)
+        if sample_time is None and raw_time is not None:
+            self._malformed_sample_time_count += 1
         self._heart_rate_samples.append(
             (
                 self._current_record_hash,

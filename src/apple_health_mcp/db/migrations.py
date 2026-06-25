@@ -30,6 +30,25 @@ CURRENT_SCHEMA_VERSION = 3
 Migration = Callable[["duckdb.DuckDBPyConnection"], None]
 
 
+def _table_exists_in_main(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
+    """Return True when ``name`` exists as a table in the ``main`` schema.
+
+    Shared probe for migration steps that need to skip when invoked on a
+    connection whose :func:`schema.ensure_schema` has not yet run -- the
+    version sentinel only needs the ``schema_version`` table, not the
+    full canonical schema, so :func:`apply_pending_migrations` is
+    callable in that state and individual steps must defend themselves.
+    The ``schema_name = 'main'`` filter prevents a connection with
+    attached databases or user-created schemas from passing the probe
+    on the basis of an unrelated same-named table.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM duckdb_tables() WHERE table_name = ? AND schema_name = 'main' LIMIT 1",
+        [name],
+    ).fetchone()
+    return row is not None
+
+
 def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
     """Add ``imports.export_xml_sha256`` to a pre-#62 on-disk database.
 
@@ -47,16 +66,13 @@ def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
     state. We skip the ALTER instead of failing in that case; the next
     ensure_schema call creates ``imports`` with the column already present.
     """
-    # The schema_name filter keeps a connection with attached databases
-    # or user-created schemas from passing this probe on the basis of an
-    # unrelated ``imports`` table -- the unqualified ALTER below targets
-    # ``main.imports`` and would otherwise raise on a fresh DB whose
-    # ``ensure_schema`` has not yet run.
-    row = conn.execute(
-        "SELECT 1 FROM duckdb_tables() "
-        "WHERE table_name = 'imports' AND schema_name = 'main' LIMIT 1"
-    ).fetchone()
-    if row is None:
+    # The shared helper's schema_name filter keeps a connection with
+    # attached databases or user-created schemas from passing this
+    # probe on the basis of an unrelated ``imports`` table -- the
+    # unqualified ALTER below targets ``main.imports`` and would
+    # otherwise raise on a fresh DB whose ``ensure_schema`` has not
+    # yet run.
+    if not _table_exists_in_main(conn, "imports"):
         return
     conn.execute("ALTER TABLE imports ADD COLUMN IF NOT EXISTS export_xml_sha256 VARCHAR;")
 
@@ -89,11 +105,7 @@ def _convert_heart_rate_sample_time_to_double(conn: duckdb.DuckDBPyConnection) -
     # can be invoked on a connection whose ``ensure_schema`` has not yet
     # run -- the version sentinel only needs the ``schema_version`` table,
     # not the full canonical schema).
-    table_row = conn.execute(
-        "SELECT 1 FROM duckdb_tables() "
-        "WHERE table_name = 'heart_rate_samples' AND schema_name = 'main' LIMIT 1"
-    ).fetchone()
-    if table_row is None:
+    if not _table_exists_in_main(conn, "heart_rate_samples"):
         return
 
     # Probe the current type. ``pragma_table_info`` reports the canonical
@@ -107,26 +119,46 @@ def _convert_heart_rate_sample_time_to_double(conn: duckdb.DuckDBPyConnection) -
     if type_row is None or str(type_row[0]).upper() == "DOUBLE":
         return
 
-    # Add the new DOUBLE column alongside the legacy VARCHAR one, then
-    # populate it from the literal. ``TRY_CAST`` keeps malformed rows
-    # from aborting the migration -- they land as NULL and we log the
-    # count below.
-    conn.execute("ALTER TABLE heart_rate_samples ADD COLUMN sample_time_seconds DOUBLE;")
+    # Belt-and-braces: production path is transaction-wrapped, but
+    # direct test/dev invocation should also be idempotent. An earlier
+    # 4-statement form of this migration (ADD ``sample_time_seconds``
+    # / UPDATE / DROP / RENAME) could leave the intermediate
+    # ``sample_time_seconds`` column behind on a half-completed run;
+    # drop it here so a v0.3.0-rc1 -> v0.3.0-rc2 in-place rerun does
+    # not hit a "Column already exists" Catalog Error and so a
+    # legacy ``sample_time_seconds`` column does not survive into the
+    # new shape. The current ALTER USING form never leaves residue,
+    # so this is a no-op on any DB the new form has touched.
+    conn.execute("ALTER TABLE heart_rate_samples DROP COLUMN IF EXISTS sample_time_seconds;")
+    # Compute row_count once: a single COUNT lets us emit a progress
+    # log on multi-million-row tables and gate the malformed probe so
+    # an empty table stays silent. The ALTER itself runs unconditionally
+    # below -- DuckDB no-ops the type-cast on an empty table in
+    # microseconds.
     row_count_row = conn.execute("SELECT COUNT(*) FROM heart_rate_samples").fetchone()
     row_count = int(row_count_row[0]) if row_count_row is not None else 0
     if row_count > 0:
-        conn.execute(
-            """
-            UPDATE heart_rate_samples
-            SET sample_time_seconds =
-                TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
-              + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
-              + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)
-            """
+        # Multi-year Apple Watch users can carry 10M+ heart_rate_samples
+        # rows; without this line ``serve`` appears to silent-hang for
+        # 30-60s on the first launch against a pre-PR-F DB. One INFO
+        # is enough; the malformed WARNING below carries the row-level
+        # detail.
+        _logger.info(
+            "heart_rate_samples migration: converting %d row(s) from VARCHAR to DOUBLE",
+            row_count,
         )
+        # Probe the malformed count BEFORE the ALTER, while the column
+        # is still VARCHAR. The malformed predicate mirrors the
+        # ALTER's USING expression so a NULL result here matches a
+        # NULL landing in the post-ALTER DOUBLE column.
         malformed_row = conn.execute(
-            "SELECT COUNT(*) FROM heart_rate_samples "
-            "WHERE sample_time_seconds IS NULL AND sample_time IS NOT NULL"
+            """
+            SELECT COUNT(*) FROM heart_rate_samples
+            WHERE sample_time IS NOT NULL
+              AND (TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
+                 + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
+                 + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)) IS NULL
+            """
         ).fetchone()
         malformed = int(malformed_row[0]) if malformed_row is not None else 0
         if malformed > 0:
@@ -136,11 +168,30 @@ def _convert_heart_rate_sample_time_to_double(conn: duckdb.DuckDBPyConnection) -
                 malformed,
             )
 
-    # Drop the legacy column and rename the new one in. DuckDB rejects
-    # ``ALTER TABLE ... RENAME COLUMN`` while the target name still
-    # exists, so the DROP must happen first.
-    conn.execute("ALTER TABLE heart_rate_samples DROP COLUMN sample_time;")
-    conn.execute("ALTER TABLE heart_rate_samples RENAME COLUMN sample_time_seconds TO sample_time;")
+    # Convert VARCHAR -> DOUBLE in a single ALTER COLUMN ... USING
+    # statement. The previous 4-statement dance
+    # (ADD/UPDATE/DROP/RENAME) hit a DuckDB persistent-storage MVCC
+    # conflict on the COMMIT inside :func:`apply_pending_migrations`
+    # ("Failed to commit: Attempting to modify table
+    # heart_rate_samples but another transaction has altered this
+    # table"), because UPDATE + DROP COLUMN on the same persistent
+    # table within a single transaction collide. The single-statement
+    # form sidesteps the conflict and is also what makes the
+    # read-only ``serve`` migration path (PR-F /code-review F1)
+    # actually function on disk -- without this swap, every legacy
+    # v0.2.x DB would fail to migrate on the first ``serve`` start.
+    # ``TRY_CAST`` keeps malformed rows from aborting the conversion
+    # (they land as NULL); the WARNING above carries the count.
+    conn.execute(
+        """
+        ALTER TABLE heart_rate_samples
+        ALTER COLUMN sample_time SET DATA TYPE DOUBLE USING (
+            TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
+          + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
+          + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)
+        );
+        """
+    )
 
 
 MIGRATIONS: Sequence[tuple[int, Migration]] = (

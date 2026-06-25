@@ -7,8 +7,10 @@ in the test corpus.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import pytest
@@ -16,11 +18,16 @@ from lxml import etree
 
 from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import HealthImportError
+from apple_health_mcp.importers import xml as importers_xml_module
 from apple_health_mcp.importers.xml import (
     ImportStats,
     _parse_opt_float,
+    _parse_sample_time,
     import_xml,
 )
+
+if TYPE_CHECKING:
+    from pytest import LogCaptureFixture
 
 
 @pytest.fixture
@@ -250,6 +257,70 @@ def test_import_xml_malformed_instantaneous_bpm_time_returns_null(
         ).fetchall()
     ]
     assert times == [None, None, None, 28820.0]
+
+
+def test_parse_sample_time_accepts_fractional_segments() -> None:
+    """Issue #109 (PR-F /code-review F2): the importer parses every segment
+    as ``float`` so a value like ``'1.5:30:00.500'`` returns the same
+    numeric seconds-of-day that the migration's ``TRY_CAST AS DOUBLE``
+    path produces. The two paths previously diverged because the
+    importer cast hours/minutes via ``int`` and would lower fractional
+    segments to ``None`` while the migration would keep them.
+    """
+    # 1.5 h + 30 min + 0.5 s = 5400 + 1800 + 0.5 = 7200.5
+    assert _parse_sample_time("1.5:30:00.500") == pytest.approx(7200.5)
+
+
+def test_import_xml_malformed_sample_time_warning_count(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path, caplog: LogCaptureFixture
+) -> None:
+    """Issue #109 (PR-F /code-review F3): the importer emits exactly one
+    WARNING at end of run counting rows whose ``time`` attribute could
+    not be parsed. The wording mirrors the migration's WARNING so a grep
+    catches both signals.
+    """
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="68" startDate="2024-02-02 08:00:00 +0000" endDate="2024-02-02 08:00:30 +0000">
+  <InstantaneousBeatsPerMinute bpm="66" time="not-a-time"/>
+  <InstantaneousBeatsPerMinute bpm="70" time="08:00:20.000"/>
+ </Record>
+</HealthData>"""
+    with caplog.at_level(logging.WARNING, logger=importers_xml_module.__name__):
+        import_xml(conn, _write_xml(tmp_path, xml), "imp_hr_warn")
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "heart_rate_samples import" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    msg = warnings[0].getMessage()
+    assert "1" in msg
+    assert "unparseable sample_time" in msg
+
+
+def test_import_xml_clean_sample_time_emits_no_warning(
+    conn: duckdb.DuckDBPyConnection, tmp_path: Path, caplog: LogCaptureFixture
+) -> None:
+    """An import with only well-formed ``time=`` values stays silent so a
+    clean dataset does not surface a misleading WARNING (the malformed
+    counter only emits when ``count > 0``).
+    """
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <Record type="HKQuantityTypeIdentifierHeartRate" sourceName="Apple Watch" unit="count/min" value="68" startDate="2024-02-02 08:00:00 +0000" endDate="2024-02-02 08:00:30 +0000">
+  <InstantaneousBeatsPerMinute bpm="66" time="08:00:00.000"/>
+  <InstantaneousBeatsPerMinute bpm="70" time="08:00:20.000"/>
+ </Record>
+</HealthData>"""
+    with caplog.at_level(logging.WARNING, logger=importers_xml_module.__name__):
+        import_xml(conn, _write_xml(tmp_path, xml), "imp_hr_clean")
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "heart_rate_samples import" in r.getMessage()
+    ]
+    assert warnings == []
 
 
 def test_import_xml_hrv_metadata_list_samples(
