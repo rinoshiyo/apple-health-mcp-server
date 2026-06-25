@@ -11,6 +11,19 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
+- **`imports.imported_at` now reflects the import START moment, in UTC**
+  (issue #130). The orchestrator now captures a single
+  `datetime.now(UTC)` at the top of `run_import` and threads it into
+  both `make_import_id` (which formats it) and the `INSERT INTO
+  imports` value list. Pre-#130 the schema's `DEFAULT CURRENT_TIMESTAMP`
+  fired at INSERT time (= pipeline end), so `import_id` and
+  `imported_at` could diverge by the full import duration; on a
+  multi-GB export this left the two stamps looking like unrelated
+  events when grepping the imports table. The wire shape is
+  unchanged (TIMESTAMPTZ rendered in the session timezone) so this
+  is a Layer 2 internal-correctness fix, not a Layer 1 breaking
+  change.
+
 - **`resolve_db_path()` with env-override precedence** (issue #132, PR #133).
   New resolver that consults `APPLE_HEALTH_DB` (file path) > `APPLE_HEALTH_DATA_DIR`
   (directory) > the historical platform default. `default_db_path()` becomes a

@@ -138,3 +138,55 @@ def test_run_import_autogenerates_import_id(
     # a fresh in-memory connection. Because in_mem is closed already, just
     # check that the stats object returned populated.
     assert stats.workouts == 0
+
+
+def test_run_import_stamps_import_id_and_imported_at_at_same_utc_moment(
+    tmp_path: Path,
+) -> None:
+    """The orchestrator-generated ``import_id`` and ``imports.imported_at``
+    MUST point at the SAME wall-clock instant.
+
+    Issue #130: pre-#130 the schema's ``DEFAULT CURRENT_TIMESTAMP``
+    fired at INSERT time (= end of the pipeline), while
+    ``import_id`` formatted ``make_import_id()`` evaluated at the
+    start. The two diverged by the import duration -- a multi-GB
+    export.xml left ``import_20260625_074616`` next to
+    ``imported_at = 2026-06-25 07:48:03+00:00``, looking like two
+    unrelated events when an operator grepped through the imports
+    table.
+
+    Pinning this end-to-end: re-parse the auto-generated
+    ``import_id`` back into a UTC datetime and assert it equals
+    ``imported_at`` to the microsecond. ``run_import`` is called
+    WITHOUT a manual ``import_id`` so the orchestrator threads the
+    same ``start_moment`` into both fields itself.
+    """
+    export_dir = tmp_path / "apple_health_export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(
+        '<?xml version="1.0"?><HealthData locale="en_US"/>', encoding="utf-8"
+    )
+    db_path = tmp_path / "h.duckdb"
+    run_import(export_dir, db_path)
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        row = conn.execute("SELECT import_id, imported_at FROM imports LIMIT 1").fetchone()
+        assert row is not None
+        import_id_str, imported_at = row[0], row[1]
+        assert isinstance(import_id_str, str)
+        assert isinstance(imported_at, datetime)
+        # import_id format: "import_YYYYMMDD_HHMMSS_FFFFFF" (UTC).
+        # Strip the prefix and re-parse with %f.
+        parsed = datetime.strptime(
+            import_id_str.removeprefix("import_"), "%Y%m%d_%H%M%S_%f"
+        ).replace(tzinfo=UTC)
+        if imported_at.tzinfo is None:  # pragma: no cover - tz-aware on supported DuckDBs
+            imported_at = imported_at.replace(tzinfo=UTC)
+        assert parsed == imported_at, (
+            f"import_id={import_id_str!r} decoded to {parsed!r} must equal "
+            f"imported_at={imported_at!r} (both should be the same UTC start "
+            f"moment threaded by run_import; see issue #130)."
+        )
+    finally:
+        conn.close()
