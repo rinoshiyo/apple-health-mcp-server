@@ -47,6 +47,9 @@ _EXPECTED_TOOL_NAMES = {
     "get_import_history",
     "list_state_of_mind",
     "get_me_attributes",
+    # Issue #137: v0.3.0's 18th tool — runtime self-diagnosis for
+    # the MSIX sandbox / env-override troubleshooting flow.
+    "get_server_info",
 }
 
 

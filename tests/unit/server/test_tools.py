@@ -1,4 +1,4 @@
-"""Tests for the 17 MCP tools.
+"""Tests for the 18 MCP tools.
 
 The tests bypass FastMCP entirely: each tool module's ``register`` is
 called with a small stub that records the decorated function, so the
@@ -25,6 +25,7 @@ from apple_health_mcp.server.tools import (
     get_import_history,
     get_me_attributes,
     get_record_statistics,
+    get_server_info,
     get_workout_details,
     get_workout_route,
     list_correlations,
@@ -958,3 +959,140 @@ def test_run_custom_query_runs_on_empty_db(empty_conn: duckdb.DuckDBPyConnection
     fn = _bind(run_custom_query, empty_conn)
     rows = _call(fn, query="SELECT COUNT(*) AS n FROM imports")
     assert rows == [{"n": 0}]
+
+
+# --- get_server_info ---------------------------------------------------------
+
+
+def _server_info(fn: Any) -> dict[str, Any]:
+    """Decode the diagnostic JSON object returned by ``get_server_info``."""
+    payload = _call(fn)
+    assert isinstance(payload, dict)
+    assert set(payload.keys()) == {"db_path", "version", "record_count", "config_source"}
+    return payload
+
+
+def test_get_server_info_returns_diagnostic_shape(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """The four-field self-diagnosis payload survives a happy path."""
+    from apple_health_mcp import __version__
+
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["version"] == __version__
+    # The seeded fixture has at least the records seeded by the conftest
+    # (3 records of HeartRate + StepCount + 2 BP + StateOfMind, etc.).
+    # Asserting > 0 keeps this test from coupling to the exact seed
+    # count, which the conftest grows independently.
+    assert info["record_count"] > 0
+
+
+def test_get_server_info_records_count_zero_on_empty_db(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Empty (schema-only) DB reports ``record_count = 0`` rather than erroring."""
+    fn = _bind(get_server_info, empty_conn)
+    info = _server_info(fn)
+    assert info["record_count"] == 0
+
+
+def test_get_server_info_reports_open_db_path(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """``db_path`` reflects the in-memory sentinel for the conftest fixture.
+
+    The conftest uses ``get_in_memory_connection`` so DuckDB reports
+    the connection as the ``memory`` DB with no file backing; the
+    diagnostic collapses that to ``":memory:"`` so the diagnostic
+    output is deterministic instead of an empty string. The point
+    of this test is that the diagnostic does NOT silently re-resolve
+    via ``resolve_db_path()`` (which would have returned the platform
+    XDG path, not the actual in-memory handle).
+    """
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["db_path"] == ":memory:"
+
+
+def test_get_server_info_reports_on_disk_db_path(tmp_path: Any) -> None:
+    """An on-disk connection's ``db_path`` is the absolute file path DuckDB opened.
+
+    Covers the alternate branch of ``_open_db_path`` where DuckDB
+    reports a non-NULL ``file`` column (every real serve invocation
+    against the XDG / LOCALAPPDATA default or an env-overridden path).
+    Without this case the on-disk branch would be unreachable from
+    the in-memory test suite — and the very contract the diagnostic
+    exists to enforce (\"report the path you actually opened\") would
+    have no test.
+    """
+    from apple_health_mcp.db import ensure_schema, get_connection
+
+    on_disk = tmp_path / "diag.duckdb"
+    conn = get_connection(on_disk)
+    try:
+        ensure_schema(conn)
+        fn = _bind(get_server_info, conn)
+        info = _server_info(fn)
+        assert info["db_path"] == str(on_disk)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("env_db", "env_dir", "expected"),
+    [
+        # APPLE_HEALTH_DB takes precedence even when both vars are set.
+        ("/tmp/explicit.duckdb", "/tmp/data-root-ignored", "env:APPLE_HEALTH_DB"),
+        # APPLE_HEALTH_DB alone.
+        ("/tmp/explicit.duckdb", None, "env:APPLE_HEALTH_DB"),
+        # APPLE_HEALTH_DATA_DIR alone -> next tier.
+        (None, "/tmp/data-root", "env:APPLE_HEALTH_DATA_DIR"),
+        # Both unset -> platform default.
+        (None, None, "platform_default"),
+    ],
+)
+def test_get_server_info_config_source_tier(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+    env_db: str | None,
+    env_dir: str | None,
+    expected: str,
+) -> None:
+    """``config_source`` mirrors ``resolve_db_path``'s precedence chain.
+
+    Parametrised so a future fifth tier (or a reorder) is a one-line
+    table change instead of a copy-pasted test. ``None`` means
+    ``delenv``; a string means ``setenv``.
+    """
+    if env_db is None:
+        monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    else:
+        monkeypatch.setenv("APPLE_HEALTH_DB", env_db)
+    if env_dir is None:
+        monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", env_dir)
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == expected
+
+
+def test_get_server_info_config_source_blank_env_falls_through(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``APPLE_HEALTH_DB=""`` is reported as ``platform_default``.
+
+    Mirrors the resolver's blank-after-strip-falls-through contract so
+    a user who did ``export APPLE_HEALTH_DB=`` in their shell rc sees
+    the diagnostic agree with what the connection layer actually
+    opened (the platform default). Without this rule the diagnostic
+    would report ``env:APPLE_HEALTH_DB`` while the resolver opened
+    the XDG path — a divergence that would defeat the tool's purpose.
+    """
+    monkeypatch.setenv("APPLE_HEALTH_DB", "")
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == "platform_default"

@@ -9,6 +9,27 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- **`resolve_db_path()` with env-override precedence** (issue #132, PR #133).
+  New resolver that consults `APPLE_HEALTH_DB` (file path) > `APPLE_HEALTH_DATA_DIR`
+  (directory) > the historical platform default. `default_db_path()` becomes a
+  backward-compatible alias. `--db` on the CLI now also promotes its value
+  into `APPLE_HEALTH_DB` so server, CLI, and any future caller that resolves
+  through `resolve_db_path()` agree on the open file. Foundation for #128
+  (Windows MSIX `%LOCALAPPDATA%` sandbox-redirect) recovery flows.
+
+- **`get_server_info` MCP tool — 18th tool** (issue #137, PR #138).
+  Returns `{db_path, version, record_count, config_source}` so a Claude
+  Desktop user can ask the server itself which DB it has open without
+  leaving the chat. `db_path` reports the live connection's open file via
+  `PRAGMA database_list` (NOT a re-resolution), so a divergence between
+  the resolver and the actual open handle is observable. `config_source`
+  labels which `resolve_db_path()` tier produced the path
+  (`env:APPLE_HEALTH_DB` / `env:APPLE_HEALTH_DATA_DIR` / `platform_default`).
+  Tool count: **17 → 18**; the original Rust-mirrored 17 remain in their
+  historical positions and the new tool is appended.
+
 ### Breaking
 
 - **Dropped automatic schema migration from v0.2.x DBs** (issue #124).

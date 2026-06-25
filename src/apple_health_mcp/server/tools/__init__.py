@@ -21,6 +21,7 @@ from apple_health_mcp.server.tools import (
     get_import_history,
     get_me_attributes,
     get_record_statistics,
+    get_server_info,
     get_workout_details,
     get_workout_route,
     list_correlations,
@@ -64,4 +65,9 @@ ALL_TOOLS: list[RegisterFn] = [
     get_import_history.register,
     list_state_of_mind.register,
     get_me_attributes.register,
+    # ``get_server_info`` (issue #137) is Python v0.3.0's runtime
+    # self-diagnosis primitive; appended after the historical 17 so
+    # the original Rust-mirrored ordering remains the prefix of this
+    # list and side-by-side audits still match.
+    get_server_info.register,
 ]
