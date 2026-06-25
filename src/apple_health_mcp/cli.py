@@ -43,7 +43,11 @@ def _root(
     db: Path | None = typer.Option(
         None,
         "--db",
-        help="DuckDB path override (default: XDG_DATA_HOME/apple-health-mcp/health.duckdb).",
+        help=(
+            "DuckDB path override (default: XDG_DATA_HOME/apple-health-mcp/health.duckdb "
+            "on POSIX, %LOCALAPPDATA%/apple-health-mcp/health.duckdb on Windows). "
+            "Overrides APPLE_HEALTH_DB / APPLE_HEALTH_DATA_DIR."
+        ),
     ),
     tz: str | None = typer.Option(
         None,
@@ -63,6 +67,18 @@ def _root(
     # without having to thread it through every function signature.
     if tz is not None:
         os.environ["APPLE_HEALTH_TZ"] = tz
+    # Mirror the --tz / APPLE_HEALTH_TZ promotion pattern for the DB
+    # override: a caller that resolves through resolve_db_path() (e.g.
+    # a future subcommand, a plugin, a get_server_info diagnostic
+    # helper) would otherwise see the env-only view and ignore the
+    # ``--db`` the user typed on the CLI -- the resolver claims to be
+    # the single source of truth, but two parallel paths would drift
+    # without this promotion. ``.expanduser().resolve()`` pins to an
+    # absolute path so the env value the resolver picks up is
+    # CWD-independent (relative paths there would round-trip back into
+    # the same ConfigError the resolver raises for relative env input).
+    if db is not None:
+        os.environ["APPLE_HEALTH_DB"] = str(db.expanduser().resolve())
     ctx.obj = {"db": db}
 
 

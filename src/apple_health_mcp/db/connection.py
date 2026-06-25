@@ -1,9 +1,21 @@
 """DuckDB connection management with XDG-compliant default paths.
 
-Default location resolution follows project convention:
+Path resolution (:func:`resolve_db_path`) precedence, most → least specific:
 
-* Linux / macOS: ``${XDG_DATA_HOME:-~/.local/share}/apple-health-mcp/health.duckdb``
-* Windows: ``%LOCALAPPDATA%\\apple-health-mcp\\health.duckdb``
+1. ``APPLE_HEALTH_DB`` — file path (``~`` expansion). Highest priority.
+2. ``APPLE_HEALTH_DATA_DIR`` — directory path (``~`` expansion); default
+   file name (``health.duckdb``) is appended directly under it (no
+   ``apple-health-mcp/`` subdir).
+3. Platform default:
+
+   * Linux / macOS: ``${XDG_DATA_HOME:-~/.local/share}/apple-health-mcp/health.duckdb``
+   * Windows: ``%LOCALAPPDATA%\\apple-health-mcp\\health.duckdb``
+
+Both env vars are ``.strip()``-ed and rejected if blank-after-strip;
+relative paths and obvious-misuse forms (``APPLE_HEALTH_DB`` pointing at
+an existing directory, ``APPLE_HEALTH_DATA_DIR`` pointing at a
+``*.duckdb`` file) raise :class:`ConfigError` so the user gets a
+copy-pasteable hint instead of an opaque DuckDB I/O error downstream.
 
 When the database is opened at the default path, the auto-created app
 subdirectory is tightened to mode ``0700`` on POSIX so local health data is
@@ -83,13 +95,50 @@ def resolve_db_path() -> Path:
 
     The server and CLI share this single resolver so any future env
     or launcher hook can only drift in one place.
+
+    Validation: blank-after-strip env values fall through to the next
+    tier so a shell rc that does ``export APPLE_HEALTH_DB=`` behaves
+    the same as "unset". Relative paths, paths pointing at an existing
+    directory (for ``APPLE_HEALTH_DB``), and ``*.duckdb`` file paths
+    (for ``APPLE_HEALTH_DATA_DIR``) are rejected with
+    :class:`ConfigError` so an obvious typo surfaces as actionable
+    guidance instead of an opaque DuckDB I/O error downstream.
     """
-    env_db = os.environ.get(_DB_ENV_VAR)
+    env_db_raw = os.environ.get(_DB_ENV_VAR)
+    env_db = env_db_raw.strip() if env_db_raw else ""
     if env_db:
-        return Path(env_db).expanduser()
-    env_dir = os.environ.get(_DATA_DIR_ENV_VAR)
+        candidate = Path(env_db).expanduser()
+        if not candidate.is_absolute():
+            raise ConfigError(
+                f"invalid {_DB_ENV_VAR}={env_db!r}: must be an absolute path "
+                "(relative paths would resolve against the process working "
+                "directory, which differs between CLI and server boots)"
+            )
+        if candidate.is_dir():
+            raise ConfigError(
+                f"invalid {_DB_ENV_VAR}={env_db!r}: points at an existing "
+                "directory; expected a DuckDB file path (e.g. "
+                f"{env_db.rstrip('/')}/{_DB_FILE_NAME})"
+            )
+        return candidate
+    env_dir_raw = os.environ.get(_DATA_DIR_ENV_VAR)
+    env_dir = env_dir_raw.strip() if env_dir_raw else ""
     if env_dir:
-        return Path(env_dir).expanduser() / _DB_FILE_NAME
+        if env_dir.lower().endswith(".duckdb"):
+            raise ConfigError(
+                f"invalid {_DATA_DIR_ENV_VAR}={env_dir!r}: ends in '.duckdb' "
+                f"(looks like a file path); use {_DB_ENV_VAR} for file paths "
+                f"or pass a directory that does not end in '.duckdb' here"
+            )
+        candidate = Path(env_dir).expanduser()
+        if not candidate.is_absolute():
+            raise ConfigError(
+                f"invalid {_DATA_DIR_ENV_VAR}={env_dir!r}: must be an "
+                "absolute path (relative paths would resolve against the "
+                "process working directory, which differs between CLI and "
+                "server boots)"
+            )
+        return candidate / _DB_FILE_NAME
     return _platform_default_dir() / _DB_FILE_NAME
 
 
@@ -309,9 +358,10 @@ def _materialise_empty_db(db_path: Path) -> None:
 
     _logger.warning(
         "no DuckDB file at %s — bootstrapping an empty schema-only DB so the "
-        "MCP server can start. If this path is wrong (typo in --db, missing "
-        "APPLE_HEALTH_TZ env, etc.), the server will keep returning the "
-        "'run import first' guidance until the path matches your real import.",
+        "MCP server can start. If this path is wrong (typo in --db, mismatched "
+        "APPLE_HEALTH_DB / APPLE_HEALTH_DATA_DIR env, MCPB user_config drift, "
+        "etc.), the server will keep returning the 'run import first' "
+        "guidance until the path matches your real import.",
         db_path,
     )
     _ensure_parent_dir(db_path)
