@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 from threading import Lock
 from typing import TYPE_CHECKING
 
 from apple_health_mcp import __version__
 from apple_health_mcp.db.connection import _DATA_DIR_ENV_VAR, _DB_ENV_VAR
+from apple_health_mcp.server.query import run_query_payload
 
 if TYPE_CHECKING:
     import duckdb
@@ -93,37 +93,56 @@ def _open_db_path(conn: duckdb.DuckDBPyConnection) -> str:
     value instead of ``"<unknown>"``.
     """
     rows = conn.execute("PRAGMA database_list").fetchall()
+    # PRAGMA database_list returns ``(seq, name, file)``. For on-disk
+    # connections the ``name`` is the file's stem (NOT the literal
+    # ``"main"``); for in-memory it's the sentinel ``"memory"`` with
+    # ``file = NULL``. Walk in the order DuckDB returns them and take
+    # the first row that looks like a primary DB:
+    #
+    # - ``name == "memory"`` → return the canonical ``":memory:"``
+    #   sentinel so test fixtures using ``get_in_memory_connection``
+    #   produce a deterministic, human-readable diagnostic value.
+    # - non-empty ``file`` → the path the connection has open.
+    #
+    # The package itself never ATTACHes, so a single iteration over
+    # the (typically one-element) list is enough; the explicit
+    # non-empty check on ``file_val`` (rather than a bare truthiness
+    # test) guards against a future DuckDB version returning ``""``
+    # for an unopened slot — that would silently masquerade as an
+    # on-disk path of length zero without this guard.
     for row in rows:
         if len(row) < 3:  # pragma: no cover - DuckDB always returns 3 columns
             continue
-        _seq, name, file_val = row[0], row[1], row[2]
-        if file_val:
-            return str(file_val)
-        # The only NULL-``file`` row a non-ATTACH single-DB connection
-        # produces is the primary in-memory DB, whose name is the
-        # sentinel ``"memory"``. ``# pragma: no branch`` suppresses
-        # the never-taken else arm (= an ATTACHed secondary
-        # ``TYPE MEMORY`` DB sharing this slot) which the package
-        # itself never creates.
-        if name == "memory":  # pragma: no branch
+        name, file_val = row[1], row[2]
+        if name == "memory":
             return ":memory:"
+        if file_val is not None and file_val != "":  # pragma: no branch
+            return str(file_val)
     return "<unknown>"  # pragma: no cover - DuckDB always lists at least one DB
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_server_info() -> str:
-        # Hold the lock across both DuckDB queries — the importer can
-        # write concurrently and we want a consistent snapshot of
-        # "what's open + how many rows" for the diagnostic, even if
-        # the importer commits mid-call.
+        # Hold the lock across BOTH the DuckDB queries AND the env
+        # inspection so the four fields form a consistent snapshot.
+        # ``_resolve_config_source`` reads ``os.environ`` directly --
+        # in the (rare) case where another thread re-exports an env
+        # var mid-call, deciding "snapshot or live read" between
+        # config_source and db_path / record_count would break the
+        # diagnostic invariant the docstring promises. Holding the
+        # lock here gives all four fields the same point-in-time view.
         with lock:
             db_path = _open_db_path(conn)
             record_count = _records_count_or_zero(conn)
+            config_source = _resolve_config_source()
         info = {
             "db_path": db_path,
             "version": __version__,
             "record_count": record_count,
-            "config_source": _resolve_config_source(),
+            "config_source": config_source,
         }
-        return json.dumps(info, ensure_ascii=False)
+        # Reuse the package-wide payload serialiser so any future
+        # change to indent / ensure_ascii / coercion rules lands in
+        # one place (server/query.py::run_query_payload).
+        return run_query_payload(info)

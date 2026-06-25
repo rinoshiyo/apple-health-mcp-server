@@ -34,7 +34,7 @@
     "name": "Claude",
     "time": "just now",
     "body_html": "<p>Your runs last week totaled <span class=\"hi\">32.4 km</span>, average pace 5'38\"/km. HRV dropped 9 ms the day after your long run — suggest an easy run or rest today.</p><p style=\"color: var(--muted); font-size: 12.5px;\">Sleep depth also -22% that day — recovery priority.</p>",
-    "meta": "Local DuckDB · 17 tools · no cloud upload"
+    "meta": "Local DuckDB · 18 tools · no cloud upload"
   },
   "cta": {
     "primary": "Quick start",
@@ -53,7 +53,7 @@
     "card1_body": "Not a byte leaves your laptop. Everything stays in your local DuckDB.",
     "card2_title": "Full export",
     "card2_body": "export.xml + ECG CSV + GPX routes — every artefact Apple Health writes out.",
-    "card3_title": "17 MCP tools",
+    "card3_title": "18 MCP tools",
     "card3_body": "A broad, read-oriented query surface. Workouts, heart rate, sleep, ECG, State of Mind.",
     "card4_title": "Three Claude environments",
     "card4_body": "Claude Code / Claude Desktop / Codex CLI — same data, any entry point."
@@ -112,7 +112,7 @@
   },
 
   "tools": {
-    "eyebrow": "17 tools",
+    "eyebrow": "18 tools",
     "title": "A read-oriented, broad query surface.",
     "deck": "Tools modeled on the Apple Health schema. Claude composes queries; your local DuckDB answers.",
     "g1_title": "Records / Statistics",

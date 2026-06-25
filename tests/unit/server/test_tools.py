@@ -1,4 +1,4 @@
-"""Tests for the 17 MCP tools.
+"""Tests for the 18 MCP tools.
 
 The tests bypass FastMCP entirely: each tool module's ``register`` is
 called with a small stub that records the decorated function, so the
@@ -1039,40 +1039,43 @@ def test_get_server_info_reports_on_disk_db_path(tmp_path: Any) -> None:
         conn.close()
 
 
-def test_get_server_info_config_source_apple_health_db(
+@pytest.mark.parametrize(
+    ("env_db", "env_dir", "expected"),
+    [
+        # APPLE_HEALTH_DB takes precedence even when both vars are set.
+        ("/tmp/explicit.duckdb", "/tmp/data-root-ignored", "env:APPLE_HEALTH_DB"),
+        # APPLE_HEALTH_DB alone.
+        ("/tmp/explicit.duckdb", None, "env:APPLE_HEALTH_DB"),
+        # APPLE_HEALTH_DATA_DIR alone -> next tier.
+        (None, "/tmp/data-root", "env:APPLE_HEALTH_DATA_DIR"),
+        # Both unset -> platform default.
+        (None, None, "platform_default"),
+    ],
+)
+def test_get_server_info_config_source_tier(
     seeded_conn: duckdb.DuckDBPyConnection,
     monkeypatch: pytest.MonkeyPatch,
+    env_db: str | None,
+    env_dir: str | None,
+    expected: str,
 ) -> None:
-    """APPLE_HEALTH_DB set -> ``config_source == 'env:APPLE_HEALTH_DB'``."""
-    monkeypatch.setenv("APPLE_HEALTH_DB", "/tmp/explicit.duckdb")
-    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    """``config_source`` mirrors ``resolve_db_path``'s precedence chain.
+
+    Parametrised so a future fifth tier (or a reorder) is a one-line
+    table change instead of a copy-pasted test. ``None`` means
+    ``delenv``; a string means ``setenv``.
+    """
+    if env_db is None:
+        monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    else:
+        monkeypatch.setenv("APPLE_HEALTH_DB", env_db)
+    if env_dir is None:
+        monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", env_dir)
     fn = _bind(get_server_info, seeded_conn)
     info = _server_info(fn)
-    assert info["config_source"] == "env:APPLE_HEALTH_DB"
-
-
-def test_get_server_info_config_source_apple_health_data_dir(
-    seeded_conn: duckdb.DuckDBPyConnection,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Only APPLE_HEALTH_DATA_DIR set -> ``config_source == 'env:APPLE_HEALTH_DATA_DIR'``."""
-    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
-    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "/tmp/data-root")
-    fn = _bind(get_server_info, seeded_conn)
-    info = _server_info(fn)
-    assert info["config_source"] == "env:APPLE_HEALTH_DATA_DIR"
-
-
-def test_get_server_info_config_source_platform_default(
-    seeded_conn: duckdb.DuckDBPyConnection,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Both env vars unset -> ``config_source == 'platform_default'``."""
-    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
-    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
-    fn = _bind(get_server_info, seeded_conn)
-    info = _server_info(fn)
-    assert info["config_source"] == "platform_default"
+    assert info["config_source"] == expected
 
 
 def test_get_server_info_config_source_blank_env_falls_through(

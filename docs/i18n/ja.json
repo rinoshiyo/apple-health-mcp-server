@@ -34,7 +34,7 @@
     "name": "Claude",
     "time": "just now",
     "body_html": "<p>先週のランは合計 <span class=\"hi\">32.4 km</span>、 平均ペースは 5'38\"/km でした。 一昨日のロング走の翌日に HRV が 9 ms 落ちているので、 今日は easy run か rest がおすすめです。</p><p style=\"color: var(--muted); font-size: 12.5px;\">睡眠の深さも同じ日に -22% &mdash; 回復を優先しましょう。</p>",
-    "meta": "Local DuckDB · 17 tools · no cloud upload"
+    "meta": "Local DuckDB · 18 tools · no cloud upload"
   },
   "cta": {
     "primary": "クイックスタート",
