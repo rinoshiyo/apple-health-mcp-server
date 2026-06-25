@@ -56,8 +56,8 @@ rm -rf /tmp/dogfood-export.duckdb
 # + workout-routes/*.gpx) on the maintainer's machine.
 EXPORT_DIR=/path/to/apple_health_export
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server import "$EXPORT_DIR" \
-    --db /tmp/dogfood-export.duckdb \
+    apple-health-mcp-server --db /tmp/dogfood-export.duckdb \
+    import "$EXPORT_DIR" \
     2> /tmp/dogfood-import.log
 ```
 
@@ -102,8 +102,8 @@ Same as A1, but wrap in `time`:
 ```bash
 rm -rf /tmp/dogfood-export.duckdb
 time uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server import "$EXPORT_DIR" \
-    --db /tmp/dogfood-export.duckdb \
+    apple-health-mcp-server --db /tmp/dogfood-export.duckdb \
+    import "$EXPORT_DIR" \
     2> /tmp/dogfood-import.log
 ```
 
@@ -144,8 +144,8 @@ without `--force` against the same export directory:
 
 ```bash
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server import "$EXPORT_DIR" \
-    --db /tmp/dogfood-export.duckdb \
+    apple-health-mcp-server --db /tmp/dogfood-export.duckdb \
+    import "$EXPORT_DIR" \
     2> /tmp/dogfood-replay.log
 ```
 
@@ -181,8 +181,8 @@ After A1 / A3, run:
 
 ```bash
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server import "$EXPORT_DIR" \
-    --db /tmp/dogfood-export.duckdb \
+    apple-health-mcp-server --db /tmp/dogfood-export.duckdb \
+    import "$EXPORT_DIR" \
     --force \
     2> /tmp/dogfood-force.log
 ```
@@ -224,7 +224,7 @@ path, not from Phase 4 — Phase 4 is only ~5 s of the baseline.
 ```bash
 rm -rf /tmp/empty.duckdb
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/empty.duckdb \
+    apple-health-mcp-server --db /tmp/empty.duckdb serve \
     2> /tmp/dogfood-empty-serve.log &
 SERVE_PID=$!
 # Drive 17 tool calls via a MCP client (Claude Desktop with the bundle, or
@@ -271,7 +271,7 @@ opt-outs (`get_import_history`, `run_custom_query`) stay callable.
 # Step 1: build a v0.2.0 DB.
 rm -rf /tmp/legacy.duckdb
 uvx --from 'apple-health-mcp-server==0.2.0' \
-    apple-health-mcp-server import "$EXPORT_DIR" --db /tmp/legacy.duckdb
+    apple-health-mcp-server --db /tmp/legacy.duckdb import "$EXPORT_DIR"
 
 # Step 2: confirm the legacy schema_version and sample_time type BEFORE
 # touching it with rc2.
@@ -285,7 +285,7 @@ print('sample_time type =', c.execute(\"SELECT type FROM pragma_table_info('hear
 
 # Step 3: start rc2 serve against the legacy DB.
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/legacy.duckdb \
+    apple-health-mcp-server --db /tmp/legacy.duckdb serve \
     2> /tmp/dogfood-migrate.log &
 ```
 
@@ -329,8 +329,8 @@ converting %d row(s) from VARCHAR to DOUBLE` INFO line.
 rm -rf /tmp/progress.duckdb
 APPLE_HEALTH_IMPORT_PROGRESS_SECS=5 \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server import "$EXPORT_DIR" \
-    --db /tmp/progress.duckdb \
+    apple-health-mcp-server --db /tmp/progress.duckdb \
+    import "$EXPORT_DIR" \
     2> /tmp/dogfood-progress.log
 ```
 
@@ -363,21 +363,21 @@ Three sub-runs:
 # (a) new prefixed name works.
 APPLE_HEALTH_LOG_LEVEL=DEBUG \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/empty.duckdb \
+    apple-health-mcp-server --db /tmp/empty.duckdb serve \
     2> /tmp/dogfood-env-new.log &
 PID=$!; sleep 1; kill "$PID"; wait
 
 # (b) new prefixed JSON format works.
 APPLE_HEALTH_LOG_FORMAT=json \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/empty.duckdb \
+    apple-health-mcp-server --db /tmp/empty.duckdb serve \
     2> /tmp/dogfood-env-json.log &
 PID=$!; sleep 1; kill "$PID"; wait
 
 # (c) OLD unprefixed names MUST no-op (not silently honoured).
 LOG_LEVEL=DEBUG LOG_FORMAT=json \
     uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/empty.duckdb \
+    apple-health-mcp-server --db /tmp/empty.duckdb serve \
     2> /tmp/dogfood-env-old.log &
 PID=$!; sleep 1; kill "$PID"; wait
 ```
@@ -932,11 +932,11 @@ expanding the bare upper bound to `2024-06-22 23:59:59.999999`.
 ```bash
 # Start two serve processes against the same DB.
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/legacy.duckdb \
+    apple-health-mcp-server --db /tmp/legacy.duckdb serve \
     2> /tmp/serve-A.log &
 PID_A=$!
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/legacy.duckdb \
+    apple-health-mcp-server --db /tmp/legacy.duckdb serve \
     2> /tmp/serve-B.log &
 PID_B=$!
 sleep 3  # let one of them acquire the writer lock and migrate.
@@ -979,7 +979,7 @@ second's outcome depends on which step it reaches first:
 # Build a v0.2.0 DB with a real export.
 rm -rf /tmp/malformed.duckdb
 uvx --from 'apple-health-mcp-server==0.2.0' \
-    apple-health-mcp-server import "$EXPORT_DIR" --db /tmp/malformed.duckdb
+    apple-health-mcp-server --db /tmp/malformed.duckdb import "$EXPORT_DIR"
 
 # Inject a single malformed row so the migration's TRY_CAST returns NULL.
 python3 -c "
@@ -990,7 +990,7 @@ c.execute(\"INSERT INTO heart_rate_samples (parent_record_hash, sample_idx, bpm,
 
 # Run rc2 serve to trigger migration.
 uvx --from 'apple-health-mcp-server==0.3.0rc2' \
-    apple-health-mcp-server serve --db /tmp/malformed.duckdb \
+    apple-health-mcp-server --db /tmp/malformed.duckdb serve \
     2> /tmp/dogfood-malformed.log &
 ```
 
