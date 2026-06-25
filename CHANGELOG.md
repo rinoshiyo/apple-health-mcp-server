@@ -9,6 +9,14 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.3.0-rc2] - 2026-06-25
+
+Second pre-release of the v0.3.0 cycle. Bundles the wire envelope
+unification (issue #108), the `heart_rate_samples.sample_time`
+storage migration (issue #109), and the LP install-step delinking
+from explicit version filenames (issue #111). Treat this rc as the
+dogfood baseline; v0.3.0 stable follows after stability is confirmed.
+
 ### Breaking
 
 - **Pagination envelope unified across the 7 paginated list/page tools**
