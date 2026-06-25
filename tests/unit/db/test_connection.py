@@ -93,10 +93,13 @@ def test_resolve_db_path_expands_tilde_in_apple_health_db(
     expansion; the resolver must honour that the same way every other
     XDG-respecting tool does.
     """
-    # ``Path.expanduser`` resolves ``~`` via the HOME env (POSIX) /
-    # USERPROFILE (Windows), not via ``Path.home()`` overrides — patch
-    # the env so the tilde target lands inside ``tmp_path``.
+    # ``Path.expanduser`` resolves ``~`` via the HOME env on POSIX and
+    # USERPROFILE (then HOMEDRIVE+HOMEPATH) on Windows. Patching only
+    # HOME left the Windows runners reading their real USERPROFILE
+    # (``C:/Users/runneradmin``) and broke the assertion — patch both
+    # so the tilde target lands inside ``tmp_path`` on either OS.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("APPLE_HEALTH_DB", "~/custom/h.duckdb")
     monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
     assert resolve_db_path() == tmp_path / "custom" / "h.duckdb"
@@ -121,8 +124,11 @@ def test_resolve_db_path_uses_apple_health_data_dir_when_db_unset(
 def test_resolve_db_path_expands_tilde_in_apple_health_data_dir(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``~`` in APPLE_HEALTH_DATA_DIR expands to the resolved HOME."""
+    """``~`` in APPLE_HEALTH_DATA_DIR expands to the resolved HOME on either OS."""
+    # See companion test above for the HOME / USERPROFILE rationale —
+    # Windows runners read USERPROFILE first.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
     monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "~/data-root")
     assert resolve_db_path() == tmp_path / "data-root" / "health.duckdb"
