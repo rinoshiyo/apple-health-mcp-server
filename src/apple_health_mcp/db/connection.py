@@ -105,13 +105,15 @@ def get_connection(
     is logged when the bootstrap fires so a typo'd ``--db`` does not
     silently masquerade as a successful install.
 
-    Issue #109 follow-up (PR-F /code-review F1): when ``read_only=True``
-    against an existing file, probe :func:`_migrate_if_needed` first.
-    Read-only handles cannot run ALTER TABLE, so a v0.2.x DB upgraded to
-    a v0.3.0+ package would otherwise serve the old shape (VARCHAR
-    ``heart_rate_samples.sample_time``) instead of the new one (DOUBLE).
-    The probe opens the file briefly in writable mode, runs any pending
-    migrations, then closes and re-opens read-only.
+    Issue #124 (v0.3.0): when ``read_only=True`` against an existing
+    file, probe :func:`_migrate_if_needed` first so a pre-v0.3.0 DB
+    surfaces the canonical "please re-import" :class:`ConfigError` at
+    server start instead of letting the tool layer return malformed
+    data from an old-shape table (e.g. VARCHAR
+    ``heart_rate_samples.sample_time``). v0.3.0 dropped automatic
+    in-place upgrades; the probe either silently confirms the DB is
+    current or raises :class:`ConfigError` carrying the re-import
+    guidance.
     """
     resolved = db_path if db_path is not None else default_db_path()
     if read_only:
@@ -129,53 +131,68 @@ def get_connection(
 
 
 def _migrate_if_needed(db_path: Path) -> None:
-    """Run pending migrations on ``db_path`` when the on-disk schema is behind.
+    """Validate ``db_path``'s schema_version before opening read-only.
 
-    Read-only ``serve`` callers cannot ALTER TABLE in-place, so a DB that
-    was last touched by an older package version would otherwise keep
-    serving the old schema (e.g. VARCHAR ``heart_rate_samples.sample_time``
-    after a v0.2.x → v0.3.0 upgrade). We briefly open ``db_path`` in
-    writable mode, probe ``imports.schema_version`` via the migration
-    layer, and apply pending steps only when the persisted version trails
-    :data:`CURRENT_SCHEMA_VERSION`. Already-current DBs avoid the write
-    open entirely.
+    v0.3.0 dropped automatic in-place schema upgrades from pre-v0.3.0
+    DBs (:issue:`124`). Two outcomes only:
 
-    Skip cases:
+    * Current DB (``schema_version == CURRENT_SCHEMA_VERSION``) -> return
+      silently. The serve path proceeds to its real read-only open.
+    * Pre-v0.3.0 DB (``0 < schema_version < CURRENT_SCHEMA_VERSION``
+      AND no in-place migration can close the gap) -> raise
+      :class:`ConfigError` carrying the canonical re-import guidance,
+      with ``db_path`` interpolated so the user can copy-paste the
+      ``rm`` / ``import`` commands verbatim.
 
-    * Very-pre-v0.1.4 DBs that lack the ``imports`` table fall through to
-      the existing tool-level error handling rather than crash here. The
-      probe is also a useful guard against opening a writable handle on
-      a file that is not actually our DB (DuckDB raises clearly if the
-      magic does not match, but skipping the probe early keeps the
-      common case cheap).
-    * Already-current DBs (``current == CURRENT_SCHEMA_VERSION``) skip
-      the writable reopen entirely.
+    Skip case: very-pre-v0.1.4 DBs that lack the ``imports`` table
+    fall through to the existing tool-level error handling rather
+    than crash here.
+
+    The probe is opened ``read_only=True`` -- before v0.3.0 it was
+    writable so the deleted in-place migration could ALTER, but the
+    v0.3.0 path only reads ``schema_version`` and raises. Holding the
+    writer lock just to read one integer serialised serve startup
+    behind any concurrent importer or other serve process, and worse,
+    a writable open on a refused DB could trigger DuckDB's internal
+    storage-format upgrade -- mutating a file the package is about to
+    refuse. The read-only probe avoids both.
 
     Imported lazily to avoid a top-level circular import between
     ``db.connection`` and ``db.migrations``.
     """
     from apple_health_mcp.db.migrations import (
         CURRENT_SCHEMA_VERSION,
-        apply_pending_migrations,
-        get_current_version,
+        _reimport_required_message,
     )
+    from apple_health_mcp.exceptions import ConfigError
 
-    probe = duckdb.connect(str(db_path), read_only=False)
+    probe = duckdb.connect(str(db_path), read_only=True)
     try:
         # Defer to the tool-level error path when the DB pre-dates the
         # ``imports`` table; a probe-time crash here would hide the
         # better "run import first" guidance the tool layer would give.
         if not _table_exists_in_main_conn(probe, "imports"):
             return
-        current = get_current_version(probe)
+        # ``get_current_version`` cannot be called on a read-only
+        # handle because it idempotently CREATE TABLE IF NOT EXISTS
+        # the sentinel; that helper is for the writable
+        # apply_pending_migrations path. We probe the sentinel
+        # ourselves: very-pre-v0.1.4 DBs lack the table and are
+        # treated as version 0 (the tool-level error path picks them
+        # up); newer DBs read the persisted integer.
+        if not _table_exists_in_main_conn(probe, "schema_version"):
+            return
+        row = probe.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        current = int(row[0]) if row is not None and row[0] is not None else 0
         if current >= CURRENT_SCHEMA_VERSION:
             return
-        _logger.info(
-            "migrating existing DB from schema v%d to v%d before opening read-only",
-            current,
-            CURRENT_SCHEMA_VERSION,
-        )
-        apply_pending_migrations(probe)
+        # v0.3.0 (#124): the DB is behind and the registry cannot bring
+        # it forward in place (apply_pending_migrations would raise the
+        # exact same ConfigError, but we can't call it on the read-only
+        # probe because future migrations would need ALTER). Re-raise
+        # the canonical message directly so behaviour stays bit-identical
+        # to the writable path.
+        raise ConfigError(_reimport_required_message(current, db_path))
     finally:
         probe.close()
 
@@ -248,7 +265,10 @@ def _materialise_empty_db(db_path: Path) -> None:
         try:
             bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
             ensure_schema(bootstrap)
-            apply_pending_migrations(bootstrap)
+            # Fresh DB (current == 0) so the v0.3.0 (#124) re-import
+            # ConfigError guard never fires; ``db_path`` is passed for
+            # signature consistency only.
+            apply_pending_migrations(bootstrap, db_path=db_path)
         finally:
             bootstrap.close()
         if not db_path.exists():

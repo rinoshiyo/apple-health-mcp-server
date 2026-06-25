@@ -9,6 +9,24 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Dropped automatic schema migration from v0.2.x DBs** (issue #124).
+  The `heart_rate_samples.sample_time` VARCHAR → DOUBLE in-place
+  migration introduced in v0.3.0-rc2 (PR #117) collided with the
+  importer-created `idx_heart_rate_samples_parent` index — DuckDB
+  rejects `ALTER COLUMN ... TYPE` whenever the table has any dependent
+  index, so the migration failed with `DependencyException` on every
+  real pre-v0.3.0 DB. Rather than ship a fragile in-place upgrade we
+  removed the auto-migration entirely and surface a friendly
+  `ConfigError` ("v0.3.0 dropped the v0.2.x->v0.3.0 auto-migration.
+  Please re-import: rm <db> && apple-health-mcp-server --db <db>
+  import <export_dir>") whenever `serve` opens a pre-v0.3.0 DB. The
+  on-disk schema and data are left untouched; recovery is a one-time
+  `rm <db> && apple-health-mcp-server import <export>` (a couple of
+  minutes on a multi-GB `export.xml`). See the README's
+  "Upgrading from < v0.3.0" section for the full recovery flow.
+
 ## [0.3.0-rc2] - 2026-06-25
 
 Second pre-release of the v0.3.0 cycle. Bundles the wire envelope

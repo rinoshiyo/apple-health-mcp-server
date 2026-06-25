@@ -23,14 +23,14 @@ out-of-scope clause.
 
 ## Rollup
 
-| Block | Scenarios | PASS | FAIL | SKIPPED |
-|-------|-----------|------|------|---------|
-| A. Setup verification | 9 | 8 | **1 (A6)** | 0 |
-| B. Tool-by-tool       | 17 | 17 | 0 | 0 |
-| C. Edge cases         | 6  | 3 | 0 | 3 (C3 / C5 / C6 — see notes) |
-| D. Wire contract      | 5  | 5 | 0 | 0 |
-| E. Perf baseline      | 5  | 5 | 0 | 0 |
-| F. MCPB bundle        | 4  | 0 | 0 | 4 (user-driven, out of scope) |
+| Block | Scenarios | PASS | FAIL | SKIPPED | N/A |
+|-------|-----------|------|------|---------|-----|
+| A. Setup verification | 9 | 8 | **1 (A6)** | 0 | 0 |
+| B. Tool-by-tool       | 17 | 17 | 0 | 0 | 0 |
+| C. Edge cases         | 6  | 3 | 0 | 1 (C3) | 2 (C5 / C6 — see option-C resolution below) |
+| D. Wire contract      | 5  | 5 | 0 | 0 | 0 |
+| E. Perf baseline      | 5  | 5 | 0 | 0 | 0 |
+| F. MCPB bundle        | 4  | 0 | 0 | 4 (user-driven, out of scope) | 0 |
 
 ### Verdict
 
@@ -45,10 +45,44 @@ stable cannot be cut until this is fixed; tracked at
 no data loss — but a user with an existing v0.1.x/v0.2.x DB cannot start
 `rc2 serve` against it.
 
-Every other block (B / C-executed / D / E) is fully green; once #124
-ships in rc3, only the three C scenarios blocked by it (C5 concurrent
-serve, C6 malformed sample_time, plus a re-run of A6) need to be
-re-driven against the rc3 build.
+Every other block (B / C-executed / D / E) is fully green.
+
+### Option-C resolution (2026-06-25)
+
+After this dogfood, the maintainer chose **option C (YAGNI)** for #124:
+the v0.2.x → v0.3.0 auto-migration is removed entirely and pre-v0.3.0
+DBs surface a friendly `ConfigError` ("v0.3.0 dropped the v0.2.x->v0.3.0
+auto-migration. Please re-import: rm <db> && apple-health-mcp-server
+--db <db> import <export_dir>") instead of attempting an in-place
+upgrade. Rationale: zero external users at the time of the call, the
+re-import is a 2-minute one-time recovery, and shipping no migration
+code at all eliminates the F5-class false-confidence risk that PR #117
+exposed.
+
+Consequences for the dogfood matrix:
+
+- **A6** is no longer a stop-ship — the option-C PR replaces the
+  failing in-place upgrade with the ConfigError path; A6's pass/fail
+  criteria stop applying, since the migration scenario itself is
+  gone. Re-categorised as "no longer applicable under option C; the
+  re-import flow is covered by the README's new 'Upgrading from <
+  v0.3.0' section instead".
+- **C5 (concurrent serve)** is now **N/A**: the two-process race was
+  observing migration-time mutual exclusion. With no migration step,
+  there is nothing to race on; DuckDB's existing single-writer lock
+  alone governs concurrent `serve` invocations and is unit-tested
+  separately.
+- **C6 (malformed sample_time at migration)** is now **N/A**: there is
+  no migration to inject malformed rows into. The pre-existing
+  importer-side malformed-input handling (via `TRY_CAST` in the
+  XML import path) remains covered by unit tests in
+  `tests/unit/importers/`.
+- **C3 (multi-locale ECG)** stays SKIPPED with the original partial
+  coverage note; option C does not touch the ECG path.
+
+Once the option-C PR merges, the rc3 cut can proceed and only A6's
+re-categorisation needs to be re-confirmed (the C5/C6 N/A status is
+structural, not build-specific).
 
 ### Findings opened or noted
 
@@ -442,21 +476,29 @@ sample below is paraphrased / size-redacted per the privacy clause.
   date-only upper bound (per `normalise_end_date` extending the bound
   to `2014-11-30 23:59:59.999999`).
 
-### C5. Concurrent serve — **SKIPPED (blocked by #124)**
+### C5. Concurrent serve — **N/A under option C**
 
-- The two `serve` processes both attempt the v2→v3 migration as their
-  first step (the legacy DB the scenario builds). Both die with the
-  same `DependencyException` as A6. The scenario's two-process race
-  cannot be observed end-to-end until #124 is fixed; deferred to rc3
-  dogfood.
+- The two-process race the scenario was designed to expose
+  (migration-time mutual exclusion) goes away when the v2→v3
+  auto-migration is removed: there is no migration step left to race
+  on. DuckDB's single-writer file lock remains the canonical concurrent-
+  `serve` arbitrator and is covered by `tests/unit/db/test_connection.py`.
+- Originally SKIPPED in this dogfood as "blocked by #124"; reclassified
+  to N/A after the maintainer chose option C for #124 (see
+  "Option-C resolution" in the rollup).
 
-### C6. Malformed sample_time at migration — **SKIPPED (blocked by #124)**
+### C6. Malformed sample_time at migration — **N/A under option C**
 
-- The scenario injects a malformed `sample_time` row into a v0.2.0 DB
-  and triggers the rc2 migration. The malformed-row path runs *after*
-  the `ALTER COLUMN ... TYPE` statement that #124 catches, so the
-  WARNING-emission assertion can't fire until the prior step succeeds.
-  Deferred to rc3 dogfood.
+- This scenario injected a malformed `sample_time` row to exercise the
+  migration's `TRY_CAST` + WARNING path. With the migration removed
+  there is no code path to exercise. The pre-existing
+  importer-side malformed-`sample_time` handling
+  (`apple_health_mcp.importers.xml._parse_sample_time` returning
+  `None`) remains covered by unit tests in
+  `tests/unit/importers/`.
+- Originally SKIPPED in this dogfood as "blocked by #124"; reclassified
+  to N/A after the maintainer chose option C for #124 (see
+  "Option-C resolution" in the rollup).
 
 ---
 

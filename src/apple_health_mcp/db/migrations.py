@@ -1,14 +1,27 @@
 """Schema migration registry.
 
-The v0.1.0 release ships a single canonical schema (see :mod:`schema`), so
-migrations is a deliberately small surface: a version sentinel persisted in a
-``schema_version`` table plus a stub :func:`apply_pending_migrations` ready
-for future bumps. Future migrations register themselves in :data:`MIGRATIONS`
-as ``(target_version, callable)`` pairs ordered by ascending target version.
+v0.3.0 ships a single canonical schema (see :mod:`schema`) and intentionally
+no longer carries an in-place upgrade path from pre-v0.3.0 databases. The
+v0.2.x → v0.3.0 heart-rate-samples migration that PR #117 introduced was
+removed because the ``ALTER TABLE ... ALTER COLUMN ... TYPE`` statement
+fails with ``DependencyException`` whenever the table carries any
+dependent index — which every real importer build creates
+(:issue:`124`). Rather than ship a fragile migration into v1.0.0 we
+require users on pre-v0.3.0 DBs to re-import; the importer is fast
+(:issue:`50` / :pr:`57` / :pr:`60`) and the data is local, so the
+operator-side cost is a few minutes.
 
-Ordering contract: callers must invoke :func:`schema.ensure_schema` before
-:func:`apply_pending_migrations` on a fresh database. The migration registry
-only tracks the version sentinel; it does not create the canonical tables.
+The migration registry therefore tracks only the version sentinel plus
+the historical ``imports.export_xml_sha256`` column-add (which is an
+``ADD COLUMN IF NOT EXISTS`` so it remains safe and idempotent on every
+DB). Fresh DBs built by :func:`schema.ensure_schema` already carry the
+canonical shape; their first ``apply_pending_migrations`` call is a
+schema_version stamping operation only.
+
+Ordering contract: callers must invoke :func:`schema.ensure_schema`
+before :func:`apply_pending_migrations` on a fresh database. The
+migration registry only tracks the version sentinel; it does not create
+the canonical tables.
 """
 
 from __future__ import annotations
@@ -18,7 +31,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
-from apple_health_mcp.exceptions import DatabaseError
+from apple_health_mcp.exceptions import ConfigError, DatabaseError
 
 if TYPE_CHECKING:
     import duckdb
@@ -77,127 +90,53 @@ def _add_export_xml_sha256_column(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("ALTER TABLE imports ADD COLUMN IF NOT EXISTS export_xml_sha256 VARCHAR;")
 
 
-def _convert_heart_rate_sample_time_to_double(conn: duckdb.DuckDBPyConnection) -> None:
-    """Convert ``heart_rate_samples.sample_time`` from VARCHAR to DOUBLE.
-
-    Issue #109 (PR-F): aligns the on-disk storage with the wire contract
-    that ``get_heart_rate_samples`` exposes (seconds-of-day since 00:00
-    local). Pre-PR-F databases stored Apple's raw ``HH:MM:SS.SSS`` literal
-    and parsed it on the way out; from PR-F forward the importer writes
-    DOUBLE directly and the tool reads it verbatim.
-
-    Idempotent:
-    * If the table is missing (a connection whose ``ensure_schema`` has
-      not yet run), skip entirely; the next ensure_schema call creates
-      it in the new shape.
-    * If the column is already DOUBLE (already-migrated DB, or a fresh
-      DB whose ensure_schema landed under the PR-F schema), skip.
-    * If the table is empty, skip the populate step but still perform
-      the column swap so a legacy empty DB lands in the new shape.
-
-    Malformed legacy rows (any value where ``split_part`` + ``TRY_CAST``
-    cannot recover three numeric segments) become ``NULL`` and a single
-    WARNING is logged with the count. The warning never lists the
-    offending values because they could carry user wall-clock data; the
-    count alone is enough for the operator to investigate.
-    """
-    # Skip when the table has not been created yet (the migration registry
-    # can be invoked on a connection whose ``ensure_schema`` has not yet
-    # run -- the version sentinel only needs the ``schema_version`` table,
-    # not the full canonical schema).
-    if not _table_exists_in_main(conn, "heart_rate_samples"):
-        return
-
-    # Probe the current type. ``pragma_table_info`` reports the canonical
-    # DuckDB type name (``VARCHAR`` or ``DOUBLE``). Already-DOUBLE rows
-    # are a no-op so the migration is rerunnable across restarts even if
-    # ``apply_pending_migrations`` is called twice (defensive against
-    # callers that forget to gate on ``get_current_version``).
-    type_row = conn.execute(
-        "SELECT type FROM pragma_table_info('heart_rate_samples') WHERE name = 'sample_time'"
-    ).fetchone()
-    if type_row is None or str(type_row[0]).upper() == "DOUBLE":
-        return
-
-    # Belt-and-braces: production path is transaction-wrapped, but
-    # direct test/dev invocation should also be idempotent. An earlier
-    # 4-statement form of this migration (ADD ``sample_time_seconds``
-    # / UPDATE / DROP / RENAME) could leave the intermediate
-    # ``sample_time_seconds`` column behind on a half-completed run;
-    # drop it here so a v0.3.0-rc1 -> v0.3.0-rc2 in-place rerun does
-    # not hit a "Column already exists" Catalog Error and so a
-    # legacy ``sample_time_seconds`` column does not survive into the
-    # new shape. The current ALTER USING form never leaves residue,
-    # so this is a no-op on any DB the new form has touched.
-    conn.execute("ALTER TABLE heart_rate_samples DROP COLUMN IF EXISTS sample_time_seconds;")
-    # Compute row_count once: a single COUNT lets us emit a progress
-    # log on multi-million-row tables and gate the malformed probe so
-    # an empty table stays silent. The ALTER itself runs unconditionally
-    # below -- DuckDB no-ops the type-cast on an empty table in
-    # microseconds.
-    row_count_row = conn.execute("SELECT COUNT(*) FROM heart_rate_samples").fetchone()
-    row_count = int(row_count_row[0]) if row_count_row is not None else 0
-    if row_count > 0:
-        # Multi-year Apple Watch users can carry 10M+ heart_rate_samples
-        # rows; without this line ``serve`` appears to silent-hang for
-        # 30-60s on the first launch against a pre-PR-F DB. One INFO
-        # is enough; the malformed WARNING below carries the row-level
-        # detail.
-        _logger.info(
-            "heart_rate_samples migration: converting %d row(s) from VARCHAR to DOUBLE",
-            row_count,
-        )
-        # Probe the malformed count BEFORE the ALTER, while the column
-        # is still VARCHAR. The malformed predicate mirrors the
-        # ALTER's USING expression so a NULL result here matches a
-        # NULL landing in the post-ALTER DOUBLE column.
-        malformed_row = conn.execute(
-            """
-            SELECT COUNT(*) FROM heart_rate_samples
-            WHERE sample_time IS NOT NULL
-              AND (TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
-                 + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
-                 + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)) IS NULL
-            """
-        ).fetchone()
-        malformed = int(malformed_row[0]) if malformed_row is not None else 0
-        if malformed > 0:
-            _logger.warning(
-                "heart_rate_samples migration: %d row(s) had malformed sample_time "
-                "literals and were converted to NULL",
-                malformed,
-            )
-
-    # Convert VARCHAR -> DOUBLE in a single ALTER COLUMN ... USING
-    # statement. The previous 4-statement dance
-    # (ADD/UPDATE/DROP/RENAME) hit a DuckDB persistent-storage MVCC
-    # conflict on the COMMIT inside :func:`apply_pending_migrations`
-    # ("Failed to commit: Attempting to modify table
-    # heart_rate_samples but another transaction has altered this
-    # table"), because UPDATE + DROP COLUMN on the same persistent
-    # table within a single transaction collide. The single-statement
-    # form sidesteps the conflict and is also what makes the
-    # read-only ``serve`` migration path (PR-F /code-review F1)
-    # actually function on disk -- without this swap, every legacy
-    # v0.2.x DB would fail to migrate on the first ``serve`` start.
-    # ``TRY_CAST`` keeps malformed rows from aborting the conversion
-    # (they land as NULL); the WARNING above carries the count.
-    conn.execute(
-        """
-        ALTER TABLE heart_rate_samples
-        ALTER COLUMN sample_time SET DATA TYPE DOUBLE USING (
-            TRY_CAST(split_part(sample_time, ':', 1) AS DOUBLE) * 3600.0
-          + TRY_CAST(split_part(sample_time, ':', 2) AS DOUBLE) * 60.0
-          + TRY_CAST(split_part(sample_time, ':', 3) AS DOUBLE)
-        );
-        """
-    )
+MIGRATIONS: Sequence[tuple[int, Migration]] = ((2, _add_export_xml_sha256_column),)
 
 
-MIGRATIONS: Sequence[tuple[int, Migration]] = (
-    (2, _add_export_xml_sha256_column),
-    (3, _convert_heart_rate_sample_time_to_double),
+# Sentinel message body for the friendly "re-import required" error.
+# Exposed at module level so tests can assert equality against
+# ``_reimport_required_message(...)`` rather than piecewise substrings.
+# The leading ``rm <db>`` placement is load-bearing: when the user is
+# already running ``import`` (the v0.2.x DB rejected case fires inside
+# the importer path too), the destructive step needs to be the first
+# thing they see -- otherwise they read the trailing ``import`` and
+# assume the error is just a transient hiccup. See the README's
+# "Upgrading from < v0.3.0" section for the full recovery flow.
+_REIMPORT_REQUIRED_TEMPLATE = (
+    "DB schema_version={current} is below the package's "
+    "CURRENT_SCHEMA_VERSION={target}. v0.3.0 dropped the v0.2.x->v0.3.0 "
+    "auto-migration (see issue #124). Recovery requires a clean "
+    "re-import; the data is local, the importer is fast.\n"
+    "    rm {db_path}\n"
+    "    apple-health-mcp-server --db {db_path} import <export_dir>\n"
+    "See README 'Upgrading from < v0.3.0' for context."
 )
+
+
+# Frozenset of registered migration targets, computed once at module
+# import. Pre-#124 this was re-derived from MIGRATIONS on every
+# apply_pending_migrations call; hoisting it makes the "static
+# metadata" intent explicit and removes the per-call allocation.
+_REGISTERED_TARGETS: frozenset[int] = frozenset(target for target, _ in MIGRATIONS)
+
+
+def _reimport_required_message(current: int, db_path: object) -> str:
+    """Build the canonical re-import guidance for a pre-v0.3.0 DB.
+
+    The ``target`` value is read from :data:`CURRENT_SCHEMA_VERSION` at
+    call time rather than captured as a default argument, so a test
+    that monkeypatches ``CURRENT_SCHEMA_VERSION`` sees the patched
+    value in the message.
+
+    ``db_path`` is interpolated verbatim (str-coerced) so the user can
+    copy-paste the ``rm`` / ``import`` commands without manually
+    substituting ``<db>`` placeholders.
+    """
+    return _REIMPORT_REQUIRED_TEMPLATE.format(
+        current=current,
+        target=CURRENT_SCHEMA_VERSION,
+        db_path=db_path,
+    )
 
 
 def _ensure_version_table(conn: duckdb.DuckDBPyConnection) -> None:
@@ -226,28 +165,52 @@ def set_current_version(conn: duckdb.DuckDBPyConnection, version: int) -> None:
     conn.execute("INSERT INTO schema_version (version) VALUES (?);", [version])
 
 
-def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
+def apply_pending_migrations(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    db_path: object = "<db>",
+) -> int:
     """Run every migration whose target version is above the current one.
 
     Returns the version the database is on after applying all pending steps.
     Already-applied migrations (``target <= applied``) are skipped so the
     function is idempotent across restarts. Raises :class:`DatabaseError` if
-    the database reports a version newer than the package supports or if a
-    registered migration targets a version above ``CURRENT_SCHEMA_VERSION``.
+    the database reports a version newer than the package supports.
+
+    **v0.3.0 behaviour change (issue #124):** existing databases whose
+    persisted ``schema_version`` trails :data:`CURRENT_SCHEMA_VERSION`
+    *and whose highest registered migration target cannot reach
+    CURRENT_SCHEMA_VERSION* now raise :class:`ConfigError` carrying the
+    re-import guidance. This replaces the pre-v0.3.0 implicit
+    ``ALTER TABLE`` upgrade path (which was fragile in the presence of
+    secondary indexes). Fresh databases (``current == 0``) are
+    unaffected: they walk the registered migrations and land on
+    :data:`CURRENT_SCHEMA_VERSION` cleanly. Pure schema-only
+    ``CURRENT_SCHEMA_VERSION`` bumps against existing DBs (e.g. a future
+    v=4 stamp with no v=4 migration) are also unaffected: the
+    max-target check only fires when the registry cannot bring the DB
+    forward at all.
+
+    ``db_path`` is folded into the ConfigError message so the user
+    gets a copy-pasteable recovery command. Callers that don't know
+    the path (test fixtures, the materialise-empty bootstrap whose
+    error path is unreachable on fresh DBs) may omit it and the
+    message will contain ``<db>`` placeholders.
 
     The caller must have created the canonical schema via
     :func:`schema.ensure_schema` before invoking this function on a fresh
     database; the migration layer only tracks the version sentinel.
 
-    Atomicity: every migration step, the final ``schema_version`` stamp,
-    and the COMMIT itself run inside a single DuckDB transaction. Crash,
-    SIGKILL, OOM, or any Python exception during the loop -- including
-    a failed COMMIT -- triggers ROLLBACK so the database schema_version
-    sentinel and the on-disk schema can never diverge. The transaction
-    wrap is the load-bearing safety the next non-idempotent migration
-    (e.g. backfilling a derived column or rewriting a row's contents)
-    will rely on; with ``ADD COLUMN IF NOT EXISTS`` -only registries the
-    wrap is also harmless and keeps tests honest.
+    Atomicity: registered migration steps, the final ``schema_version``
+    stamp, and the COMMIT itself run inside a single DuckDB transaction.
+    Crash, SIGKILL, OOM, or any Python exception during the loop --
+    including a failed COMMIT -- triggers ROLLBACK so the database
+    schema_version sentinel and the on-disk schema can never diverge.
+    The :class:`ConfigError` raised by the v0.3.0 (#124) re-import
+    guard fires BEFORE the BEGIN TRANSACTION (no rollback is needed
+    because nothing has been written), so callers must close their
+    own connection in a ``try/finally`` if they want the exception
+    propagated rather than the connection leaked.
 
     Precondition: ``conn`` must be in autocommit mode (no caller-opened
     transaction). The inner ``BEGIN TRANSACTION`` would otherwise raise
@@ -262,6 +225,22 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
             f"database schema_version={current} is newer than "
             f"the package supports ({CURRENT_SCHEMA_VERSION})"
         )
+
+    # v0.3.0 (issue #124): refuse to silently bump the sentinel on an
+    # existing DB whose persisted version trails the package AND whose
+    # registered migrations cannot reach CURRENT_SCHEMA_VERSION. The
+    # max-target check (rather than a per-version gap walk) keeps
+    # future schema-only CURRENT_SCHEMA_VERSION bumps (no migration
+    # registered for the new version) from rejecting existing DBs --
+    # those land on the ``max(applied, CURRENT_SCHEMA_VERSION)``
+    # stamping path below. The ``current > 0`` guard exempts fresh
+    # bootstrap DBs (current == 0).
+    registered_targets = _REGISTERED_TARGETS
+    if (
+        0 < current < CURRENT_SCHEMA_VERSION
+        and max(registered_targets, default=0) < CURRENT_SCHEMA_VERSION
+    ):
+        raise ConfigError(_reimport_required_message(current, db_path))
 
     try:
         conn.execute("BEGIN TRANSACTION;")
@@ -281,7 +260,10 @@ def apply_pending_migrations(conn: duckdb.DuckDBPyConnection) -> int:
 
         # Stamp the highest of (last migration we ran, CURRENT_SCHEMA_VERSION)
         # so that fresh databases on schema-only bumps (no data migration
-        # registered) still record the package's current version.
+        # registered) still record the package's current version. The
+        # ConfigError guard above ensures we only reach this point when
+        # either (a) the DB is fresh (current == 0) or (b) every gap is
+        # already covered by a registered migration.
         final = max(applied, CURRENT_SCHEMA_VERSION)
         if final != current:
             set_current_version(conn, final)
