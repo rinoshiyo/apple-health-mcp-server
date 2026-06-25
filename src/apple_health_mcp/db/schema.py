@@ -235,9 +235,8 @@ CREATE TABLE IF NOT EXISTS imports (
     -- the orchestrator can match a subsequent re-import against the most
     -- recent stamped row and exit early when the file is byte-identical.
     export_xml_sha256  VARCHAR,
-    -- Phase-4 post-dedup row count (see ``record_count`` block comment).
-    -- NULL on rows finalized before v0.3.0 / #129; fresh imports always
-    -- populate it.
+    -- NULL on rows from pre-#129 imports and on Tier-2 incremental
+    -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
     records_after_dedup BIGINT
 );
 
@@ -609,6 +608,13 @@ ALTER TABLE state_of_mind ALTER COLUMN import_id SET NOT NULL;
 _CREATE_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_records_type_date ON records(record_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_name);
+-- ``imports.records_after_dedup`` (issue #129) is populated by
+-- ``SELECT COUNT(*) FROM records WHERE import_id = ?`` immediately after
+-- ``finalize_import``. Without this index that COUNT degenerates to a
+-- full table scan over every records row at every import (multi-million
+-- rows on a real export), turning a sub-second diagnostic into a
+-- multi-second blocker on the finalize path.
+CREATE INDEX IF NOT EXISTS idx_records_import_id ON records(import_id);
 CREATE INDEX IF NOT EXISTS idx_workouts_type_date ON workouts(activity_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_route_points_workout ON route_points(workout_hash);
 CREATE INDEX IF NOT EXISTS idx_workout_metadata_hash ON workout_metadata(workout_hash);

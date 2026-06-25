@@ -104,12 +104,15 @@ MIGRATIONS: Sequence[tuple[int, Migration]] = ((2, _add_export_xml_sha256_column
 # "Upgrading from < v0.3.0" section for the full recovery flow.
 _REIMPORT_REQUIRED_TEMPLATE = (
     "DB schema_version={current} is below the package's "
-    "CURRENT_SCHEMA_VERSION={target}. v0.3.0 dropped the v0.2.x->v0.3.0 "
-    "auto-migration (see issue #124). Recovery requires a clean "
-    "re-import; the data is local, the importer is fast.\n"
+    "CURRENT_SCHEMA_VERSION={target}. This release does not ship an "
+    "in-place migration for the gap (v0.3.0 dropped them after the "
+    "v0.2.x ALTER COLUMN dependency-exception incident, issue #124; "
+    "subsequent column-add bumps follow the same fresh-start "
+    "contract). Recovery requires a clean re-import; the data is "
+    "local, the importer is fast.\n"
     "    rm {db_path}\n"
     "    apple-health-mcp-server --db {db_path} import <export_dir>\n"
-    "See README 'Upgrading from < v0.3.0' for context."
+    "See README 'Upgrading from < v0.3.0' for the recovery walkthrough."
 )
 
 

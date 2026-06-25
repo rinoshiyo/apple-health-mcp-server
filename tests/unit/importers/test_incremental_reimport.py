@@ -441,6 +441,65 @@ def test_force_bypasses_sha256_fast_path(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_tier2_incremental_imports_row_carries_null_records_after_dedup(
+    tmp_path: Path,
+) -> None:
+    """Tier-2 incremental re-import skips Phase-4 dedup, so the imports
+    row MUST stamp ``records_after_dedup = NULL`` rather than the
+    "newly inserted in this run" count that a naive ``COUNT(*) WHERE
+    import_id = ?`` would return.
+
+    Without this guard, ``record_count - records_after_dedup`` (what
+    the ``get_import_history`` DESCRIPTION calls "Correlation duplicates
+    collapsed") becomes "rows previously seen in this re-import" --
+    a number whose subtraction is meaningless, and which would mislead
+    every LLM that consumes the import history through the MCP tool.
+    See PR #141 review F1 (Angle A + Angle Altitude C1).
+    """
+    export_dir = _materialise_export(tmp_path)
+    db = tmp_path / "h.duckdb"
+
+    # Tier-1 fresh import: records_after_dedup is the dedup result.
+    run_import(export_dir, db, import_id="imp_first")
+
+    # Mutate the export so the sha256 fast-path falls through; Tier 2
+    # then runs and finalize_import is called with skip_dedup=True
+    # (the orchestrator's ``existing is not None`` branch).
+    appended = _BASE_EXPORT_XML.replace(
+        "</HealthData>",
+        ' <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" '
+        'unit="count" value="200" startDate="2024-01-02 09:00:00 +0900" '
+        'endDate="2024-01-02 09:30:00 +0900"/>\n</HealthData>',
+    )
+    (export_dir / "export.xml").write_text(appended, encoding="utf-8")
+    run_import(export_dir, db, import_id="imp_second")
+
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        # imp_first ran Phase-4 dedup: records_after_dedup is the
+        # post-dedup count, NOT NULL.
+        first = conn.execute(
+            "SELECT records_after_dedup FROM imports WHERE import_id = ?",
+            ["imp_first"],
+        ).fetchone()
+        assert first is not None and first[0] is not None and int(first[0]) > 0
+
+        # imp_second skipped dedup (Tier 2): records_after_dedup MUST be
+        # NULL so downstream consumers see "no dedup measurement
+        # available" instead of a misleading "1 row inserted" number.
+        second = conn.execute(
+            "SELECT records_after_dedup FROM imports WHERE import_id = ?",
+            ["imp_second"],
+        ).fetchone()
+        assert second is not None
+        assert second[0] is None, (
+            "Tier-2 incremental imp_second must stamp records_after_dedup=NULL "
+            f"(got {second[0]!r}); see PR #141 F1."
+        )
+    finally:
+        conn.close()
+
+
 def test_incremental_reimport_only_adds_new_record(tmp_path: Path) -> None:
     """Second import of a slightly modified export adds only the new Record row."""
     export_dir = _materialise_export(tmp_path)

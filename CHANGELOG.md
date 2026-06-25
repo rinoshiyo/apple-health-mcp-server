@@ -45,6 +45,15 @@ v0.x.y disclaimer and the public-API scope.
   import <export>` recovery). Closes the "where did the 125 records go?"
   diagnostic gap that surfaced during the v0.3.0-rc2 dogfood.
 
+  **SemVer classification** (per the Layer 1 / Layer 2 split documented
+  in PR #107): the schema bump itself is Layer 2 (DB on-disk surface);
+  the `get_import_history` MCP wire response now contains the new
+  `records_after_dedup` field, which IS Layer 1 (wire-facing). v0.3.0
+  ships both classes of change together because the v0.x SemVer
+  disclaimer in the README's "Compatibility" section already allows
+  minor-version wire breakage; from v1.0.0 onward an additive
+  Layer 1 field of this kind would justify a minor bump on its own.
+
 - **Dropped automatic schema migration from v0.2.x DBs** (issue #124).
   The `heart_rate_samples.sample_time` VARCHAR → DOUBLE in-place
   migration introduced in v0.3.0-rc2 (PR #117) collided with the
