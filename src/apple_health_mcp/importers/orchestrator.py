@@ -96,7 +96,15 @@ def run_import(
     has no effect on a changed file.
     """
     start = time.monotonic()
-    actual_import_id = import_id or make_import_id()
+    # Issue #130: take a single wall-clock UTC snapshot at run start so
+    # ``import_id`` (which formats it) and ``imports.imported_at``
+    # (which stores it) record the SAME instant. Before this change
+    # the schema's ``DEFAULT CURRENT_TIMESTAMP`` fired at INSERT time,
+    # i.e. after the whole pipeline finished, so the two timestamps
+    # diverged by the full import duration and looked like unrelated
+    # events when a user grepped through the imports table.
+    start_moment = datetime.now(UTC)
+    actual_import_id = import_id or make_import_id(now=start_moment)
     _logger.info("Starting import %s from %s", actual_import_id, export_dir)
 
     xml_path = export_dir / "export.xml"
@@ -216,13 +224,19 @@ def run_import(
         conn.execute(
             """
             INSERT INTO imports (
-                import_id, export_dir, record_count, workout_count, duration_secs,
-                export_xml_sha256, records_after_dedup
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                import_id, export_dir, imported_at, record_count, workout_count,
+                duration_secs, export_xml_sha256, records_after_dedup
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
                 str(export_dir),
+                # Pass the same UTC moment ``import_id`` was formatted
+                # from so the two stamps point at the same wall-clock
+                # event (issue #130). The schema's ``DEFAULT
+                # CURRENT_TIMESTAMP`` remains as a safety net for any
+                # future caller that bypasses ``run_import``.
+                start_moment,
                 stats.records,
                 stats.workouts,
                 duration_secs,
