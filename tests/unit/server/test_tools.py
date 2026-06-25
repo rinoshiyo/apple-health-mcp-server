@@ -52,6 +52,22 @@ def _call(fn: Any, **kwargs: Any) -> Any:
     return json.loads(asyncio.run(fn(**kwargs)))
 
 
+def _items(fn: Any, **kwargs: Any) -> Any:
+    """Call an envelope-shaped tool and return just the ``items`` list.
+
+    Issue #108 (PR-E): the 7 list/page tools all return
+    ``{items, total, next_offset}``. Tests that only assert per-row
+    content go through this helper so the assertion surface stays
+    focused on the row shape and not the envelope wrapper.
+    """
+    payload = _call(fn, **kwargs)
+    assert isinstance(payload, dict)
+    assert set(payload.keys()) == {"items", "total", "next_offset"}
+    items = payload["items"]
+    assert isinstance(items, list)
+    return items
+
+
 # --- list_record_types -------------------------------------------------------
 
 
@@ -70,14 +86,14 @@ def test_list_record_types(seeded_conn: duckdb.DuckDBPyConnection) -> None:
 
 def test_query_records_basic(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(query_records, seeded_conn)
-    rows = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate")
+    rows = _items(fn, record_type="HKQuantityTypeIdentifierHeartRate")
     assert len(rows) == 2
     assert all(r["record_type"] == "HKQuantityTypeIdentifierHeartRate" for r in rows)
 
 
 def test_query_records_applies_every_filter(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(query_records, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         record_type="HKQuantityTypeIdentifierHeartRate",
         start_date="2024-01-01",
@@ -90,12 +106,34 @@ def test_query_records_applies_every_filter(seeded_conn: duckdb.DuckDBPyConnecti
 
 def test_query_records_clamps_limit(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(query_records, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         record_type="HKQuantityTypeIdentifierHeartRate",
         limit=10_000,
     )
     assert len(rows) <= 1000
+
+
+def test_query_records_envelope_pagination(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """Issue #108 (PR-E): ``{items, total, next_offset}`` envelope.
+
+    Walks through a 2-row result set one item at a time to confirm
+    ``next_offset`` advances and turns into ``None`` on the last page.
+    """
+    fn = _bind(query_records, seeded_conn)
+    page1 = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=0)
+    assert page1["total"] == 2
+    assert len(page1["items"]) == 1
+    assert page1["next_offset"] == 1
+    page2 = _call(
+        fn,
+        record_type="HKQuantityTypeIdentifierHeartRate",
+        limit=1,
+        offset=page1["next_offset"],
+    )
+    assert page2["total"] == 2
+    assert len(page2["items"]) == 1
+    assert page2["next_offset"] is None
 
 
 # --- get_record_statistics ---------------------------------------------------
@@ -153,13 +191,13 @@ def test_get_record_statistics_with_date_filters(
 
 def test_list_workouts_no_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_workouts, seeded_conn)
-    rows = _call(fn)
+    rows = _items(fn)
     assert any(r["workout_hash"] == "wh1" for r in rows)
 
 
 def test_list_workouts_all_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_workouts, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         activity_type="HKWorkoutActivityTypeRunning",
         start_date="2024-01-01",
@@ -238,36 +276,34 @@ def test_get_activity_summaries_with_filters(
 
 
 def test_get_workout_route_default(seeded_conn: duckdb.DuckDBPyConnection) -> None:
-    """Issue #95 (T7): the envelope reports total + has_more + next_offset."""
+    """Issue #108 (PR-E): unified ``{items, total, next_offset}`` envelope."""
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1")
     assert payload["total"] == 2
-    assert len(payload["points"]) == 2
-    assert payload["has_more"] is False
+    assert len(payload["items"]) == 2
     assert payload["next_offset"] is None
+    assert "has_more" not in payload
 
 
 def test_get_workout_route_pagination(seeded_conn: duckdb.DuckDBPyConnection) -> None:
-    """A mid-route page advertises ``has_more`` + a usable ``next_offset``."""
+    """A mid-route page advertises a usable ``next_offset``."""
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1", limit=1, offset=0)
-    assert len(payload["points"]) == 1
+    assert len(payload["items"]) == 1
     assert payload["total"] == 2
-    assert payload["has_more"] is True
     assert payload["next_offset"] == 1
-    # Follow-up call exhausts the route and clears the flags.
+    # Follow-up call exhausts the route and clears next_offset.
     payload2 = _call(fn, workout_hash="wh1", limit=1, offset=payload["next_offset"])
-    assert len(payload2["points"]) == 1
-    assert payload2["has_more"] is False
+    assert len(payload2["items"]) == 1
     assert payload2["next_offset"] is None
 
 
 def test_get_workout_route_negative_offset(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1", limit=100, offset=-10)
-    assert len(payload["points"]) == 2
+    assert len(payload["items"]) == 2
     assert payload["total"] == 2
-    assert payload["has_more"] is False
+    assert payload["next_offset"] is None
 
 
 def test_get_workout_route_unknown_hash_returns_empty_envelope(
@@ -276,7 +312,7 @@ def test_get_workout_route_unknown_hash_returns_empty_envelope(
     """A missing workout still returns a valid envelope (total=0)."""
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="nope")
-    assert payload == {"points": [], "total": 0, "has_more": False, "next_offset": None}
+    assert payload == {"items": [], "total": 0, "next_offset": None}
 
 
 def test_get_workout_route_db_error_path(empty_conn: duckdb.DuckDBPyConnection) -> None:
@@ -311,7 +347,7 @@ def test_get_workout_route_gate_failure_returns_error_string(
 def test_get_workout_route_limit_zero_errors(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """H2: ``limit=0`` must error instead of looping at ``has_more=True``."""
+    """H2: ``limit=0`` must error instead of looping with a non-null next_offset."""
     fn = _bind(get_workout_route, seeded_conn)
     out = asyncio.run(fn(workout_hash="wh1", limit=0))
     assert out == "Error: limit must be >= 1"
@@ -326,13 +362,101 @@ def test_get_workout_route_negative_limit_errors(
     assert out == "Error: limit must be >= 1"
 
 
+# --- envelope helper: review F3 (limit < 1 rejected uniformly) --------------
+
+
+@pytest.mark.parametrize(
+    "module, kwargs",
+    [
+        (query_records, {"record_type": "HKQuantityTypeIdentifierHeartRate"}),
+        (list_workouts, {}),
+        (list_correlations, {}),
+        (list_state_of_mind, {}),
+        (get_heart_rate_samples, {"record_hash": "rh1"}),
+    ],
+    ids=lambda v: getattr(v, "__name__", ""),
+)
+def test_envelope_tool_rejects_zero_limit(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    module: Any,
+    kwargs: dict[str, Any],
+) -> None:
+    """F3: the 5 previously-permissive tools now reject ``limit=0``.
+
+    Previously these wrapped ``effective_limit`` in ``max(0, ...)`` and
+    paired with ``COUNT(*) OVER ()`` they returned ``{items: [], total: 0,
+    next_offset: null}`` even on a non-empty table — an LLM would mistake
+    that for "no data". Aligns with ``get_workout_route`` / ``list_ecg_readings``.
+    """
+    fn = _bind(module, seeded_conn)
+    out = asyncio.run(fn(**kwargs, limit=0))
+    assert out == "Error: limit must be >= 1"
+
+
+@pytest.mark.parametrize(
+    "module, kwargs",
+    [
+        (query_records, {"record_type": "HKQuantityTypeIdentifierHeartRate"}),
+        (list_workouts, {}),
+        (list_correlations, {}),
+        (list_state_of_mind, {}),
+        (get_heart_rate_samples, {"record_hash": "rh1"}),
+    ],
+    ids=lambda v: getattr(v, "__name__", ""),
+)
+def test_envelope_tool_rejects_negative_limit(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    module: Any,
+    kwargs: dict[str, Any],
+) -> None:
+    """A negative ``limit`` hits the same guard."""
+    fn = _bind(module, seeded_conn)
+    out = asyncio.run(fn(**kwargs, limit=-1))
+    assert out == "Error: limit must be >= 1"
+
+
+# --- envelope helper: review F1 (offset > total recovers true total) --------
+
+
+def test_query_records_envelope_offset_past_end_keeps_total(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F1: paginating past the dataset must still report ``total`` correctly.
+
+    Walks ``offset=0 -> next_offset -> next_offset + limit`` and asserts
+    ``total`` is constant across all three pages even when the last page
+    is empty.
+    """
+    fn = _bind(query_records, seeded_conn)
+    page1 = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=0)
+    assert page1["total"] == 2
+    page2 = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=1)
+    assert page2["total"] == 2
+    assert page2["next_offset"] is None
+    # Walk one beyond the end — used to wire ``total=0`` because the
+    # ``COUNT(*) OVER ()`` window has no row to ride on.
+    page_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=2)
+    assert page_past == {"items": [], "total": 2, "next_offset": None}
+    page_far_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=20)
+    assert page_far_past == {"items": [], "total": 2, "next_offset": None}
+
+
+def test_get_workout_route_envelope_offset_past_end_keeps_total(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F1 applies to ``get_workout_route`` as well."""
+    fn = _bind(get_workout_route, seeded_conn)
+    page = _call(fn, workout_hash="wh1", limit=5, offset=99)
+    assert page == {"items": [], "total": 2, "next_offset": None}
+
+
 # --- get_heart_rate_samples --------------------------------------------------
 
 
 def test_get_heart_rate_samples(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     """Issue #96 (T8): ``sample_time`` is normalised to a seconds float."""
     fn = _bind(get_heart_rate_samples, seeded_conn)
-    rows = _call(fn, record_hash="rh1")
+    rows = _items(fn, record_hash="rh1")
     assert len(rows) == 3
     # Seeded values are 08:00:00.000 / 08:00:01.500 / 08:00:03.000 ->
     # 28800.0 / 28801.5 / 28803.0 seconds after midnight.
@@ -344,8 +468,23 @@ def test_get_heart_rate_samples(seeded_conn: duckdb.DuckDBPyConnection) -> None:
 
 def test_get_heart_rate_samples_limit(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(get_heart_rate_samples, seeded_conn)
-    rows = _call(fn, record_hash="rh1", limit=2)
+    rows = _items(fn, record_hash="rh1", limit=2)
     assert len(rows) == 2
+
+
+def test_get_heart_rate_samples_envelope_pagination(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Issue #108 (PR-E): ``{items, total, next_offset}`` envelope shape."""
+    fn = _bind(get_heart_rate_samples, seeded_conn)
+    page1 = _call(fn, record_hash="rh1", limit=2, offset=0)
+    assert page1["total"] == 3
+    assert len(page1["items"]) == 2
+    assert page1["next_offset"] == 2
+    page2 = _call(fn, record_hash="rh1", limit=2, offset=page1["next_offset"])
+    assert page2["total"] == 3
+    assert len(page2["items"]) == 1
+    assert page2["next_offset"] is None
 
 
 def test_get_heart_rate_samples_malformed_sample_time_returns_none(
@@ -360,7 +499,7 @@ def test_get_heart_rate_samples_malformed_sample_time_returns_none(
     )
     seeded_conn.execute("INSERT INTO heart_rate_samples VALUES ('rh1', 5, 78.0, NULL, 'imp1')")
     fn = _bind(get_heart_rate_samples, seeded_conn)
-    rows = _call(fn, record_hash="rh1")
+    rows = _items(fn, record_hash="rh1")
     by_idx = {r["sample_idx"]: r["sample_time"] for r in rows}
     assert by_idx[3] is None
     assert by_idx[4] is None
@@ -375,18 +514,39 @@ def test_get_heart_rate_samples_db_error(empty_conn: duckdb.DuckDBPyConnection) 
     assert_tool_db_error(fn, record_hash="rh1")
 
 
+def test_get_heart_rate_samples_gate_failure_returns_error_string(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F2: gate-probe failures must not raise a raw traceback.
+
+    Mirrors ``test_get_workout_route_gate_failure_returns_error_string``.
+    PR-E recreated the issue #103 regression: ``require_imports_or_message``
+    ran outside the try block in this tool, so a missing/corrupt
+    ``imports`` table would leak the raw exception through FastMCP.
+    After the fix the gate runs inside ``run_query_envelope``'s own
+    try block; dropping ``imports`` exercises that path and confirms
+    the gate's ``imports_present`` fallback to ``False`` surfaces the
+    documented ``IMPORT_REQUIRED_MESSAGE`` instead of an ``Error:``
+    traceback.
+    """
+    empty_conn.execute("DROP TABLE imports")
+    fn = _bind(get_heart_rate_samples, empty_conn)
+    out = asyncio.run(fn(record_hash="rh1"))
+    assert out == IMPORT_REQUIRED_MESSAGE
+
+
 # --- list_correlations -------------------------------------------------------
 
 
 def test_list_correlations_no_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_correlations, seeded_conn)
-    rows = _call(fn)
+    rows = _items(fn)
     assert any(r["correlation_hash"] == "cor_bp" for r in rows)
 
 
 def test_list_correlations_all_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_correlations, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         correlation_type="HKCorrelationTypeIdentifierBloodPressure",
         start_date="2024-01-01",
@@ -431,20 +591,20 @@ def test_get_correlation_details_db_error(empty_conn: duckdb.DuckDBPyConnection)
 
 def test_list_ecg_readings_no_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_ecg_readings, seeded_conn)
-    rows = _call(fn)
+    rows = _items(fn)
     assert rows[0]["ecg_hash"] == "ecg1"
 
 
 def test_list_ecg_readings_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_ecg_readings, seeded_conn)
-    rows = _call(fn, start_date="2024-01-01", end_date="2024-01-31")
+    rows = _items(fn, start_date="2024-01-01", end_date="2024-01-31")
     assert rows[0]["ecg_hash"] == "ecg1"
 
 
 def test_list_ecg_readings_clamps_limit(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     """Issue #97 (T11): ``limit`` clamps to the documented max (1000)."""
     fn = _bind(list_ecg_readings, seeded_conn)
-    rows = _call(fn, limit=5_000)  # exceeds max -> clamped
+    rows = _items(fn, limit=5_000)  # exceeds max -> clamped
     assert len(rows) <= 1000
 
 
@@ -591,7 +751,7 @@ def test_list_state_of_mind_returns_seeded_row(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_state_of_mind, seeded_conn)
-    rows = _call(fn)
+    rows = _items(fn)
     assert rows[0]["record_hash"] == "som1"
     assert rows[0]["valence"] == 0.5
     assert rows[0]["kind"] == "momentary"
@@ -599,7 +759,7 @@ def test_list_state_of_mind_returns_seeded_row(
 
 def test_list_state_of_mind_filters(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     fn = _bind(list_state_of_mind, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         start_date="2024-01-03",
         end_date="2024-01-04",
@@ -612,7 +772,7 @@ def test_list_state_of_mind_empty_when_outside_window(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_state_of_mind, seeded_conn)
-    rows = _call(fn, start_date="2030-01-01")
+    rows = _items(fn, start_date="2030-01-01")
     assert rows == []
 
 
@@ -722,7 +882,7 @@ def test_query_records_end_date_date_only_includes_named_day(
     fn = _bind(query_records, seeded_conn)
     # 2024-01-01 holds 2 HR rows at 08:00 / 09:00. Without the fix,
     # ``end_date='2024-01-01'`` cast to 00:00:00 and dropped both.
-    rows = _call(
+    rows = _items(
         fn,
         record_type="HKQuantityTypeIdentifierHeartRate",
         start_date="2024-01-01",
@@ -736,7 +896,7 @@ def test_query_records_end_date_full_timestamp_unchanged(
 ) -> None:
     """A full ISO 8601 timestamp respects the caller's precision."""
     fn = _bind(query_records, seeded_conn)
-    rows = _call(
+    rows = _items(
         fn,
         record_type="HKQuantityTypeIdentifierHeartRate",
         start_date="2024-01-01",
@@ -752,7 +912,7 @@ def test_list_workouts_end_date_date_only_includes_named_day(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_workouts, seeded_conn)
-    rows = _call(fn, start_date="2024-01-01", end_date="2024-01-01")
+    rows = _items(fn, start_date="2024-01-01", end_date="2024-01-01")
     assert len(rows) == 1
 
 
@@ -760,7 +920,7 @@ def test_list_ecg_readings_end_date_date_only_includes_named_day(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_ecg_readings, seeded_conn)
-    rows = _call(fn, start_date="2024-01-01", end_date="2024-01-01")
+    rows = _items(fn, start_date="2024-01-01", end_date="2024-01-01")
     assert len(rows) == 1
 
 
@@ -768,7 +928,7 @@ def test_list_state_of_mind_end_date_date_only_includes_named_day(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_state_of_mind, seeded_conn)
-    rows = _call(fn, start_date="2024-01-03", end_date="2024-01-03")
+    rows = _items(fn, start_date="2024-01-03", end_date="2024-01-03")
     assert len(rows) == 1
 
 
@@ -776,7 +936,7 @@ def test_list_correlations_end_date_date_only_includes_named_day(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
     fn = _bind(list_correlations, seeded_conn)
-    rows = _call(fn, start_date="2024-01-02", end_date="2024-01-02")
+    rows = _items(fn, start_date="2024-01-02", end_date="2024-01-02")
     assert len(rows) == 1
 
 

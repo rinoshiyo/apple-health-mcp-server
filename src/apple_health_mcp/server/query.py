@@ -17,9 +17,11 @@ import datetime as _dt
 import json
 import logging
 import math
+import re
+from collections.abc import Callable
 from decimal import Decimal
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from apple_health_mcp import REPO_URL
 
@@ -243,3 +245,112 @@ def run_query(
 def run_query_payload(payload: object) -> str:
     """Pretty-print an already-built tool response payload."""
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+# Shared ``offset`` parameter description (issue #108 / PR-E review F5).
+# Re-used across every envelope-shaped tool so a wording change lands in
+# one place instead of drifting across six modules.
+OFFSET_DESCRIPTION: Final[str] = (
+    "Skip the first N rows before returning the next `limit` items. Use with `limit` to paginate."
+)
+
+
+def normalise_pagination(
+    limit: int | None,
+    offset: int | None,
+    *,
+    default_limit: int,
+    max_limit: int,
+) -> tuple[int, int]:
+    """Validate + clamp the ``limit`` / ``offset`` pair shared by paged tools.
+
+    ``limit < 1`` raises ``ValueError`` so callers can surface a uniform
+    ``"Error: limit must be >= 1"`` string. ``None`` falls back to
+    ``default_limit``; positive values are capped at ``max_limit``.
+    Negative ``offset`` clamps to ``0`` so DuckDB never sees ``OFFSET -1``.
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be >= 1")
+    effective_limit = default_limit if limit is None else min(limit, max_limit)
+    effective_offset = 0 if offset is None else max(0, offset)
+    return effective_limit, effective_offset
+
+
+# Regex used to strip a trailing ``LIMIT ... OFFSET ...`` (or ``LIMIT ...``
+# alone) from the page SQL so the F1 fallback count query covers the same
+# filtered row set without paginating it. Matches the trailing pagination
+# clause specifically so a column or alias literally named ``limit`` inside
+# the SELECT list is not accidentally rewritten.
+_PAGINATION_TAIL_RE = re.compile(
+    r"\s+LIMIT\s+\d+(?:\s+OFFSET\s+\d+)?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _count_sql_from_page_sql(sql: str) -> str:
+    """Derive a ``SELECT COUNT(*) ...`` query from a paginated page SQL.
+
+    Used by :func:`run_query_envelope` only when ``offset > 0`` lands past
+    the end of the result set so the page returns zero rows and the
+    ``COUNT(*) OVER ()`` window can no longer surface a row to read.
+    """
+    base = _PAGINATION_TAIL_RE.sub("", sql)
+    return f"SELECT COUNT(*) AS _total FROM ({base}) AS _envelope_count"
+
+
+def run_query_envelope(
+    conn: duckdb.DuckDBPyConnection,
+    sql: str,
+    params: list[Any] | tuple[Any, ...],
+    *,
+    offset: int,
+    lock: Lock | None = None,
+    require_data: bool = True,
+    row_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> str:
+    """Execute ``sql`` and return a ``{items, total, next_offset}`` envelope.
+
+    See issue #108 for the full contract. ``sql`` must project
+    ``COUNT(*) OVER () AS _total`` so ``total`` is one round trip in the
+    common case; an ``offset`` past the end falls back to a second
+    targeted ``COUNT(*)`` so the wire ``total`` never lies. ``row_transform``
+    runs per item before ``_total`` is dropped.
+    """
+    try:
+        if require_data and not imports_present(conn, lock=lock):
+            return IMPORT_REQUIRED_MESSAGE
+        rows = query_to_json(conn, sql, params, lock=lock)
+        if rows:
+            total = int(rows[0]["_total"])
+        elif offset > 0:
+            # ``COUNT(*) OVER ()`` rides on the page rows; once we paginate
+            # past the dataset there are no rows to ride on. Recover the
+            # true total with a second targeted query so the caller is not
+            # told ``total=0`` while the underlying table actually has
+            # data (issue #108 / PR-E review F1).
+            count_rows = query_to_json(conn, _count_sql_from_page_sql(sql), params, lock=lock)
+            # ``SELECT COUNT(*)`` always returns one row; the ``else 0``
+            # is a defensive fallback for a hypothetical empty result that
+            # DuckDB cannot actually produce here.
+            total = (
+                int(count_rows[0]["_total"])
+                if count_rows
+                else 0  # pragma: no cover - COUNT(*) always returns one row
+            )
+        else:
+            total = 0
+    except Exception as exc:
+        _logger.debug("query failed: %s", exc)
+        return f"Error: {exc}"
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = row_transform(row) if row_transform is not None else row
+        item.pop("_total", None)
+        items.append(item)
+    next_offset: int | None = offset + len(items) if (offset + len(items)) < total else None
+    payload: dict[str, Any] = {
+        "items": items,
+        "total": total,
+        "next_offset": next_offset,
+    }
+    return run_query_payload(payload)

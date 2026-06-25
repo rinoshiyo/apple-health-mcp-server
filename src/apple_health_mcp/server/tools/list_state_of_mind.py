@@ -16,7 +16,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import normalise_end_date, run_query
+from apple_health_mcp.server.query import (
+    OFFSET_DESCRIPTION,
+    normalise_end_date,
+    normalise_pagination,
+    run_query_envelope,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -26,10 +31,11 @@ if TYPE_CHECKING:
 DESCRIPTION = (
     "List Apple Health StateOfMind (iOS 17+) entries with their valence, "
     "kind (momentary / daily), labels (e.g. Joy, Calm), and associations "
-    "(e.g. Work, Family). Returns: record_hash, start_date, end_date, "
-    "valence, kind, labels, associations, source_name. Use this for "
-    'natural-language queries about mood over time ("show my mood over '
-    'the past week").'
+    "(e.g. Work, Family). Returns `{items, total, next_offset}`; "
+    "`next_offset` is `null` on the last page. Each item carries: "
+    "record_hash, start_date, end_date, valence, kind, labels, associations, "
+    "source_name. Use this for natural-language queries about mood over time "
+    '("show my mood over the past week").'
 )
 
 _DEFAULT_LIMIT = 100
@@ -51,13 +57,23 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             int | None,
             Field(description="Maximum number of results (default 100, max 1000)"),
         ] = None,
+        offset: Annotated[
+            int | None,
+            Field(description=OFFSET_DESCRIPTION),
+        ] = None,
     ) -> str:
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         # The join surfaces the timestamp / source through the parent record
         # so callers can query mood over time without a follow-up lookup.
         sql_parts = [
             "SELECT s.record_hash, r.start_date, r.end_date, s.valence, "
-            "s.kind, s.labels, s.associations, r.source_name "
+            "s.kind, s.labels, s.associations, r.source_name, "
+            "COUNT(*) OVER () AS _total "
             "FROM state_of_mind s "
             "JOIN records r ON r.record_hash = s.record_hash WHERE 1=1"
         ]
@@ -68,5 +84,13 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         if end_date is not None:
             sql_parts.append("AND r.end_date <= ?")
             params.append(normalise_end_date(end_date))
-        sql_parts.append(f"ORDER BY r.start_date DESC LIMIT {effective_limit}")
-        return run_query(conn, " ".join(sql_parts), params, lock=lock)
+        sql_parts.append(
+            f"ORDER BY r.start_date DESC LIMIT {effective_limit} OFFSET {effective_offset}"
+        )
+        return run_query_envelope(
+            conn,
+            " ".join(sql_parts),
+            params,
+            offset=effective_offset,
+            lock=lock,
+        )

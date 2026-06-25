@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from threading import Lock
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
 from apple_health_mcp.server.query import (
-    query_to_json,
-    require_imports_or_message,
-    run_query_payload,
+    OFFSET_DESCRIPTION,
+    normalise_pagination,
+    run_query_envelope,
 )
 
 if TYPE_CHECKING:
@@ -19,14 +19,11 @@ if TYPE_CHECKING:
 
 
 DESCRIPTION = (
-    "Get GPS route data for a workout. Returns an envelope object: "
-    "{points: [{latitude, longitude, elevation (meters), timestamp, "
-    "speed (m/s), course (degrees)}, ...], total: <int total point count for "
-    "this workout>, has_more: <bool, true when there are more points beyond "
-    "the returned page>, next_offset: <int offset to pass on the next call, "
-    "or null when has_more is false>}. ``points`` is capped at `limit` rows "
-    "(default 5000, max 50000); use the returned ``next_offset`` to paginate "
-    "longer routes. Use get_workout_details first to check has_route."
+    "Get GPS route data for a workout. Returns `{items, total, next_offset}`; "
+    "`next_offset` is `null` on the last page. Each item carries "
+    "{latitude, longitude, elevation (meters), timestamp, speed (m/s), "
+    "course (degrees)}. ``items`` is capped at `limit` rows (default 5000, "
+    "max 50000). Use get_workout_details first to check has_route."
 )
 
 _DEFAULT_LIMIT = 5000
@@ -51,64 +48,25 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(
-                description="Skip the first N route points before returning "
-                "the next `limit` rows. Use with `limit` to paginate a long "
-                "route in chunks.",
-            ),
+            Field(description=OFFSET_DESCRIPTION),
         ] = None,
     ) -> str:
-        # Issue #95 (T7): pre-v1.0.0 promotion from a bare array to a
-        # ``{points, total, has_more, next_offset}`` envelope so clients
-        # can detect the end of a paginated route without blind probing.
-        #
-        # ``limit=0`` is rejected up front (rather than clamped to 0) so a
-        # client cannot land in an infinite pagination loop where each
-        # page returns ``points=[]`` but ``has_more=True``. The bare-cap
-        # ``min(limit, _MAX_LIMIT)`` still applies for limit >= 1.
-        if limit is not None and limit < 1:
-            return "Error: limit must be >= 1"
-        effective_limit = _DEFAULT_LIMIT if limit is None else min(limit, _MAX_LIMIT)
-        effective_offset = 0 if offset is None else max(0, offset)
-        # Issue #103 (T7 follow-up, L2): keep ``require_imports_or_message``
-        # inside the try block so a lock contention or DB read failure on
-        # the gate probe is normalised to an ``Error: ...`` string instead
-        # of bubbling a raw traceback up through FastMCP. The other 16
-        # tools that funnel through ``run_query`` already get this for
-        # free; this tool builds its envelope by hand so the same
-        # protection has to be applied explicitly.
+        # Envelope contract: see run_query_envelope (issue #108).
         try:
-            if msg := require_imports_or_message(conn, lock=lock):
-                return msg
-            # ``total`` is the full point count for the workout (independent
-            # of ``offset`` / ``limit``) so clients can render a progress
-            # bar or skip pagination entirely when total <= limit.
-            total_rows = query_to_json(
-                conn,
-                "SELECT COUNT(*) AS n FROM route_points WHERE workout_hash = ?",
-                [workout_hash],
-                lock=lock,
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
             )
-            total = int(total_rows[0]["n"]) if total_rows else 0
-            points = query_to_json(
-                conn,
-                "SELECT latitude, longitude, elevation, timestamp, speed, course "
-                "FROM route_points WHERE workout_hash = ? "
-                f"ORDER BY timestamp LIMIT {effective_limit} OFFSET {effective_offset}",
-                [workout_hash],
-                lock=lock,
-            )
-        except Exception as exc:
+        except ValueError as exc:
             return f"Error: {exc}"
-        # ``has_more`` compares the absolute index of the last returned
-        # point against ``total``; ``next_offset`` is null when the page
-        # already exhausted the route so a client can stop calling.
-        has_more = (effective_offset + len(points)) < total
-        next_offset: int | None = effective_offset + len(points) if has_more else None
-        payload: dict[str, Any] = {
-            "points": points,
-            "total": total,
-            "has_more": has_more,
-            "next_offset": next_offset,
-        }
-        return run_query_payload(payload)
+        sql = (
+            "SELECT latitude, longitude, elevation, timestamp, speed, course, "
+            "COUNT(*) OVER () AS _total FROM route_points WHERE workout_hash = ? "
+            f"ORDER BY timestamp LIMIT {effective_limit} OFFSET {effective_offset}"
+        )
+        return run_query_envelope(
+            conn,
+            sql,
+            [workout_hash],
+            offset=effective_offset,
+            lock=lock,
+        )

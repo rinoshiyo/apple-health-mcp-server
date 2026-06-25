@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import normalise_end_date, run_query
+from apple_health_mcp.server.query import (
+    OFFSET_DESCRIPTION,
+    normalise_end_date,
+    normalise_pagination,
+    run_query_envelope,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -18,9 +23,11 @@ DESCRIPTION = (
     "List Correlation groupings (e.g. HKCorrelationTypeIdentifierBloodPressure "
     "pairs a Systolic and a Diastolic record taken in the same reading, "
     "HKCorrelationTypeIdentifierFood groups a meal's nutrient breakdown). "
-    "Returns: correlation_hash, correlation_type, source_name, start_date, "
-    "end_date. Use correlation_hash with get_correlation_details to fetch "
-    "the joined member records (e.g. matched Systolic + Diastolic values)."
+    "Returns `{items, total, next_offset}`; `next_offset` is `null` on the "
+    "last page. Each item carries: correlation_hash, correlation_type, "
+    "source_name, start_date, end_date. Use correlation_hash with "
+    "get_correlation_details to fetch the joined member records "
+    "(e.g. matched Systolic + Diastolic values)."
 )
 
 _DEFAULT_LIMIT = 50
@@ -49,11 +56,21 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             int | None,
             Field(description="Maximum number of results (default 50, max 500)"),
         ] = None,
+        offset: Annotated[
+            int | None,
+            Field(description=OFFSET_DESCRIPTION),
+        ] = None,
     ) -> str:
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         sql_parts = [
             "SELECT correlation_hash, correlation_type, source_name, "
-            "start_date, end_date FROM correlations WHERE 1=1"
+            "start_date, end_date, COUNT(*) OVER () AS _total "
+            "FROM correlations WHERE 1=1"
         ]
         params: list[Any] = []
         if correlation_type is not None:
@@ -65,5 +82,13 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         if end_date is not None:
             sql_parts.append("AND end_date <= ?")
             params.append(normalise_end_date(end_date))
-        sql_parts.append(f"ORDER BY start_date DESC LIMIT {effective_limit}")
-        return run_query(conn, " ".join(sql_parts), params, lock=lock)
+        sql_parts.append(
+            f"ORDER BY start_date DESC LIMIT {effective_limit} OFFSET {effective_offset}"
+        )
+        return run_query_envelope(
+            conn,
+            " ".join(sql_parts),
+            params,
+            offset=effective_offset,
+            lock=lock,
+        )
