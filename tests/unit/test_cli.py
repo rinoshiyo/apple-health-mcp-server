@@ -149,3 +149,28 @@ def test_tz_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     assert result.exit_code == 0, result.output
     assert _os.environ.get("APPLE_HEALTH_TZ") == "Asia/Tokyo"
+
+
+def test_db_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--db`` populates APPLE_HEALTH_DB so resolve_db_path() picks it up.
+
+    Mirrors the ``--tz`` -> APPLE_HEALTH_TZ pattern. Without this
+    promotion a future caller that resolves through resolve_db_path()
+    (a new subcommand, a plugin, a diagnostic helper like
+    get_server_info) would silently ignore the ``--db`` the user
+    typed on the CLI, because the env-only resolver would never see
+    it. The resolver's "single source of truth" docstring would then
+    be a lie.
+    """
+    import os as _os
+
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    export_dir = _materialise_export(tmp_path)
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(export_dir)])
+    assert result.exit_code == 0, result.output
+    # The promotion stores an absolute path so resolve_db_path() does
+    # not later reject it as "relative" — the CWD-stable invariant the
+    # env-resolver enforces must match what the CLI promotes.
+    assert _os.environ.get("APPLE_HEALTH_DB") == str(db.expanduser().resolve())

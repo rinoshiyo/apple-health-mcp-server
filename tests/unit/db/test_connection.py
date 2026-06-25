@@ -16,6 +16,7 @@ from apple_health_mcp.db.connection import (
     default_db_path,
     get_connection,
     get_in_memory_connection,
+    resolve_db_path,
 )
 from apple_health_mcp.exceptions import ConfigError
 
@@ -23,7 +24,21 @@ if TYPE_CHECKING:
     from pytest import LogCaptureFixture, MonkeyPatch
 
 
+def _clear_db_env(monkeypatch: MonkeyPatch) -> None:
+    """Strip the two env-override knobs that ``resolve_db_path`` consults.
+
+    Without this guard a developer (or CI shell) with ``APPLE_HEALTH_DB``
+    or ``APPLE_HEALTH_DATA_DIR`` exported in the ambient environment
+    would silently flip every platform-default test into the override
+    branch. Explicit ``delenv`` calls keep the platform-default tests
+    deterministic regardless of the runner's env.
+    """
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+
+
 def test_default_db_path_posix_with_xdg(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    _clear_db_env(monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     result = default_db_path()
@@ -31,6 +46,7 @@ def test_default_db_path_posix_with_xdg(monkeypatch: MonkeyPatch, tmp_path: Path
 
 
 def test_default_db_path_posix_without_xdg(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    _clear_db_env(monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
@@ -41,6 +57,7 @@ def test_default_db_path_posix_without_xdg(monkeypatch: MonkeyPatch, tmp_path: P
 def test_default_db_path_windows_with_localappdata(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    _clear_db_env(monkeypatch)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
     result = default_db_path()
@@ -50,6 +67,7 @@ def test_default_db_path_windows_with_localappdata(
 def test_default_db_path_windows_without_localappdata(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    _clear_db_env(monkeypatch)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
@@ -57,9 +75,254 @@ def test_default_db_path_windows_without_localappdata(
     assert result == tmp_path / "AppData" / "Local" / "apple-health-mcp" / "health.duckdb"
 
 
+def test_resolve_db_path_uses_apple_health_db_env(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """APPLE_HEALTH_DB pins the resolver to that exact file path."""
+    target = tmp_path / "custom" / "h.duckdb"
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(target))
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    assert resolve_db_path() == target
+
+
+def test_resolve_db_path_expands_tilde_in_apple_health_db(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``~`` in APPLE_HEALTH_DB expands to the resolved HOME.
+
+    Users who hand-edit the bundle env or set the variable in a shell
+    rc typically write ``~/.local/share/...`` rather than the absolute
+    expansion; the resolver must honour that the same way every other
+    XDG-respecting tool does.
+    """
+    # ``Path.expanduser`` resolves ``~`` via the HOME env (POSIX) /
+    # USERPROFILE (Windows), not via ``Path.home()`` overrides — patch
+    # the env so the tilde target lands inside ``tmp_path``.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPLE_HEALTH_DB", "~/custom/h.duckdb")
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    assert resolve_db_path() == tmp_path / "custom" / "h.duckdb"
+
+
+def test_resolve_db_path_uses_apple_health_data_dir_when_db_unset(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """APPLE_HEALTH_DATA_DIR appends the default file name directly under it.
+
+    The env var is treated as the FINAL parent (no ``apple-health-mcp/``
+    subdir) — that's the documented contract; if the test ever flips to
+    requiring the package subdir, both the docstring and the README
+    need to move first.
+    """
+    target_dir = tmp_path / "data-root"
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", str(target_dir))
+    assert resolve_db_path() == target_dir / "health.duckdb"
+
+
+def test_resolve_db_path_expands_tilde_in_apple_health_data_dir(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``~`` in APPLE_HEALTH_DATA_DIR expands to the resolved HOME."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "~/data-root")
+    assert resolve_db_path() == tmp_path / "data-root" / "health.duckdb"
+
+
+def test_resolve_db_path_prefers_apple_health_db_over_data_dir(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """APPLE_HEALTH_DB wins when both env vars are set simultaneously."""
+    file_target = tmp_path / "explicit" / "h.duckdb"
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(file_target))
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", str(tmp_path / "should-be-ignored"))
+    assert resolve_db_path() == file_target
+
+
+def test_resolve_db_path_falls_back_to_platform_default(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both env vars unset → POSIX XDG default path under ``apple-health-mcp/``."""
+    _clear_db_env(monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert resolve_db_path() == tmp_path / "xdg" / "apple-health-mcp" / "health.duckdb"
+
+
+def test_default_db_path_is_alias_of_resolve_db_path(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``default_db_path`` keeps working as a backward-compatible alias.
+
+    The env precedence must flow through the alias as well — otherwise
+    callers that still reference ``default_db_path`` would silently
+    bypass the override. The assertion compares both functions on the
+    same monkeypatched env to lock that in.
+    """
+    target = tmp_path / "alias" / "h.duckdb"
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(target))
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    assert default_db_path() == resolve_db_path() == target
+
+
+def test_get_connection_uses_resolve_db_path_with_apple_health_db_env(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``get_connection(db_path=None)`` honours APPLE_HEALTH_DB end-to-end.
+
+    Locks in the server / CLI one-path-resolver contract: any caller
+    that omits ``db_path`` (server boot, CLI without ``--db``) must
+    pick up the env override, otherwise a future regression that
+    inlined the platform default in ``get_connection`` would silently
+    bypass the MCPB-injected ``user_config.db_path`` and re-open the
+    sandbox-redirected file (issue #128).
+    """
+    target = tmp_path / "via-env" / "h.duckdb"
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(target))
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    conn = get_connection()
+    try:
+        conn.execute("SELECT 1").fetchone()
+    finally:
+        conn.close()
+    assert target.exists()
+
+
+def test_get_connection_explicit_db_path_overrides_env(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicit ``db_path=`` argument wins over APPLE_HEALTH_DB.
+
+    Locks in the resolver chain precedence: explicit caller arg > env
+    > platform default. A future regression that flipped
+    ``get_connection`` to ALWAYS consult the env (instead of the
+    explicit arg) would silently override callers that already know
+    where their DB lives — e.g. a future migration helper that wants
+    to operate on a specific file regardless of the user's env.
+    """
+    explicit = tmp_path / "explicit" / "h.duckdb"
+    decoy = tmp_path / "decoy" / "h.duckdb"
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(decoy))
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    conn = get_connection(explicit)
+    try:
+        conn.execute("SELECT 1").fetchone()
+    finally:
+        conn.close()
+    assert explicit.exists()
+    assert not decoy.exists()
+
+
+def test_resolve_db_path_treats_blank_env_db_as_unset(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``APPLE_HEALTH_DB=""`` falls through to the next tier silently.
+
+    A shell rc that does ``export APPLE_HEALTH_DB=`` (set-then-clear
+    in a single line) leaves the var present-but-empty in os.environ.
+    Treating that as "the user wants the empty-string path" would
+    produce nonsense; treating it as "unset" matches every other
+    XDG-respecting tool's convention.
+    """
+    _clear_db_env(monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("APPLE_HEALTH_DB", "")
+    assert resolve_db_path() == tmp_path / "xdg" / "apple-health-mcp" / "health.duckdb"
+
+
+def test_resolve_db_path_treats_whitespace_only_env_db_as_unset(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``APPLE_HEALTH_DB="   "`` strips to empty and falls through.
+
+    Without ``.strip()``, ``Path(" ").expanduser()`` would yield a
+    relative path with a leading space — a silent foot-gun. The
+    resolver instead treats whitespace-only values the same as the
+    bare-empty case.
+    """
+    _clear_db_env(monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("APPLE_HEALTH_DB", "   ")
+    assert resolve_db_path() == tmp_path / "xdg" / "apple-health-mcp" / "health.duckdb"
+
+
+def test_resolve_db_path_treats_blank_env_data_dir_as_unset(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``APPLE_HEALTH_DATA_DIR=""`` falls through to the platform default."""
+    _clear_db_env(monkeypatch)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "")
+    assert resolve_db_path() == tmp_path / "xdg" / "apple-health-mcp" / "health.duckdb"
+
+
+def test_resolve_db_path_rejects_relative_apple_health_db(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Relative APPLE_HEALTH_DB raises ConfigError instead of CWD-dependent open.
+
+    The historic ``default_db_path`` always returned an absolute path;
+    losing that invariant silently when the env var is relative would
+    re-open DIFFERENT files between CLI and server invocations (the
+    MCPB launcher CWD differs from the user's terminal CWD).
+    """
+    monkeypatch.setenv("APPLE_HEALTH_DB", "health.duckdb")
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    with pytest.raises(ConfigError, match=r"APPLE_HEALTH_DB.*absolute"):
+        resolve_db_path()
+
+
+def test_resolve_db_path_rejects_apple_health_db_pointing_at_directory(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``APPLE_HEALTH_DB=/some/existing/dir`` is a misuse and must error early.
+
+    Without the check, ``get_connection`` would proceed to
+    ``duckdb.connect('/some/existing/dir')`` and surface an opaque
+    ``IO Error`` from DuckDB; the ConfigError instead names the env
+    var and hints at the file-suffix the user almost certainly meant.
+    """
+    a_dir = tmp_path / "i_am_a_directory"
+    a_dir.mkdir()
+    monkeypatch.setenv("APPLE_HEALTH_DB", str(a_dir))
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    with pytest.raises(ConfigError, match=r"APPLE_HEALTH_DB.*directory"):
+        resolve_db_path()
+
+
+def test_resolve_db_path_rejects_relative_apple_health_data_dir(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Relative APPLE_HEALTH_DATA_DIR raises ConfigError, same reason as DB."""
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "data-root")
+    with pytest.raises(ConfigError, match=r"APPLE_HEALTH_DATA_DIR.*absolute"):
+        resolve_db_path()
+
+
+def test_resolve_db_path_rejects_data_dir_pointing_at_duckdb_file(
+    monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """``APPLE_HEALTH_DATA_DIR`` ending in ``.duckdb`` is the var-swap typo.
+
+    Users who set ``APPLE_HEALTH_DATA_DIR=~/health/db.duckdb`` likely
+    meant ``APPLE_HEALTH_DB``; without this guard the resolver would
+    return ``~/health/db.duckdb/health.duckdb`` and DuckDB would error
+    with a cryptic ``Cannot open file`` because the parent does not
+    exist as a directory.
+    """
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", str(tmp_path / "db.duckdb"))
+    with pytest.raises(ConfigError, match=r"APPLE_HEALTH_DATA_DIR.*duckdb"):
+        resolve_db_path()
+
+
 def test_get_connection_uses_default_when_not_provided(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
+    _clear_db_env(monkeypatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     conn = get_connection()

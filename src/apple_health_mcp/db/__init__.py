@@ -6,6 +6,7 @@ from apple_health_mcp.db.connection import (
     default_db_path,
     get_connection,
     get_in_memory_connection,
+    resolve_db_path,
 )
 from apple_health_mcp.db.migrations import (
     CURRENT_SCHEMA_VERSION,
@@ -33,5 +34,6 @@ __all__ = [
     "get_in_memory_connection",
     "populate_workout_vestigial_columns",
     "rebuild_daily_stats",
+    "resolve_db_path",
     "set_current_version",
 ]
