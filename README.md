@@ -299,6 +299,10 @@ breaking the schema between minor versions whenever possible, and to
 document any change that does land under `Changed` in CHANGELOG.md so
 existing custom queries can be updated in one pass.
 
+Schema migrations are forward-only. Downgrading to a prior version
+after a schema bump (e.g. v0.3.0-rc2 → v0.2.x) requires re-importing
+from `export.xml` or restoring a pre-bump DB backup.
+
 #### Layer 1 reference tables
 
 **Environment variables** the server and importer read from the

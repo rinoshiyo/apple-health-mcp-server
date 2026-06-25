@@ -179,16 +179,19 @@ CREATE TABLE IF NOT EXISTS workout_routes (
     import_id       VARCHAR NOT NULL
 );
 
--- Issue #96 (T8): ``sample_time`` is stored as Apple raw ``HH:MM:SS.SSS``
--- for round-trip fidelity so a future exporter can write the literal
--- value back unchanged. The ``get_heart_rate_samples`` MCP tool
--- normalises it to a float seconds offset on the way out (storage
--- format is private; wire format is float).
+-- Issue #109 (PR-F): ``sample_time`` is stored as seconds-of-day since
+-- 00:00 local (DOUBLE), normalised at import time from Apple's raw
+-- ``HH:MM:SS.SSS`` literal. Aligns the on-disk storage with the wire
+-- contract that ``get_heart_rate_samples`` exposes, so the tool reads
+-- the column verbatim and ``run_custom_query`` callers see a numeric
+-- column instead of having to re-parse the string. A pre-PR-F database
+-- that still stores VARCHAR is migrated in place by
+-- ``db/migrations.py`` (idempotent, malformed rows become NULL).
 CREATE TABLE IF NOT EXISTS heart_rate_samples (
     parent_record_hash  VARCHAR NOT NULL,
     sample_idx          INTEGER NOT NULL,
     bpm                 DOUBLE,
-    sample_time         VARCHAR,
+    sample_time         DOUBLE,
     import_id           VARCHAR NOT NULL
 );
 
