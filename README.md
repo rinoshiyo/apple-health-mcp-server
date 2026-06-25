@@ -60,6 +60,21 @@ each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/relea
 > on macOS, the official installer on Windows). Without `uv` on `PATH`
 > Claude Desktop will fail with a generic spawn error after install.
 
+> **Windows first-run warmup (issue #127).** Before you install the
+> bundle, run **once** in a terminal:
+>
+> ```powershell
+> uvx --from "apple-health-mcp-server@latest" apple-health-mcp-server --help
+> ```
+>
+> Claude Desktop spawns the MCP server multiple times in parallel on its
+> first boot. Each parallel `uvx` invocation tries to install the same
+> Python interpreter at the same time and they can race on the
+> minor-version-link directory, leaving a half-initialised cache that
+> every subsequent launch then trips over (`Missing expected target
+> directory for Python minor version link`). One warm-up invocation
+> serialises the install and avoids the race.
+
 Then:
 
 1. Download the latest `apple-health-mcp-server-vX.Y.Z.mcpb` from the
@@ -67,6 +82,19 @@ Then:
 2. Open Claude Desktop's **Settings → Connectors** panel
 3. Drag-and-drop the `.mcpb` file onto the panel — Claude Desktop will
    install it and prompt to enable the server
+4. **Windows (issue #128):** the install dialog includes a
+   **Database file** field. Point it at a stable path **outside**
+   `%LOCALAPPDATA%`, e.g. `C:\Users\<you>\apple-health\health.duckdb`,
+   and pass the **same** path as `--db` when you run `import` from a
+   terminal. The reason: Claude Desktop on Windows ships as an MSIX
+   package whose child processes run inside an AppContainer sandbox
+   that virtualises `%LOCALAPPDATA%` to a per-package private path.
+   The terminal-side importer writes outside the sandbox; the
+   sandboxed server reads inside it; without a stable shared path
+   the two never see each other and every tool returns "no data has
+   been imported" even though the import succeeded. macOS / Linux
+   users can leave the field blank — there's no sandbox redirect on
+   those platforms.
 
 The MCPB format is documented at <https://github.com/anthropics/mcpb>;
 both `.dxt` (legacy) and `.mcpb` extensions are accepted by Claude
@@ -192,7 +220,22 @@ By default the database lands at the XDG-resolved data directory:
 - Linux / macOS: `~/.local/share/apple-health-mcp/health.duckdb`
 - Windows: `%LOCALAPPDATA%\apple-health-mcp\health.duckdb`
 
-Override with `--db /custom/path/health.duckdb` on either subcommand.
+Override precedence (most → least specific):
+
+1. `--db /custom/path/health.duckdb` on either subcommand.
+2. `APPLE_HEALTH_DB` env var (file path) — what the MCPB bundle's
+   **Database file** GUI field promotes into. Same precedence as
+   `--db` because the CLI promotes `--db` into this env so any
+   downstream caller resolving through `resolve_db_path()` agrees
+   with what the connection layer actually opened.
+3. `APPLE_HEALTH_DATA_DIR` env var (directory path) — useful when
+   you want a custom root but the package's default file name.
+4. The XDG / `LOCALAPPDATA` platform default above.
+
+Use the `get_server_info` MCP tool to confirm at any time which path
+the running server actually opened (and which override tier
+resolved it), e.g. when troubleshooting the Windows MSIX sandbox
+redirect described in the Claude Desktop install section above.
 
 ### Locales
 
@@ -222,6 +265,18 @@ Distance and energy units (`km`, `mi`, `kcal`) come straight from the
 underlying HealthKit identifiers and are not localised; the
 `total_distance_unit` column on the `workouts` table records them
 faithfully.
+
+> **Cross-locale merging is not supported in v0.3.x (issue #131).**
+> Apple Health stores some field VALUES (not just CSV headers) in the
+> iPhone's display language: a Japanese-locale export surfaces ECG
+> `classification` as `洞調律` where an English-locale export writes
+> `SinusRhythm`, and `source_name` ships as `ヘルスケア` /
+> `血中酸素ウェルネス` instead of `Health` / `Blood Oxygen`. The
+> importer stores those values verbatim; there is no name-normalisation
+> layer yet, so importing exports from **different** iPhone locales
+> into the **same** DB will produce two parallel sets of rows that
+> downstream tools cannot reconcile. Keep one DB per locale until
+> normalisation lands (please thumbs-up #131 if you need this).
 
 ## Tools
 

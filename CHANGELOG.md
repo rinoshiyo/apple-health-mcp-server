@@ -9,6 +9,20 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Documentation
+
+- **README work-arounds bundled for the v0.3.0 stable release**
+  (issue #144, closes #127 and #131). The Claude Desktop install
+  section now spells out the Windows first-run uvx warmup (#127) and
+  the MSIX `%LOCALAPPDATA%` sandbox-redirect recovery (#128), the
+  Database location section enumerates the
+  `APPLE_HEALTH_DB` / `APPLE_HEALTH_DATA_DIR` override chain and
+  cross-references the new `get_server_info` MCP tool, the Locales
+  section warns that cross-locale exports cannot be merged in
+  v0.3.x (#131), and `schema.py`'s file-level docstring clarifies
+  that the `export_*` identifiers refer to Apple Health's own
+  "export" function — not the MCP server (re-)exporting anything.
+
 ### Added
 
 - **`imports.imported_at` now reflects the import START moment, in UTC**
