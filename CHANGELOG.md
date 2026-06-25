@@ -11,21 +11,29 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Breaking
 
-- **Pagination envelope unified across all 7 list/page tools** (issue
-  #108, PR-E). `query_records`, `list_workouts`, `list_correlations`,
-  `list_state_of_mind`, `list_ecg_readings`, `get_heart_rate_samples`,
-  and `get_workout_route` now return `{items, total, next_offset}`.
-  The 6 tools that previously returned bare arrays gain the envelope
-  wrapper; `get_workout_route` renames its `points` key to `items`
-  and the `has_more` flag is dropped everywhere — `next_offset is
-  null` is now the canonical "last page" marker. Each tool also
-  gains an `offset` parameter so callers can paginate via the
-  returned `next_offset`. `total` is computed via
-  `COUNT(*) OVER ()` in the same SELECT as the page rows so each
-  request still takes one DB round trip. Clients reading the raw
-  array (`json.loads(response)`) must switch to
+- **Pagination envelope unified across the 7 paginated list/page tools**
+  (issue #108, PR-E). The following 7 tools now return
+  `{items, total, next_offset}`: `query_records`, `list_workouts`,
+  `list_correlations`, `list_state_of_mind`, `list_ecg_readings`,
+  `get_heart_rate_samples`, and `get_workout_route`. The 6 that
+  previously returned bare arrays gain the envelope wrapper;
+  `get_workout_route` renames its `points` key to `items` and the
+  `has_more` flag is dropped everywhere — `next_offset is null` is
+  now the canonical "last page" marker. Each tool also gains an
+  `offset` parameter so callers can paginate via the returned
+  `next_offset`. `total` is computed via `COUNT(*) OVER ()` in the
+  same SELECT as the page rows so each request still takes one DB
+  round trip in the common case; an `offset` past the end of the
+  dataset triggers a second targeted `COUNT(*)` so `total` never
+  reads as `0` when the underlying table actually has rows. Clients
+  reading the raw array (`json.loads(response)`) must switch to
   `json.loads(response)["items"]`; clients matching `has_more` must
-  switch to `next_offset is None`.
+  switch to `next_offset is None`. Aggregates and static catalogues
+  — `get_activity_summaries`, `get_import_history`, `list_record_types`,
+  `list_data_sources` — keep returning bare arrays because they
+  paginate by domain key (date range, import id, record-type
+  identifier, source identifier), not by row offset; their shapes stay
+  stable across v0.3.0 → v1.0.0.
 
 ### Changed
 

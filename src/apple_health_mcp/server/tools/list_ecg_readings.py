@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import normalise_end_date, run_query_envelope
+from apple_health_mcp.server.query import (
+    OFFSET_DESCRIPTION,
+    normalise_end_date,
+    normalise_pagination,
+    run_query_envelope,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -45,26 +50,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(
-                description="Skip the first N rows before returning the "
-                "next `limit` items. Use with `limit` to paginate.",
-            ),
+            Field(description=OFFSET_DESCRIPTION),
         ] = None,
     ) -> str:
-        # Issue #97 (T11): added a ``limit`` parameter so this tool matches
-        # the rest of the list_* family. ECG readings are typically few
-        # (dozens) but a long-tenured Apple Watch user may hit hundreds, so
-        # the cap keeps responses LLM-friendly without forcing a contract
-        # of "always returns everything".
-        #
-        # ``limit=0`` is rejected up front so the tool can never silently
-        # return an empty list that a downstream LLM might mistake for a
-        # "no recordings" result. Matches the behaviour of
-        # ``get_workout_route``.
-        if limit is not None and limit < 1:
-            return "Error: limit must be >= 1"
-        effective_limit = _DEFAULT_LIMIT if limit is None else min(limit, _MAX_LIMIT)
-        effective_offset = 0 if offset is None else max(0, offset)
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         sql_parts = [
             "SELECT ecg_hash, recorded_date, classification, device, "
             "sample_rate_hz, COUNT(*) OVER () AS _total "

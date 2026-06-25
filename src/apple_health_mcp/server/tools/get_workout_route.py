@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import run_query_envelope
+from apple_health_mcp.server.query import (
+    OFFSET_DESCRIPTION,
+    normalise_pagination,
+    run_query_envelope,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -44,28 +48,16 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(
-                description="Skip the first N route points before returning "
-                "the next `limit` rows. Use with `limit` to paginate a long "
-                "route in chunks.",
-            ),
+            Field(description=OFFSET_DESCRIPTION),
         ] = None,
     ) -> str:
-        # Issue #108 (PR-E): unified pagination envelope across all
-        # list/page tools. ``has_more`` is dropped — ``next_offset is
-        # None`` is the canonical "last page" marker. ``total`` comes
-        # from ``COUNT(*) OVER ()`` in the same SELECT as the page
-        # rows so each page request takes one round trip.
-        #
-        # ``limit=0`` is rejected up front (rather than clamped to 0)
-        # so a client cannot land in an infinite pagination loop where
-        # each page returns ``items=[]`` but a non-null ``next_offset``.
-        # The bare-cap ``min(limit, _MAX_LIMIT)`` still applies for
-        # limit >= 1.
-        if limit is not None and limit < 1:
-            return "Error: limit must be >= 1"
-        effective_limit = _DEFAULT_LIMIT if limit is None else min(limit, _MAX_LIMIT)
-        effective_offset = 0 if offset is None else max(0, offset)
+        # Envelope contract: see run_query_envelope (issue #108).
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         sql = (
             "SELECT latitude, longitude, elevation, timestamp, speed, course, "
             "COUNT(*) OVER () AS _total FROM route_points WHERE workout_hash = ? "

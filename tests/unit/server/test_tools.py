@@ -362,6 +362,94 @@ def test_get_workout_route_negative_limit_errors(
     assert out == "Error: limit must be >= 1"
 
 
+# --- envelope helper: review F3 (limit < 1 rejected uniformly) --------------
+
+
+@pytest.mark.parametrize(
+    "module, kwargs",
+    [
+        (query_records, {"record_type": "HKQuantityTypeIdentifierHeartRate"}),
+        (list_workouts, {}),
+        (list_correlations, {}),
+        (list_state_of_mind, {}),
+        (get_heart_rate_samples, {"record_hash": "rh1"}),
+    ],
+    ids=lambda v: getattr(v, "__name__", ""),
+)
+def test_envelope_tool_rejects_zero_limit(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    module: Any,
+    kwargs: dict[str, Any],
+) -> None:
+    """F3: the 5 previously-permissive tools now reject ``limit=0``.
+
+    Previously these wrapped ``effective_limit`` in ``max(0, ...)`` and
+    paired with ``COUNT(*) OVER ()`` they returned ``{items: [], total: 0,
+    next_offset: null}`` even on a non-empty table — an LLM would mistake
+    that for "no data". Aligns with ``get_workout_route`` / ``list_ecg_readings``.
+    """
+    fn = _bind(module, seeded_conn)
+    out = asyncio.run(fn(**kwargs, limit=0))
+    assert out == "Error: limit must be >= 1"
+
+
+@pytest.mark.parametrize(
+    "module, kwargs",
+    [
+        (query_records, {"record_type": "HKQuantityTypeIdentifierHeartRate"}),
+        (list_workouts, {}),
+        (list_correlations, {}),
+        (list_state_of_mind, {}),
+        (get_heart_rate_samples, {"record_hash": "rh1"}),
+    ],
+    ids=lambda v: getattr(v, "__name__", ""),
+)
+def test_envelope_tool_rejects_negative_limit(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    module: Any,
+    kwargs: dict[str, Any],
+) -> None:
+    """A negative ``limit`` hits the same guard."""
+    fn = _bind(module, seeded_conn)
+    out = asyncio.run(fn(**kwargs, limit=-1))
+    assert out == "Error: limit must be >= 1"
+
+
+# --- envelope helper: review F1 (offset > total recovers true total) --------
+
+
+def test_query_records_envelope_offset_past_end_keeps_total(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F1: paginating past the dataset must still report ``total`` correctly.
+
+    Walks ``offset=0 -> next_offset -> next_offset + limit`` and asserts
+    ``total`` is constant across all three pages even when the last page
+    is empty.
+    """
+    fn = _bind(query_records, seeded_conn)
+    page1 = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=0)
+    assert page1["total"] == 2
+    page2 = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=1)
+    assert page2["total"] == 2
+    assert page2["next_offset"] is None
+    # Walk one beyond the end — used to wire ``total=0`` because the
+    # ``COUNT(*) OVER ()`` window has no row to ride on.
+    page_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=2)
+    assert page_past == {"items": [], "total": 2, "next_offset": None}
+    page_far_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=20)
+    assert page_far_past == {"items": [], "total": 2, "next_offset": None}
+
+
+def test_get_workout_route_envelope_offset_past_end_keeps_total(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F1 applies to ``get_workout_route`` as well."""
+    fn = _bind(get_workout_route, seeded_conn)
+    page = _call(fn, workout_hash="wh1", limit=5, offset=99)
+    assert page == {"items": [], "total": 2, "next_offset": None}
+
+
 # --- get_heart_rate_samples --------------------------------------------------
 
 
@@ -424,6 +512,27 @@ def test_get_heart_rate_samples_db_error(empty_conn: duckdb.DuckDBPyConnection) 
     empty_conn.execute("DROP TABLE heart_rate_samples")
     fn = _bind(get_heart_rate_samples, empty_conn)
     assert_tool_db_error(fn, record_hash="rh1")
+
+
+def test_get_heart_rate_samples_gate_failure_returns_error_string(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """F2: gate-probe failures must not raise a raw traceback.
+
+    Mirrors ``test_get_workout_route_gate_failure_returns_error_string``.
+    PR-E recreated the issue #103 regression: ``require_imports_or_message``
+    ran outside the try block in this tool, so a missing/corrupt
+    ``imports`` table would leak the raw exception through FastMCP.
+    After the fix the gate runs inside ``run_query_envelope``'s own
+    try block; dropping ``imports`` exercises that path and confirms
+    the gate's ``imports_present`` fallback to ``False`` surfaces the
+    documented ``IMPORT_REQUIRED_MESSAGE`` instead of an ``Error:``
+    traceback.
+    """
+    empty_conn.execute("DROP TABLE imports")
+    fn = _bind(get_heart_rate_samples, empty_conn)
+    out = asyncio.run(fn(record_hash="rh1"))
+    assert out == IMPORT_REQUIRED_MESSAGE
 
 
 # --- list_correlations -------------------------------------------------------

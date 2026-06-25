@@ -7,18 +7,23 @@ import json
 import math
 from decimal import Decimal
 from threading import Lock
+from typing import Any
 
 import duckdb
 import pytest
 
 from apple_health_mcp.server.query import (
     IMPORT_REQUIRED_MESSAGE,
+    OFFSET_DESCRIPTION,
     _coerce,
+    _count_sql_from_page_sql,
     imports_present,
     normalise_end_date,
+    normalise_pagination,
     query_to_json,
     require_imports_or_message,
     run_query,
+    run_query_envelope,
     run_query_payload,
 )
 
@@ -212,3 +217,141 @@ def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
         "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
     )
     assert require_imports_or_message(conn) is None
+
+
+# --- normalise_pagination ----------------------------------------------------
+
+
+def test_normalise_pagination_defaults() -> None:
+    assert normalise_pagination(None, None, default_limit=100, max_limit=1000) == (100, 0)
+
+
+def test_normalise_pagination_caps_limit_at_max() -> None:
+    assert normalise_pagination(5000, 0, default_limit=100, max_limit=1000) == (1000, 0)
+
+
+def test_normalise_pagination_rejects_zero_limit() -> None:
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        normalise_pagination(0, None, default_limit=100, max_limit=1000)
+
+
+def test_normalise_pagination_rejects_negative_limit() -> None:
+    with pytest.raises(ValueError, match="limit must be >= 1"):
+        normalise_pagination(-3, None, default_limit=100, max_limit=1000)
+
+
+def test_normalise_pagination_clamps_negative_offset_to_zero() -> None:
+    assert normalise_pagination(50, -7, default_limit=100, max_limit=1000) == (50, 0)
+
+
+# --- OFFSET_DESCRIPTION -------------------------------------------------------
+
+
+def test_offset_description_is_a_non_empty_string() -> None:
+    """Constant used by every envelope tool's ``offset`` field annotation."""
+    assert isinstance(OFFSET_DESCRIPTION, str)
+    assert OFFSET_DESCRIPTION
+    assert "Skip" in OFFSET_DESCRIPTION
+
+
+# --- _count_sql_from_page_sql -------------------------------------------------
+
+
+def test_count_sql_strips_limit_offset_tail() -> None:
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t WHERE x > ? LIMIT 50 OFFSET 100"
+    out = _count_sql_from_page_sql(sql)
+    assert "LIMIT" not in out.upper().split("FROM (", 1)[0]
+    assert "COUNT(*)" in out
+    # The inner subquery still contains the original WHERE clause.
+    assert "WHERE x > ?" in out
+
+
+def test_count_sql_strips_limit_only_tail() -> None:
+    """A SELECT without OFFSET still has the trailing LIMIT clause removed."""
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t LIMIT 10"
+    out = _count_sql_from_page_sql(sql)
+    # Tail LIMIT is gone from the outer wrap; the wrap itself is bare COUNT.
+    assert out.startswith("SELECT COUNT(*)")
+
+
+# --- run_query_envelope ------------------------------------------------------
+
+
+def _envelope_sql(table: str) -> str:
+    return f"SELECT x, COUNT(*) OVER () AS _total FROM {table} ORDER BY x LIMIT 1 OFFSET 5"
+
+
+def _seed_envelope_table(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t VALUES (1), (2), (3)")
+
+
+def test_run_query_envelope_recovers_total_when_offset_past_end() -> None:
+    """F1: ``offset > total`` must still surface the true ``total``."""
+    conn = duckdb.connect(":memory:")
+    _seed_envelope_table(conn)
+    out = run_query_envelope(conn, _envelope_sql("t"), [], offset=5, require_data=False)
+    payload = json.loads(out)
+    assert payload == {"items": [], "total": 3, "next_offset": None}
+
+
+def test_run_query_envelope_returns_zero_total_on_empty_table_no_offset() -> None:
+    """An empty result set at offset=0 still wires ``total=0`` (no fallback)."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 1 OFFSET 0"
+    out = run_query_envelope(conn, sql, [], offset=0, require_data=False)
+    assert json.loads(out) == {"items": [], "total": 0, "next_offset": None}
+
+
+def test_run_query_envelope_first_page_uses_window_total() -> None:
+    """Non-empty pages keep the single-query total path."""
+    conn = duckdb.connect(":memory:")
+    _seed_envelope_table(conn)
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 1 OFFSET 0"
+    out = run_query_envelope(conn, sql, [], offset=0, require_data=False)
+    payload = json.loads(out)
+    assert payload["total"] == 3
+    assert payload["next_offset"] == 1
+    assert payload["items"] == [{"x": 1}]
+
+
+def test_run_query_envelope_returns_error_string_on_failure() -> None:
+    conn = duckdb.connect(":memory:")
+    out = run_query_envelope(
+        conn,
+        "SELECT * FROM does_not_exist",
+        [],
+        offset=0,
+        require_data=False,
+    )
+    assert out.startswith("Error: ")
+
+
+def test_run_query_envelope_row_transform_applies_before_total_strip() -> None:
+    """F4: ``row_transform`` runs per item before ``_total`` is dropped."""
+    conn = duckdb.connect(":memory:")
+    _seed_envelope_table(conn)
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 100 OFFSET 0"
+    captured: list[dict[str, Any]] = []
+
+    def _transform(row: dict[str, Any]) -> dict[str, Any]:
+        # Confirm the transform sees ``_total`` (it has not been popped yet)
+        # and is allowed to mutate the wire-facing columns.
+        captured.append(dict(row))
+        row["x"] = row["x"] * 10
+        return row
+
+    out = run_query_envelope(conn, sql, [], offset=0, require_data=False, row_transform=_transform)
+    payload = json.loads(out)
+    assert [item["x"] for item in payload["items"]] == [10, 20, 30]
+    assert all("_total" not in item for item in payload["items"])
+    # ``_total`` is present at the moment the transform sees the row.
+    assert captured and all("_total" in c for c in captured)
+
+
+def test_run_query_envelope_gate_short_circuits_on_empty_db() -> None:
+    """An empty DB returns the import-required guidance string."""
+    conn = duckdb.connect(":memory:")
+    out = run_query_envelope(conn, "SELECT 1 AS x", [], offset=0)
+    assert out == IMPORT_REQUIRED_MESSAGE

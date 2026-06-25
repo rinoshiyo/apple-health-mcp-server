@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING, Annotated, Any
 from pydantic import Field
 
 from apple_health_mcp.server.query import (
-    query_to_json,
-    require_imports_or_message,
-    run_query_payload,
+    OFFSET_DESCRIPTION,
+    normalise_pagination,
+    run_query_envelope,
 )
 
 if TYPE_CHECKING:
@@ -82,46 +82,33 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(
-                description="Skip the first N samples before returning the "
-                "next `limit` items. Use with `limit` to paginate.",
-            ),
+            Field(description=OFFSET_DESCRIPTION),
         ] = None,
     ) -> str:
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
-        effective_offset = 0 if offset is None else max(0, offset)
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
-        # Issue #108 (PR-E): unified ``{items, total, next_offset}``
-        # envelope. ``sample_time`` still needs post-processing (Issue
-        # #96 / T8 normalisation), so this tool runs the SELECT itself
-        # rather than going through ``run_query_envelope``; the envelope
-        # is then assembled by hand around the normalised rows.
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         sql = (
             "SELECT sample_idx, bpm, sample_time, COUNT(*) OVER () AS _total "
             "FROM heart_rate_samples WHERE parent_record_hash = ? "
             f"ORDER BY sample_idx LIMIT {effective_limit} OFFSET {effective_offset}"
         )
-        try:
-            rows = query_to_json(conn, sql, [record_hash], lock=lock)
-        except Exception as exc:
-            return f"Error: {exc}"
-        total = int(rows[0]["_total"]) if rows else 0
-        items: list[dict[str, Any]] = []
-        for row in rows:
-            item = {k: v for k, v in row.items() if k != "_total"}
-            # Issue #96 (T8): normalise ``sample_time`` on the way out
-            # only (the underlying VARCHAR column stays as Apple's raw
-            # string so a future round-trip exporter has the literal
-            # value to write back).
-            item["sample_time"] = _parse_sample_time(item.get("sample_time"))
-            items.append(item)
-        next_offset: int | None = (
-            effective_offset + len(items) if (effective_offset + len(items)) < total else None
+
+        # Issue #96 (T8): normalise ``sample_time`` on the way out only
+        # (the underlying VARCHAR column stays as Apple's raw string so a
+        # future round-trip exporter has the literal value to write back).
+        def _transform(row: dict[str, Any]) -> dict[str, Any]:
+            row["sample_time"] = _parse_sample_time(row.get("sample_time"))
+            return row
+
+        return run_query_envelope(
+            conn,
+            sql,
+            [record_hash],
+            offset=effective_offset,
+            lock=lock,
+            row_transform=_transform,
         )
-        payload: dict[str, Any] = {
-            "items": items,
-            "total": total,
-            "next_offset": next_offset,
-        }
-        return run_query_payload(payload)

@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import normalise_end_date, run_query_envelope
+from apple_health_mcp.server.query import (
+    OFFSET_DESCRIPTION,
+    normalise_end_date,
+    normalise_pagination,
+    run_query_envelope,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -53,14 +58,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(
-                description="Skip the first N rows before returning the "
-                "next `limit` items. Use with `limit` to paginate.",
-            ),
+            Field(description=OFFSET_DESCRIPTION),
         ] = None,
     ) -> str:
-        effective_limit = _DEFAULT_LIMIT if limit is None else max(0, min(limit, _MAX_LIMIT))
-        effective_offset = 0 if offset is None else max(0, offset)
+        try:
+            effective_limit, effective_offset = normalise_pagination(
+                limit, offset, default_limit=_DEFAULT_LIMIT, max_limit=_MAX_LIMIT
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
         sql_parts = [
             "SELECT correlation_hash, correlation_type, source_name, "
             "start_date, end_date, COUNT(*) OVER () AS _total "
