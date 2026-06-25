@@ -24,7 +24,18 @@
     "entry_point": "uvx",
     "mcp_config": {
       "command": "uvx",
-      "args": ["apple-health-mcp-server", "serve"]
+      "args": ["apple-health-mcp-server", "serve"],
+      "env": {
+        "APPLE_HEALTH_DB": "${user_config.db_path}"
+      }
+    }
+  },
+  "user_config": {
+    "db_path": {
+      "type": "file",
+      "title": "Database file",
+      "description": "Path to the DuckDB database file holding your imported Apple Health data. On Windows, Claude Desktop runs inside an MSIX AppContainer sandbox that redirects %LOCALAPPDATA%, so the server cannot see the DB the importer wrote to under the system path. Pointing this entry at a stable location outside the sandbox (for example C:\\Users\\<you>\\apple-health\\health.duckdb) lets both the terminal importer and Claude Desktop's server read the same file. On macOS / Linux the platform default is fine; leave this empty to fall back to ~/.local/share/apple-health-mcp/health.duckdb.",
+      "required": false
     }
   },
   "compatibility": {
