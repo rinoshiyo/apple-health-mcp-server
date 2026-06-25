@@ -29,6 +29,8 @@ _APP_DIR_NAME = "apple-health-mcp"
 _DB_FILE_NAME = "health.duckdb"
 _DEFAULT_THREADS = 4
 _TZ_ENV_VAR = "APPLE_HEALTH_TZ"
+_DB_ENV_VAR = "APPLE_HEALTH_DB"
+_DATA_DIR_ENV_VAR = "APPLE_HEALTH_DATA_DIR"
 # IANA TZ names are alphanumerics plus '/', '_', '+', '-'. DuckDB's
 # `SET TimeZone = '...'` cannot be parameterised, so we validate against
 # this whitelist before interpolating to keep the surface free of SQL
@@ -54,12 +56,58 @@ def _apply_session_tz(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(f"SET TimeZone = '{tz}';")
 
 
-def default_db_path() -> Path:
-    """Return the platform-appropriate default DuckDB path.
+def resolve_db_path() -> Path:
+    """Resolve the DuckDB path with environment-variable override precedence.
 
-    On Windows we honour ``LOCALAPPDATA`` and fall back to ``~/AppData/Local``
-    when the environment variable is unset (unlikely outside of stripped CI
-    images, but the fallback keeps the call total).
+    Precedence (most → least specific):
+
+    1. ``APPLE_HEALTH_DB`` — file path, ``~`` is expanded. Takes precedence
+       over every other source. Use this when the caller wants the
+       server / CLI to open a specific file (e.g. the MCPB bundle injects
+       this from ``user_config.db_path`` to escape the Windows MSIX
+       AppContainer redirect of ``%LOCALAPPDATA%``).
+    2. ``APPLE_HEALTH_DATA_DIR`` — directory path, ``~`` is expanded, and the
+       default file name (``health.duckdb``) is appended. Use this when
+       you want a custom data root but keep the package's file name.
+
+       NOTE: unlike the platform default, ``APPLE_HEALTH_DATA_DIR`` is
+       treated as the FINAL parent — the DB sits directly under it,
+       without the ``apple-health-mcp/`` subdir. The env var is a
+       deliberate opt-in override, so the caller owns the layout (and
+       therefore also the responsibility for permissions; the auto
+       ``chmod 0700`` in :func:`_ensure_parent_dir` only fires when
+       the parent's basename matches the package).
+    3. Platform default — XDG_DATA_HOME on POSIX, LOCALAPPDATA on
+       Windows; both nested under ``apple-health-mcp/`` so the
+       auto-chmod still applies.
+
+    The server and CLI share this single resolver so any future env
+    or launcher hook can only drift in one place.
+    """
+    env_db = os.environ.get(_DB_ENV_VAR)
+    if env_db:
+        return Path(env_db).expanduser()
+    env_dir = os.environ.get(_DATA_DIR_ENV_VAR)
+    if env_dir:
+        return Path(env_dir).expanduser() / _DB_FILE_NAME
+    return _platform_default_dir() / _DB_FILE_NAME
+
+
+def _platform_default_dir() -> Path:
+    """Return the package's platform-appropriate app data directory.
+
+    Extracted from the historic :func:`default_db_path` so
+    :func:`resolve_db_path` can reuse the platform-default lookup
+    without inlining the OS branching. The returned directory always
+    ends in the package's ``apple-health-mcp/`` subdir; this keeps
+    :func:`_ensure_parent_dir`'s name-based ``chmod 0700`` guard
+    firing for the package-owned case while leaving user-supplied
+    or env-supplied paths untouched.
+
+    On Windows we honour ``LOCALAPPDATA`` and fall back to
+    ``~/AppData/Local`` when the environment variable is unset
+    (unlikely outside of stripped CI images, but the fallback keeps
+    the call total).
     """
     if sys.platform == "win32":
         base_env = os.environ.get("LOCALAPPDATA")
@@ -67,7 +115,18 @@ def default_db_path() -> Path:
     else:
         base_env = os.environ.get("XDG_DATA_HOME")
         base = Path(base_env) if base_env else Path.home() / ".local" / "share"
-    return base / _APP_DIR_NAME / _DB_FILE_NAME
+    return base / _APP_DIR_NAME
+
+
+def default_db_path() -> Path:
+    """Return the resolved DuckDB path (backward-compatible alias).
+
+    Identical to :func:`resolve_db_path`; kept so external callers and
+    docs that reference ``default_db_path`` continue to work. New code
+    should call :func:`resolve_db_path` directly so the env-override
+    precedence is visible at the call site.
+    """
+    return resolve_db_path()
 
 
 def _ensure_parent_dir(db_path: Path) -> None:
@@ -115,7 +174,7 @@ def get_connection(
     current or raises :class:`ConfigError` carrying the re-import
     guidance.
     """
-    resolved = db_path if db_path is not None else default_db_path()
+    resolved = db_path if db_path is not None else resolve_db_path()
     if read_only:
         if not resolved.exists():
             _materialise_empty_db(resolved)
