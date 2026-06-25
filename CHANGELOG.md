@@ -17,8 +17,11 @@ v0.x.y disclaimer and the public-API scope.
   stable tag lands and the LP footer auto-syncs. The step now links
   to <https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest>
   in both `docs/i18n/en.json` and `docs/i18n/ja.json` so the install
-  link never goes stale, regardless of release cadence. Layer 2
-  (LP copy / install ergonomics), not a wire-contract change.
+  link never goes stale, regardless of release cadence. Note that
+  GitHub's `/releases/latest` skips pre-releases by design, so during
+  rc windows the LP install step keeps pointing at the previous
+  stable release. Layer 2 (LP copy / install ergonomics), not a
+  wire-contract change.
 
 ## [0.3.0-rc1] - 2026-06-25
 
