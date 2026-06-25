@@ -213,6 +213,18 @@ CREATE TABLE IF NOT EXISTS correlation_members (
     import_id           VARCHAR NOT NULL
 );
 
+-- The ``export_*`` identifiers in this file (``imports.export_dir``,
+-- ``imports.export_xml_sha256``, the ``export_metadata`` table, and
+-- ``export_metadata.export_date``) all refer to Apple Health's own
+-- "export" function -- the upstream artefact this MCP server ingests
+-- via the ``import`` subcommand. They do NOT mean the server exports
+-- anything; this MCP server is read-only on the wire (the dual
+-- "import + serve" CLI mirrors the import / read split, not an
+-- import / export split). This naming follows the upstream
+-- vocabulary so contributors mapping Apple's docs to the schema
+-- have a 1:1 lookup; issue #131 may revisit the convention if the
+-- import-vs-export overload causes confusion at scale.
+
 CREATE TABLE IF NOT EXISTS imports (
     import_id          VARCHAR,
     export_dir         VARCHAR NOT NULL,
