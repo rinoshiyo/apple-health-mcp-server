@@ -25,6 +25,7 @@ from apple_health_mcp.server.tools import (
     get_import_history,
     get_me_attributes,
     get_record_statistics,
+    get_server_info,
     get_workout_details,
     get_workout_route,
     list_correlations,
@@ -958,3 +959,137 @@ def test_run_custom_query_runs_on_empty_db(empty_conn: duckdb.DuckDBPyConnection
     fn = _bind(run_custom_query, empty_conn)
     rows = _call(fn, query="SELECT COUNT(*) AS n FROM imports")
     assert rows == [{"n": 0}]
+
+
+# --- get_server_info ---------------------------------------------------------
+
+
+def _server_info(fn: Any) -> dict[str, Any]:
+    """Decode the diagnostic JSON object returned by ``get_server_info``."""
+    payload = _call(fn)
+    assert isinstance(payload, dict)
+    assert set(payload.keys()) == {"db_path", "version", "record_count", "config_source"}
+    return payload
+
+
+def test_get_server_info_returns_diagnostic_shape(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """The four-field self-diagnosis payload survives a happy path."""
+    from apple_health_mcp import __version__
+
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["version"] == __version__
+    # The seeded fixture has at least the records seeded by the conftest
+    # (3 records of HeartRate + StepCount + 2 BP + StateOfMind, etc.).
+    # Asserting > 0 keeps this test from coupling to the exact seed
+    # count, which the conftest grows independently.
+    assert info["record_count"] > 0
+
+
+def test_get_server_info_records_count_zero_on_empty_db(
+    empty_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Empty (schema-only) DB reports ``record_count = 0`` rather than erroring."""
+    fn = _bind(get_server_info, empty_conn)
+    info = _server_info(fn)
+    assert info["record_count"] == 0
+
+
+def test_get_server_info_reports_open_db_path(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """``db_path`` reflects the in-memory sentinel for the conftest fixture.
+
+    The conftest uses ``get_in_memory_connection`` so DuckDB reports
+    the connection as the ``memory`` DB with no file backing; the
+    diagnostic collapses that to ``":memory:"`` so the diagnostic
+    output is deterministic instead of an empty string. The point
+    of this test is that the diagnostic does NOT silently re-resolve
+    via ``resolve_db_path()`` (which would have returned the platform
+    XDG path, not the actual in-memory handle).
+    """
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["db_path"] == ":memory:"
+
+
+def test_get_server_info_reports_on_disk_db_path(tmp_path: Any) -> None:
+    """An on-disk connection's ``db_path`` is the absolute file path DuckDB opened.
+
+    Covers the alternate branch of ``_open_db_path`` where DuckDB
+    reports a non-NULL ``file`` column (every real serve invocation
+    against the XDG / LOCALAPPDATA default or an env-overridden path).
+    Without this case the on-disk branch would be unreachable from
+    the in-memory test suite — and the very contract the diagnostic
+    exists to enforce (\"report the path you actually opened\") would
+    have no test.
+    """
+    from apple_health_mcp.db import ensure_schema, get_connection
+
+    on_disk = tmp_path / "diag.duckdb"
+    conn = get_connection(on_disk)
+    try:
+        ensure_schema(conn)
+        fn = _bind(get_server_info, conn)
+        info = _server_info(fn)
+        assert info["db_path"] == str(on_disk)
+    finally:
+        conn.close()
+
+
+def test_get_server_info_config_source_apple_health_db(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """APPLE_HEALTH_DB set -> ``config_source == 'env:APPLE_HEALTH_DB'``."""
+    monkeypatch.setenv("APPLE_HEALTH_DB", "/tmp/explicit.duckdb")
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == "env:APPLE_HEALTH_DB"
+
+
+def test_get_server_info_config_source_apple_health_data_dir(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only APPLE_HEALTH_DATA_DIR set -> ``config_source == 'env:APPLE_HEALTH_DATA_DIR'``."""
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.setenv("APPLE_HEALTH_DATA_DIR", "/tmp/data-root")
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == "env:APPLE_HEALTH_DATA_DIR"
+
+
+def test_get_server_info_config_source_platform_default(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both env vars unset -> ``config_source == 'platform_default'``."""
+    monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == "platform_default"
+
+
+def test_get_server_info_config_source_blank_env_falls_through(
+    seeded_conn: duckdb.DuckDBPyConnection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``APPLE_HEALTH_DB=""`` is reported as ``platform_default``.
+
+    Mirrors the resolver's blank-after-strip-falls-through contract so
+    a user who did ``export APPLE_HEALTH_DB=`` in their shell rc sees
+    the diagnostic agree with what the connection layer actually
+    opened (the platform default). Without this rule the diagnostic
+    would report ``env:APPLE_HEALTH_DB`` while the resolver opened
+    the XDG path — a divergence that would defeat the tool's purpose.
+    """
+    monkeypatch.setenv("APPLE_HEALTH_DB", "")
+    monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
+    fn = _bind(get_server_info, seeded_conn)
+    info = _server_info(fn)
+    assert info["config_source"] == "platform_default"
