@@ -14,19 +14,27 @@ if TYPE_CHECKING:
 
 DESCRIPTION = (
     "List all data imports. Returns: import_id, export_dir, imported_at, "
-    "record_count, workout_count, duration_secs, export_xml_sha256 "
-    "(hex sha256 of the source export.xml; NULL on rows finalized before "
-    "the column was introduced)."
+    "record_count (Phase-1 parse count of Apple Health <Record> elements, "
+    "BEFORE Correlation-child dedup), workout_count, duration_secs, "
+    "export_xml_sha256 (hex sha256 of the source export.xml; NULL on rows "
+    "finalized before the column was introduced), records_after_dedup "
+    "(rows surviving in the records table after Phase 4 Correlation "
+    "dedup; record_count - records_after_dedup is the number of "
+    "Correlation duplicates collapsed -- Apple duplicates Correlation "
+    "children at the top level by spec. NULL on rows finalized before "
+    "v0.3.0 #129 AND on Tier-2 incremental re-imports where the dedup "
+    "pass was skipped -- treat NULL as 'no dedup measurement available' "
+    "rather than computing a misleading delta)."
 )
 
 # Explicit column list (rather than ``SELECT *``) mirrors the audit-batch
 # principle applied to T5 / T6 / T12: future ``ALTER TABLE imports ADD
 # COLUMN`` work cannot leak into the wire shape without a deliberate
-# description / schema bump. The order matches the description above so
-# the LLM-facing prose and SQL projection stay in sync.
+# description / schema bump. The column order matches the description
+# above so the LLM-facing prose and SQL projection stay in sync.
 _SQL = (
     "SELECT import_id, export_dir, imported_at, record_count, "
-    "workout_count, duration_secs, export_xml_sha256 "
+    "workout_count, duration_secs, export_xml_sha256, records_after_dedup "
     "FROM imports ORDER BY imported_at DESC"
 )
 

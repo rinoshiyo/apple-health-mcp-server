@@ -32,6 +32,28 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Breaking
 
+- **`imports.records_after_dedup` column + schema_version 4 bump** (issue #129).
+  The `imports` table gains a `records_after_dedup BIGINT` column carrying
+  the Phase-4 post-dedup row count for the import. `record_count` keeps its
+  pre-dedup parse count semantics; the difference between the two is the
+  number of Correlation-derived duplicates collapsed (Apple Health
+  duplicates `<Correlation>` children at the top level by spec — see
+  CLAUDE.md §5). `get_import_history` returns the new field in every row.
+  Bumps `CURRENT_SCHEMA_VERSION` to `4`; no in-place migration is registered
+  for v=3 → v=4, so pre-PR-D DBs raise the same friendly re-import
+  `ConfigError` PR #126 introduced (same `rm <db> && apple-health-mcp-server
+  import <export>` recovery). Closes the "where did the 125 records go?"
+  diagnostic gap that surfaced during the v0.3.0-rc2 dogfood.
+
+  **SemVer classification** (per the Layer 1 / Layer 2 split documented
+  in PR #107): the schema bump itself is Layer 2 (DB on-disk surface);
+  the `get_import_history` MCP wire response now contains the new
+  `records_after_dedup` field, which IS Layer 1 (wire-facing). v0.3.0
+  ships both classes of change together because the v0.x SemVer
+  disclaimer in the README's "Compatibility" section already allows
+  minor-version wire breakage; from v1.0.0 onward an additive
+  Layer 1 field of this kind would justify a minor bump on its own.
+
 - **Dropped automatic schema migration from v0.2.x DBs** (issue #124).
   The `heart_rate_samples.sample_time` VARCHAR → DOUBLE in-place
   migration introduced in v0.3.0-rc2 (PR #117) collided with the

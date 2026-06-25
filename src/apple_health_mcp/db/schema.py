@@ -217,6 +217,16 @@ CREATE TABLE IF NOT EXISTS imports (
     import_id          VARCHAR,
     export_dir         VARCHAR NOT NULL,
     imported_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- ``record_count`` counts Apple Health ``<Record>`` elements parsed
+    -- in Phase 1 BEFORE Phase 4's Correlation-child dedup runs (Apple
+    -- duplicates Correlation children at the top level by spec; see
+    -- CLAUDE.md §5). ``records_after_dedup`` (last column, added in
+    -- v0.3.0 / issue #129) counts the surviving rows in the ``records``
+    -- table for this import after that dedup, so
+    -- ``record_count - records_after_dedup`` is the number of
+    -- Correlation-derived duplicates collapsed. Both fields exist so
+    -- "import history" diagnostics can show the dedup ratio without
+    -- the operator having to grep the importer logs.
     record_count       BIGINT,
     workout_count      BIGINT,
     duration_secs      DOUBLE,
@@ -224,7 +234,10 @@ CREATE TABLE IF NOT EXISTS imports (
     -- the column was introduced (#62); a fresh import always stamps it so
     -- the orchestrator can match a subsequent re-import against the most
     -- recent stamped row and exit early when the file is byte-identical.
-    export_xml_sha256  VARCHAR
+    export_xml_sha256  VARCHAR,
+    -- NULL on rows from pre-#129 imports and on Tier-2 incremental
+    -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
+    records_after_dedup BIGINT
 );
 
 -- Captures the root <HealthData locale="..."> attribute and the
@@ -595,6 +608,13 @@ ALTER TABLE state_of_mind ALTER COLUMN import_id SET NOT NULL;
 _CREATE_INDEXES_SQL = """
 CREATE INDEX IF NOT EXISTS idx_records_type_date ON records(record_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_records_source ON records(source_name);
+-- ``imports.records_after_dedup`` (issue #129) is populated by
+-- ``SELECT COUNT(*) FROM records WHERE import_id = ?`` immediately after
+-- ``finalize_import``. Without this index that COUNT degenerates to a
+-- full table scan over every records row at every import (multi-million
+-- rows on a real export), turning a sub-second diagnostic into a
+-- multi-second blocker on the finalize path.
+CREATE INDEX IF NOT EXISTS idx_records_import_id ON records(import_id);
 CREATE INDEX IF NOT EXISTS idx_workouts_type_date ON workouts(activity_type, start_date);
 CREATE INDEX IF NOT EXISTS idx_route_points_workout ON route_points(workout_hash);
 CREATE INDEX IF NOT EXISTS idx_workout_metadata_hash ON workout_metadata(workout_hash);

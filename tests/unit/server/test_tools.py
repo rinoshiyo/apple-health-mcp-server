@@ -241,7 +241,7 @@ def test_get_workout_details_db_error_path(
     """
     empty_conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     empty_conn.execute("DROP TABLE workouts")
     fn = _bind(get_workout_details, empty_conn)
@@ -586,7 +586,7 @@ def test_get_correlation_details_missing(
 def test_get_correlation_details_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
     empty_conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     empty_conn.execute("DROP TABLE correlations")
     fn = _bind(get_correlation_details, empty_conn)
@@ -685,7 +685,7 @@ def test_get_ecg_data_missing_returns_zero_stats(
 def test_get_ecg_data_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
     empty_conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     empty_conn.execute("DROP TABLE ecg_readings")
     fn = _bind(get_ecg_data, empty_conn)
@@ -748,6 +748,11 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
         "workout_count",
         "duration_secs",
         "export_xml_sha256",
+        # Issue #129 (PR-D): post-Phase-4-dedup row count. Pinning the
+        # field's presence in the wire shape locks the breaking change
+        # in -- a future ``ALTER TABLE imports DROP COLUMN`` would have
+        # to update this set too.
+        "records_after_dedup",
     }
     assert set(rows[0].keys()) == expected_fields
 
@@ -808,7 +813,7 @@ def test_get_me_attributes_returns_empty_when_import_lacks_me_row(
     # are testing the ``rows[0] if rows else {}`` branch in the tool itself.
     empty_conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     fn = _bind(get_me_attributes, empty_conn)
     payload = _call(fn)
@@ -818,7 +823,7 @@ def test_get_me_attributes_returns_empty_when_import_lacks_me_row(
 def test_get_me_attributes_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
     empty_conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     empty_conn.execute("DROP TABLE me_attributes")
     fn = _bind(get_me_attributes, empty_conn)

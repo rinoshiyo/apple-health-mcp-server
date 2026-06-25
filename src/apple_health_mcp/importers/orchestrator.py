@@ -181,12 +181,44 @@ def run_import(
         finalize_import(conn, skip_dedup=existing is not None)
 
         duration_secs = time.monotonic() - start
+        # Issue #129: ``record_count`` is the Phase-1 parse count
+        # (BEFORE Phase 4's Correlation-child dedup). The companion
+        # ``records_after_dedup`` is meaningful ONLY on Tier-1 fresh
+        # imports where ``finalize_import`` ran the dedup pass: in
+        # that case the surviving rows in ``records`` for this
+        # ``actual_import_id`` reflect the dedup outcome, so
+        # ``record_count - records_after_dedup`` is the Correlation
+        # collapse count the docstring promises.
+        #
+        # On a Tier-2 incremental re-import (``existing is not None``)
+        # the dedup pass is skipped and the importer drops every
+        # previously-seen row before INSERT, so a ``COUNT WHERE
+        # import_id = ?`` here would return "rows newly inserted in
+        # this run" -- a number whose subtraction from
+        # ``record_count`` does NOT mean "Correlation duplicates
+        # collapsed". Storing NULL instead is the honest signal that
+        # this import row carries no dedup measurement; the wire
+        # description already documents NULL as "no Phase-4 dedup
+        # ran for this import row" so downstream LLMs can skip the
+        # subtraction rather than computing a misleading delta.
+        if existing is None:
+            # ``COUNT(*)`` always returns a single-row result so
+            # ``fetchone()`` is never None at runtime; the assert is
+            # purely for the type checker (``fetchone() -> tuple | None``).
+            post_dedup_row = conn.execute(
+                "SELECT COUNT(*) FROM records WHERE import_id = ?",
+                [actual_import_id],
+            ).fetchone()
+            assert post_dedup_row is not None
+            records_after_dedup: int | None = int(post_dedup_row[0])
+        else:
+            records_after_dedup = None
         conn.execute(
             """
             INSERT INTO imports (
                 import_id, export_dir, record_count, workout_count, duration_secs,
-                export_xml_sha256
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                export_xml_sha256, records_after_dedup
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
@@ -195,6 +227,7 @@ def run_import(
                 stats.workouts,
                 duration_secs,
                 export_sha,
+                records_after_dedup,
             ],
         )
 

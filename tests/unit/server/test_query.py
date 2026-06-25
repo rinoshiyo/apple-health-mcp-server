@@ -214,7 +214,7 @@ def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
     ensure_schema(conn)
     conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
     )
     assert require_imports_or_message(conn) is None
 
