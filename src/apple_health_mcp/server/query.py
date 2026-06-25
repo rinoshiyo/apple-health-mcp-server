@@ -243,3 +243,50 @@ def run_query(
 def run_query_payload(payload: object) -> str:
     """Pretty-print an already-built tool response payload."""
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def run_query_envelope(
+    conn: duckdb.DuckDBPyConnection,
+    sql: str,
+    params: list[Any] | tuple[Any, ...],
+    *,
+    offset: int,
+    lock: Lock | None = None,
+    require_data: bool = True,
+) -> str:
+    """Execute ``sql`` and return a ``{items, total, next_offset}`` envelope.
+
+    Issue #108 (PR-E): unified pagination envelope for list/page tools.
+
+    ``sql`` MUST select a ``COUNT(*) OVER () AS _total`` column alongside
+    the user-facing columns so ``total`` can be derived from the first
+    row (or 0 when the result set is empty) without a second round trip.
+    The ``_total`` column is stripped from the per-item payload so the
+    wire shape exposes only the columns the SQL projected for display.
+
+    ``next_offset`` is ``offset + len(items)`` when more rows remain
+    (i.e. ``offset + len(items) < total``), else ``None`` to signal that
+    the caller has exhausted the result set. Clients should treat
+    ``next_offset is None`` as the canonical "last page" marker.
+
+    Errors (including the empty-DB gate) come back as the same
+    ``"Error: ..."`` / ``IMPORT_REQUIRED_MESSAGE`` strings that
+    :func:`run_query` produces, so the wire contract for failure modes
+    stays uniform across the bare-array and envelope-shaped tools.
+    """
+    try:
+        if require_data and not imports_present(conn, lock=lock):
+            return IMPORT_REQUIRED_MESSAGE
+        rows = query_to_json(conn, sql, params, lock=lock)
+    except Exception as exc:
+        _logger.debug("query failed: %s", exc)
+        return f"Error: {exc}"
+    total = int(rows[0]["_total"]) if rows else 0
+    items = [{k: v for k, v in row.items() if k != "_total"} for row in rows]
+    next_offset: int | None = offset + len(items) if (offset + len(items)) < total else None
+    payload: dict[str, Any] = {
+        "items": items,
+        "total": total,
+        "next_offset": next_offset,
+    }
+    return run_query_payload(payload)

@@ -160,12 +160,14 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         # Issue #91 (T1): wire field is ``record_type``.
         assert any(r["record_type"] == "HKQuantityTypeIdentifierHeartRate" for r in rows)
 
-        # 2. query_records
-        rows = call_tool(
+        # 2. query_records -- envelope shape (issue #108 / PR-E).
+        payload = call_tool(
             bind_tool(query_records, conn),
             record_type="HKQuantityTypeIdentifierHeartRate",
         )
-        assert len(rows) == 2
+        assert len(payload["items"]) == 2
+        assert payload["total"] == 2
+        assert payload["next_offset"] is None
 
         # 3. get_record_statistics
         rows = call_tool(
@@ -174,9 +176,9 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         )
         assert isinstance(rows, list)
 
-        # 4. list_workouts
-        rows = call_tool(bind_tool(list_workouts, conn))
-        assert any(r["workout_hash"] == workout_hash for r in rows)
+        # 4. list_workouts -- envelope shape.
+        payload = call_tool(bind_tool(list_workouts, conn))
+        assert any(r["workout_hash"] == workout_hash for r in payload["items"])
 
         # 5. get_workout_details
         payload = call_tool(bind_tool(get_workout_details, conn), workout_hash=workout_hash)
@@ -186,20 +188,21 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         rows = call_tool(bind_tool(get_activity_summaries, conn))
         assert rows and rows[0]["date_components"] == "2024-06-15"
 
-        # 7. get_workout_route -- envelope shape (issue #95 / T7).
+        # 7. get_workout_route -- envelope shape (issue #108 / PR-E).
         payload = call_tool(bind_tool(get_workout_route, conn), workout_hash=workout_hash)
         assert payload["total"] == 3
-        assert len(payload["points"]) == 3
-        assert payload["has_more"] is False
+        assert len(payload["items"]) == 3
+        assert payload["next_offset"] is None
 
-        # 8. get_heart_rate_samples (no embedded HR samples in the fixture,
-        # but the tool must still return a list).
-        rows = call_tool(bind_tool(get_heart_rate_samples, conn), record_hash=hr_record_hash)
-        assert isinstance(rows, list)
+        # 8. get_heart_rate_samples -- envelope shape (no embedded HR
+        # samples in the fixture, but the tool must still wrap them).
+        payload = call_tool(bind_tool(get_heart_rate_samples, conn), record_hash=hr_record_hash)
+        assert isinstance(payload["items"], list)
+        assert payload["next_offset"] is None
 
-        # 9. list_correlations
-        rows = call_tool(bind_tool(list_correlations, conn))
-        assert any(r["correlation_hash"] == correlation_hash for r in rows)
+        # 9. list_correlations -- envelope shape.
+        payload = call_tool(bind_tool(list_correlations, conn))
+        assert any(r["correlation_hash"] == correlation_hash for r in payload["items"])
 
         # 10. get_correlation_details
         payload = call_tool(
@@ -209,9 +212,9 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         assert payload["correlation"]["correlation_hash"] == correlation_hash
         assert len(payload["members"]) == 2
 
-        # 11. list_ecg_readings
-        rows = call_tool(bind_tool(list_ecg_readings, conn))
-        assert rows[0]["ecg_hash"] == ecg_hash
+        # 11. list_ecg_readings -- envelope shape.
+        payload = call_tool(bind_tool(list_ecg_readings, conn))
+        assert payload["items"][0]["ecg_hash"] == ecg_hash
 
         # 12. get_ecg_data
         payload = call_tool(
@@ -244,9 +247,9 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
         smoke_row = next(r for r in rows if r["import_id"] == "imp_smoke")
         assert smoke_row["imported_at"] is not None
 
-        # 16. list_state_of_mind
-        rows = call_tool(bind_tool(list_state_of_mind, conn))
-        assert len(rows) == 1
+        # 16. list_state_of_mind -- envelope shape.
+        payload = call_tool(bind_tool(list_state_of_mind, conn))
+        assert len(payload["items"]) == 1
 
         # 17. get_me_attributes — round-trip the <Me> element written into
         # sample_export.xml.

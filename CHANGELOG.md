@@ -9,6 +9,24 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Pagination envelope unified across all 7 list/page tools** (issue
+  #108, PR-E). `query_records`, `list_workouts`, `list_correlations`,
+  `list_state_of_mind`, `list_ecg_readings`, `get_heart_rate_samples`,
+  and `get_workout_route` now return `{items, total, next_offset}`.
+  The 6 tools that previously returned bare arrays gain the envelope
+  wrapper; `get_workout_route` renames its `points` key to `items`
+  and the `has_more` flag is dropped everywhere — `next_offset is
+  null` is now the canonical "last page" marker. Each tool also
+  gains an `offset` parameter so callers can paginate via the
+  returned `next_offset`. `total` is computed via
+  `COUNT(*) OVER ()` in the same SELECT as the page rows so each
+  request still takes one DB round trip. Clients reading the raw
+  array (`json.loads(response)`) must switch to
+  `json.loads(response)["items"]`; clients matching `has_more` must
+  switch to `next_offset is None`.
+
 ### Changed
 
 - **LP install step now points at the GitHub Releases latest page**
