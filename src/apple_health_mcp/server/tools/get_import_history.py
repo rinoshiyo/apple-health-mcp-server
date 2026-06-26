@@ -25,9 +25,8 @@ DESCRIPTION = (
     "v0.3.0 #129 AND on Tier-2 incremental re-imports where the dedup "
     "pass was skipped -- treat NULL as 'no dedup measurement available' "
     "rather than computing a misleading delta), source_zip_sha256 / "
-    "source_zip_mtime / source_zip_size (the ZIP-flow triple set by "
-    "the v0.4 import_zip MCP tool when an import was driven from a "
-    "ZIP in export_zips_dir; NULL on rows produced by the CLI "
+    "source_zip_mtime / source_zip_size (identity of the source ZIP "
+    "for re-import dedup; NULL on rows produced by the CLI "
     "`import <dir>` path because the source artefact was a directory)."
 )
 

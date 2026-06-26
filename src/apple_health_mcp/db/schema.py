@@ -250,18 +250,17 @@ CREATE TABLE IF NOT EXISTS imports (
     -- NULL on rows from pre-#129 imports and on Tier-2 incremental
     -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
     records_after_dedup BIGINT,
-    -- v0.4 (issue #148): the source ZIP triple that ``list_zips`` /
-    -- ``import_zip`` look up to skip re-importing a byte-identical ZIP.
-    -- ``source_zip_sha256`` is the hex sha256 of the whole ZIP file;
-    -- ``source_zip_mtime`` / ``source_zip_size`` form the cheap
-    -- (mtime, size) cache key that ``list_zips`` uses to avoid
-    -- re-hashing a 1.2 GB ZIP on every directory scan. All three are
-    -- NULL on rows produced by the CLI ``import <dir>`` path or by
-    -- any pre-v0.4 importer build, because the source artefact was
-    -- a directory rather than a ZIP and the triple has no meaningful
-    -- value there. The ZIP-flow tools query ``WHERE
-    -- source_zip_sha256 IS NOT NULL`` so legacy rows are correctly
-    -- treated as "no ZIP cache" rather than as a placeholder match.
+    -- v0.4 (issue #148): the source ZIP triple. ``source_zip_sha256`` is
+    -- the hex sha256 of the whole ZIP file; ``source_zip_mtime`` /
+    -- ``source_zip_size`` form the cheap (mtime, size) cache key that
+    -- avoids re-hashing a 1.2 GB ZIP on every directory scan. All three
+    -- are NULL on rows produced by the CLI ``import <dir>`` path or by
+    -- any pre-v0.4 importer build because the source artefact was a
+    -- directory rather than a ZIP. ``source_zip_mtime`` is a stat()
+    -- snapshot used as a cache key only -- do not render it to users
+    -- alongside ``imported_at``; it is not a user-facing wall-clock
+    -- event despite sharing the TIMESTAMPTZ type for schema-wide
+    -- consistency.
     source_zip_sha256  VARCHAR,
     source_zip_mtime   TIMESTAMPTZ,
     source_zip_size    BIGINT

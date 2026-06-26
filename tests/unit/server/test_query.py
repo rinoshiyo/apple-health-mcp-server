@@ -26,6 +26,7 @@ from apple_health_mcp.server.query import (
     run_query_envelope,
     run_query_payload,
 )
+from tests._helpers import seed_one_import
 
 
 def test_coerce_none() -> None:
@@ -212,11 +213,7 @@ def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
 
     conn = duckdb.connect(":memory:")
     ensure_schema(conn)
-    conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', "
-        "0, 0, 0, NULL, 0, NULL, NULL, NULL)"
-    )
+    seed_one_import(conn)
     assert require_imports_or_message(conn) is None
 
 
