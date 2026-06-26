@@ -14,7 +14,7 @@
 `apple-health-mcp-server` exposes the contents of your Apple Health export
 (`export.xml` plus the ECG CSV and GPX route files Apple ships alongside it)
 to any [Model Context Protocol](https://modelcontextprotocol.io/) client —
-including Claude Desktop — through 18 read-oriented tools backed by a local
+including Claude Desktop — through 20 MCP tools (18 read-oriented + 2 zip-flow) backed by a local
 [DuckDB](https://duckdb.org/) database.
 
 ## Features
@@ -82,19 +82,21 @@ Then:
 2. Open Claude Desktop's **Settings → Connectors** panel
 3. Drag-and-drop the `.mcpb` file onto the panel — Claude Desktop will
    install it and prompt to enable the server
-4. **Windows (issue #128):** the install dialog includes a
-   **Database file** field. Point it at a stable path **outside**
-   `%LOCALAPPDATA%`, e.g. `C:\Users\<you>\apple-health\health.duckdb`,
-   and pass the **same** path as `--db` when you run `import` from a
-   terminal. The reason: Claude Desktop on Windows ships as an MSIX
-   package whose child processes run inside an AppContainer sandbox
-   that virtualises `%LOCALAPPDATA%` to a per-package private path.
-   The terminal-side importer writes outside the sandbox; the
-   sandboxed server reads inside it; without a stable shared path
-   the two never see each other and every tool returns "no data has
-   been imported" even though the import succeeded. macOS / Linux
-   users can leave the field blank — there's no sandbox redirect on
-   those platforms.
+4. The install dialog asks for **Export ZIPs directory** — point it
+   at a folder where you keep your Apple Health export ZIPs
+   (e.g. `C:\Users\<you>\Documents\AppleHealth` on Windows,
+   `~/Documents/AppleHealth` on macOS / Linux). Drop your
+   `export.zip` into that folder, then ask Claude to import it:
+   "Hey Claude, import the latest Apple Health export." Claude calls
+   `list_zips` → `import_zip(id="…")` and the data is queryable
+   ~1–2 minutes later — no terminal commands required.
+5. **Windows users only — avoid `%LOCALAPPDATA%` subfolders.** Claude
+   Desktop on Windows ships as an MSIX package whose child processes
+   run inside an AppContainer sandbox that virtualises
+   `%LOCALAPPDATA%` to a per-package private path. If the Export ZIPs
+   directory falls under that root, `list_zips` will not see ZIPs you
+   drop there from Explorer. Pick a path under `%USERPROFILE%`
+   (Documents, Desktop, etc.) instead.
 
 The MCPB format is documented at <https://github.com/anthropics/mcpb>;
 both `.dxt` (legacy) and `.mcpb` extensions are accepted by Claude
@@ -223,11 +225,14 @@ By default the database lands at the XDG-resolved data directory:
 Override precedence (most → least specific):
 
 1. `--db /custom/path/health.duckdb` on either subcommand.
-2. `APPLE_HEALTH_DB` env var (file path) — what the MCPB bundle's
-   **Database file** GUI field promotes into. Same precedence as
+2. `APPLE_HEALTH_DB` env var (file path) — same precedence as
    `--db` because the CLI promotes `--db` into this env so any
    downstream caller resolving through `resolve_db_path()` agrees
-   with what the connection layer actually opened.
+   with what the connection layer actually opened. v0.4 dropped the
+   MCPB GUI field for this; Claude Desktop users who need a custom
+   DB location now edit `claude_desktop_config.json` directly (see
+   the manual JSON config section above) and add `APPLE_HEALTH_DB`
+   to the server's `env` map.
 3. `APPLE_HEALTH_DATA_DIR` env var (directory path) — useful when
    you want a custom root but the package's default file name.
 4. The XDG / `LOCALAPPDATA` platform default above.
@@ -280,7 +285,7 @@ faithfully.
 
 ## Tools
 
-18 tools are registered with FastMCP, grouped by family:
+20 tools are registered with FastMCP, grouped by family:
 
 | Family | Tools |
 |---|---|

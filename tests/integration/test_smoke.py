@@ -36,12 +36,14 @@ from apple_health_mcp.server.tools import (
     get_server_info,
     get_workout_details,
     get_workout_route,
+    import_zip,
     list_correlations,
     list_data_sources,
     list_ecg_readings,
     list_record_types,
     list_state_of_mind,
     list_workouts,
+    list_zips,
     query_records,
     run_custom_query,
 )
@@ -143,8 +145,19 @@ def test_gpx_importer_smoke(imported_db: ImportedFixture) -> None:
 # --- MCP-tool smoke ----------------------------------------------------------
 
 
-def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
-    """Invoke each of the 18 MCP tools against the fixture-imported DB."""
+def test_all_mcp_tools_smoke(
+    imported_db: ImportedFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invoke each of the 20 MCP tools against the fixture-imported DB.
+
+    v0.4 added ``list_zips`` + ``import_zip``; smoke now covers them
+    against an empty drop-zone (NEEDS_CONFIG-style hint envelope for
+    list_zips, ``id_not_found`` error envelope for import_zip) so a
+    regression in the new tools' wire shape surfaces at integration
+    time rather than during a dogfood pass.
+    """
     with _open_db(imported_db.db_path) as conn:
         # Resolve fixture-derived row keys once.
         workout_hash = _scalar(conn, "SELECT workout_hash FROM workouts LIMIT 1")
@@ -271,6 +284,26 @@ def test_all_mcp_tools_smoke(imported_db: ImportedFixture) -> None:
             "env:APPLE_HEALTH_DATA_DIR",
             "platform_default",
         }
+
+        # 19. list_zips — v0.4 zip-flow discovery. Point the env at a
+        # real, empty directory so the empty-directory hint branch is
+        # the one exercised end-to-end (the imported_db's data was
+        # ingested directly via the CLI path, not via list_zips).
+        drop_zone = tmp_path / "smoke_drop_zone"
+        drop_zone.mkdir()
+        monkeypatch.setenv("APPLE_HEALTH_EXPORT_ZIPS_DIR", str(drop_zone))
+        payload = call_tool(bind_tool(list_zips, conn))
+        assert payload["export_zips_dir"] == str(drop_zone)
+        assert payload["zips"] == []
+        assert "Drop your Apple Health" in payload["hint"]
+
+        # 20. import_zip — driven against a non-existent id so the
+        # error envelope shape is pinned without paying the extract
+        # cost. Other branches (happy path, idempotent re-import,
+        # validation) are unit-covered in test_zip_tools.py.
+        payload = call_tool(bind_tool(import_zip, conn), id="deadbeef")
+        assert payload["status"] == "error"
+        assert payload["reason"] == "id_not_found"
 
 
 # --- date-only end_date inclusive smoke (issue #49) --------------------------

@@ -34,7 +34,7 @@
     "name": "Claude",
     "time": "just now",
     "body_html": "<p>Your runs last week totaled <span class=\"hi\">32.4 km</span>, average pace 5'38\"/km. HRV dropped 9 ms the day after your long run — suggest an easy run or rest today.</p><p style=\"color: var(--muted); font-size: 12.5px;\">Sleep depth also -22% that day — recovery priority.</p>",
-    "meta": "Local DuckDB · 18 tools · no cloud upload"
+    "meta": "Local DuckDB · 20 tools · no cloud upload"
   },
   "cta": {
     "primary": "Quick start",
@@ -107,7 +107,7 @@
     "codex_body": "Register as an MCP server in <code>~/.codex/config.toml</code>."
   },
   "tools": {
-    "eyebrow": "18 tools",
+    "eyebrow": "20 tools",
     "title": "A read-oriented, broad query surface.",
     "deck": "Tools modeled on the Apple Health schema. Claude composes queries; your local DuckDB answers.",
     "g1_title": "Records / Statistics",

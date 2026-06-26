@@ -34,7 +34,7 @@
     "name": "Claude",
     "time": "just now",
     "body_html": "<p>先週のランは合計 <span class=\"hi\">32.4 km</span>、 平均ペースは 5'38\"/km でした。 一昨日のロング走の翌日に HRV が 9 ms 落ちているので、 今日は easy run か rest がおすすめです。</p><p style=\"color: var(--muted); font-size: 12.5px;\">睡眠の深さも同じ日に -22% &mdash; 回復を優先しましょう。</p>",
-    "meta": "Local DuckDB · 18 tools · no cloud upload"
+    "meta": "Local DuckDB · 20 tools · no cloud upload"
   },
   "cta": {
     "primary": "クイックスタート",
@@ -52,7 +52,7 @@
     "card1_body": "クラウドには 1 バイトも送りません。 データはあなたのコンピュータの外には出ません。",
     "card2_title": "フルデータ対応",
     "card2_body": "export.xml はもちろん、 ECG の CSV やワークアウトの GPX ルートも、 まとめて取り込みます。",
-    "card3_title": "17 個の MCP ツール",
+    "card3_title": "20 個の MCP ツール",
     "card3_body": "ワークアウトから心拍、 睡眠、 ECG、 State of Mind まで、 自分のデータに幅広く尋ねられます。",
     "card4_title": "Claude 三環境対応",
     "card4_body": "Claude Code でも Claude Desktop でも Codex CLI でも、 同じデータをそのまま使えます。"
@@ -107,7 +107,7 @@
     "codex_body": "<code>~/.codex/config.toml</code> に MCP サーバーとして登録します。"
   },
   "tools": {
-    "eyebrow": "17 個のツール",
+    "eyebrow": "20 個のツール",
     "title": "読み取り中心の、 幅広いクエリ。",
     "deck": "Claude が自分で選んで使う、 Apple ヘルスケア向けのツールです。 クエリの組み立てからローカルでの応答まで、 すべてあなたのコンピュータの中で完結します。",
     "g1_title": "Records / Statistics",

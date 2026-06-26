@@ -24,12 +24,14 @@ from apple_health_mcp.server.tools import (
     get_server_info,
     get_workout_details,
     get_workout_route,
+    import_zip,
     list_correlations,
     list_data_sources,
     list_ecg_readings,
     list_record_types,
     list_state_of_mind,
     list_workouts,
+    list_zips,
     query_records,
     run_custom_query,
 )
@@ -70,4 +72,9 @@ ALL_TOOLS: list[RegisterFn] = [
     # the original Rust-mirrored ordering remains the prefix of this
     # list and side-by-side audits still match.
     get_server_info.register,
+    # v0.4 (issue #148) ZIP-flow tools: ``list_zips`` is the discovery
+    # entry-point the agent calls first, then ``import_zip(id=...)``
+    # drives the importer inline on the server's writable handle.
+    list_zips.register,
+    import_zip.register,
 ]
