@@ -9,6 +9,104 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-26
+
+### Headline
+
+- **Terminal-zero import flow via two new MCP tools** (issue #148,
+  PRs #149 / #151 / #152 / #153). Drop your Apple Health `export.zip`
+  into the configured directory and ask Claude — Claude calls
+  `list_zips` to discover the ZIP, `import_zip(id="…")` to extract +
+  ingest it on the server's writable handle. No terminal commands
+  required. Tool count: **18 → 20**.
+
+### Added
+
+- **`list_zips()` MCP tool**: lists every ZIP in
+  `APPLE_HEALTH_EXPORT_ZIPS_DIR` with `{id, file_name, mtime, size,
+  sha256, imported, is_apple_health}`. sha256 cached via the
+  `imports` table so multi-GB ZIPs are not rehashed on every scan.
+- **`import_zip(id)` MCP tool**: resolves the 8-char sha prefix via
+  a DB-cache fast path, falls through to streaming hash only for
+  never-seen ZIPs, extracts into a temp directory, and drives
+  `run_import` on the server's writable handle. Idempotent re-imports
+  return `records_added: 0` + `already_imported_at` in milliseconds.
+- **`DataState` envelope for read tools** (`server/data_state.py`):
+  every read tool short-circuits with a structured
+  `{state, reason, suggested_action, human_message}` JSON when the DB
+  is not ready. Replaces the v0.3.x `IMPORT_REQUIRED_MESSAGE`
+  plain-string sentinel.
+- **`imports.source_zip_*` triple** (PR #149): `source_zip_sha256`
+  VARCHAR / `source_zip_mtime` TIMESTAMPTZ / `source_zip_size` BIGINT.
+  NULL on CLI-driven rows; populated by `import_zip` so the cache
+  loader skips work on already-imported ZIPs.
+- **`run_import(conn=…, source_zip=…)` orchestrator seam** (PRs
+  #149 / #151): caller-owned writable connection + source-ZIP triple
+  parameter. CLI callers keep their pre-v0.4 signature; the new
+  `import_zip` MCP tool reuses the server's live handle.
+
+### Breaking
+
+- **Server connection now opens read-write** (PR #151). v0.3.x relied
+  on OS-level read-only file locks as a defence-in-depth layer on top
+  of `server/safety`'s SQL validator. v0.4 drops the read-only flag so
+  `import_zip` can drive the importer inline. `server/safety` is now
+  the **sole** wire-side guard — `validate_query` still rejects every
+  DDL / DML / ATTACH / COPY / PRAGMA / quoted-path-FROM construct on
+  the `run_custom_query` path. The connection-level guard is gone;
+  the SQL-level guard is the contract.
+
+- **CLI `import` workflow now requires stopping the server first**.
+  Pre-v0.4 the server held a read-only DuckDB snapshot, so the
+  documented flow was "leave Claude Desktop running, import from
+  another shell, restart the server". v0.4 holds an exclusive
+  writable file lock; a concurrent `apple-health-mcp-server import`
+  from another shell fails with a lock-conflict error. Stop the
+  server, run the CLI import, then restart. (Or skip the CLI
+  entirely and use the new `list_zips` + `import_zip` flow from
+  inside Claude.)
+
+- **MCPB bundle `user_config.db_path` removed** in favor of
+  `user_config.export_zips_dir` (PR #152). Existing v0.3.x bundle
+  users must reconfigure once after upgrading. Claude Desktop users
+  who need a custom DB path (rare; the platform default is now safe
+  because the server reads + writes inside the same sandbox) edit
+  `claude_desktop_config.json` directly and add `APPLE_HEALTH_DB` to
+  the server's `env` map.
+
+- **Read tools now return a structured `{state, reason,
+  suggested_action, human_message}` envelope** (instead of the
+  v0.3.x `IMPORT_REQUIRED_MESSAGE` plain-string sentinel) when the
+  DB has no successful import. The `state` is one of `READY` /
+  `NEEDS_CONFIG` (env var not set) / `NEEDS_IMPORT` (env var set but
+  no import yet). Substring matchers on the pre-v0.4 sentinel must
+  migrate. `get_import_history` is the one tool that opts out — it
+  still returns `[]` on an empty DB.
+
+- **`CURRENT_SCHEMA_VERSION` bumped 4 → 5** (PR #149). The bump adds
+  the `imports.source_zip_*` triple with no in-place migration. v0.3.x
+  DBs raise the canonical re-import `ConfigError` carrying the
+  `rm <db>` recovery command, same fresh-start contract as #126 / #129.
+  After re-import the data is queryable through the same tools, plus
+  the new ZIP-flow tools cover future re-imports without a terminal.
+
+### Changed
+
+- **`require_imports_or_message` is now a re-export alias** of
+  `data_state.require_ready_or_state_error`. The two helpers had
+  byte-identical bodies after the rename and were drift-prone.
+- **`get_import_history` wire shape** widened to include the
+  `source_zip_*` triple (`source_zip_sha256` / `source_zip_mtime` /
+  `source_zip_size`). NULL on CLI-driven rows.
+- **`safety.py` module docstring rewritten** with the v0.4 threat
+  model: the validator is now the SOLE wire-side guard against DDL /
+  DML / ATTACH / COPY / etc., not a second layer on top of the
+  read-only flag.
+- **README.md / README.ja.md upgrade walkthroughs updated** for the
+  v0.4 flow (`export_zips_dir` directory + `import_zip` from Claude
+  + "stop serve before CLI import" caveat). The LP footer + i18n
+  tool counts bumped to 20.
+
 ## [0.3.0] - 2026-06-26
 
 ### Documentation
