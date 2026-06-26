@@ -483,22 +483,47 @@ uvx apple-health-mcp-server@latest import /path/to/apple_health_export
 
 ## トラブルシューティング
 
-**どのツールも `No Apple Health data has been imported yet.` を返す**
+**どのツールも `{"state": "NEEDS_CONFIG" | "NEEDS_IMPORT", ...}` 形式の構造化エンベロープを返す**
 
 ローカルの DuckDB ファイルが空でも MCP サーバーは起動するように
 なっており（クライアントから全ツールが見えるようにするため）、
-データが必要なツールはインポートが完了するまで上記の案内文を
-返します。 以下のコマンドでインポートを実行してください。
+読み取り系ツールはインポートが完了するまで以下のような構造化
+JSON エンベロープを返します:
+
+```json
+{
+  "state": "NEEDS_CONFIG",
+  "reason": "APPLE_HEALTH_EXPORT_ZIPS_DIR is not set",
+  "suggested_action": "ask_user_to_open_settings",
+  "human_message": "Set the APPLE_HEALTH_EXPORT_ZIPS_DIR ..."
+}
+```
+
+`state` は次のいずれかです:
+
+- `NEEDS_CONFIG` — `APPLE_HEALTH_EXPORT_ZIPS_DIR` 環境変数
+  （v0.4 の `list_zips` / `import_zip` MCP ツールが読みに行く ZIP の
+  置き場所）が未設定。 Claude Desktop ユーザーは Settings → MCP →
+  apple-health-mcp-server → Export ZIPs directory から、 それ以外の
+  MCP クライアントは環境変数を直接設定します。
+- `NEEDS_IMPORT` — 置き場所は設定済みだがまだインポート成功行が
+  ない。 Claude に `list_zips` → `import_zip(id="…")` の順で呼ばせて
+  ください。
+
+CLI 経由のインポートは:
 
 ```bash
 apple-health-mcp-server import /path/to/apple_health_export
 ```
 
-インポート完了後は **MCP サーバーを再起動** してください
-（Claude Desktop / Claude Code / Codex を再起動するか、 `serve`
-プロセスを止めて再実行）。 サーバーはプロセス起動時に読み取り
-専用の DuckDB スナップショットを掴むため、 新しい行は再接続後
-にしか見えません。
+**先に MCP サーバーを停止してから** CLI インポートを走らせてくだ
+さい（Claude Desktop を終了する、 `serve` プロセスを kill する等）。
+v0.4 以降サーバーは `import_zip` ツールがインライン import を回す
+ために DuckDB ハンドルを書き込み可能で開いており、 DuckDB は書き込
+みハンドルが生きている間ファイルに対する排他ロックを保持します。
+別シェルから `apple-health-mcp-server import` を打つと lock 衝突
+エラーになるため、 サーバーを止めてから実行し、 完了後に起動し
+直すという順序が必要です。
 
 `get_import_history` は空 DB でも呼び出せる唯一のツールで、
 空配列を返します。 クライアント側から「まだインポートしていない」

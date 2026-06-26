@@ -234,30 +234,39 @@ def get_connection(
     resolved = db_path if db_path is not None else resolve_db_path()
     # Snapshot existence BEFORE ``duckdb.connect`` runs: the writable
     # open creates the file on the spot, so a post-open ``exists()``
-    # would always return True and the "fresh-install skip the
-    # legacy-DB probe" branch would never fire.
+    # would always return True and the "fresh-install bootstrap" /
+    # "pre-v0.4 legacy-DB probe" branches below would never fire on
+    # the writable path.
     file_existed_before_open = resolved.exists()
-    if read_only:
-        if not file_existed_before_open:
-            _materialise_empty_db(resolved)
-        else:
-            _migrate_if_needed_via_separate_probe(resolved)
-    else:
+    if not read_only:
         _ensure_parent_dir(resolved)
+    # Bootstrap + legacy probe are the same on both transports. v0.4
+    # (issue #148) drove this symmetry: writable serve now opens the
+    # same file the read-only path used to, so they share the
+    # fresh-install schema bootstrap (otherwise a fresh writable open
+    # would land an empty file and the first tool call would crash with
+    # "Table imports does not exist") AND the probe-via-fresh-read-only-
+    # handle path (otherwise opening a pre-v0.4 DB writable would
+    # trigger DuckDB's internal storage-format upgrade -- mutating a
+    # file the package is about to refuse -- which is exactly what the
+    # v0.3.0 read-only-probe contract was designed to prevent).
+    if not file_existed_before_open:
+        _materialise_empty_db(resolved)
+    else:
+        _migrate_if_needed_via_separate_probe(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
     if not read_only:
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
-        # v0.4 writable serve path: probe the legacy-DB guard on the
-        # live handle when the file already existed pre-open. A
-        # pre-v0.4 DB raises ConfigError carrying the re-import command;
-        # the connection is closed before re-raising so the file lock
-        # does not survive a failed startup.
-        if file_existed_before_open:
-            try:
-                _migrate_if_needed_on_handle(conn, resolved)
-            except BaseException:
-                conn.close()
-                raise
+        # v0.4 (issue #148): preserve_insertion_order=false used to be
+        # set inside ``run_import`` for the duration of one CLI-owned
+        # connection. With ``run_import(conn=...)`` reusing the server's
+        # live handle, setting the PRAGMA inside the importer would
+        # leak the override onto every subsequent serve query that
+        # passes through the same connection (DuckDB session-scopes
+        # PRAGMA). Set it once at writable-open time so the override is
+        # connection-stable for the serve's whole lifetime, matching
+        # the load-bearing comment the orchestrator carries.
+        conn.execute("PRAGMA preserve_insertion_order = false;")
     _apply_session_tz(conn)
     return conn
 
@@ -345,13 +354,6 @@ def _migrate_if_needed_on_handle(
     # the canonical message directly so behaviour stays bit-identical
     # to the writable path.
     raise ConfigError(_reimport_required_message(current, db_path))
-
-
-# Backwards-compatible alias for the v0.3.x function name. New code
-# should call ``_migrate_if_needed_via_separate_probe`` (read-only
-# probe path) or ``_migrate_if_needed_on_handle`` (writable-handle
-# path) directly so the choice is visible at the call site.
-_migrate_if_needed = _migrate_if_needed_via_separate_probe
 
 
 def _table_exists_in_main_conn(conn: duckdb.DuckDBPyConnection, name: str) -> bool:

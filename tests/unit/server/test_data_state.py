@@ -42,7 +42,6 @@ def test_check_data_state_returns_needs_config_when_env_unset(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """Empty DB + unconfigured drop-zone → NEEDS_CONFIG."""
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
     conn = get_in_memory_connection()
     try:
         ensure_schema(conn)
@@ -94,7 +93,6 @@ def test_check_data_state_handles_missing_imports_table(
     tool layer -- the tool surfaces the friendly NEEDS_CONFIG /
     NEEDS_IMPORT guidance instead.
     """
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
     conn = duckdb.connect(":memory:")
     try:
         assert check_data_state(conn) == DataState.NEEDS_CONFIG
@@ -113,7 +111,6 @@ def test_check_data_state_uses_lock_when_provided(
     """
     from threading import Lock
 
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
     conn = get_in_memory_connection()
     try:
         ensure_schema(conn)
@@ -170,7 +167,6 @@ def test_require_ready_or_state_error_returns_payload_when_not_ready(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """An empty DB returns the structured error envelope."""
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
     conn = get_in_memory_connection()
     try:
         ensure_schema(conn)

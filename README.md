@@ -509,20 +509,46 @@ ConfigError no longer fires.
 
 ## Troubleshooting
 
-**Every tool returns "No Apple Health data has been imported yet."**
+**Every tool returns a structured `{"state": "NEEDS_CONFIG" | "NEEDS_IMPORT", ...}` envelope**
 
 The MCP server boots even when the local DuckDB file is empty so the
-client still sees the full tool list, but every tool that needs data
-returns this guidance string until you run the importer:
+client still sees the full tool list, but every read tool short-circuits
+with a structured JSON envelope until a successful import lands:
+
+```json
+{
+  "state": "NEEDS_CONFIG",
+  "reason": "APPLE_HEALTH_EXPORT_ZIPS_DIR is not set",
+  "suggested_action": "ask_user_to_open_settings",
+  "human_message": "Set the APPLE_HEALTH_EXPORT_ZIPS_DIR ... "
+}
+```
+
+The `state` is one of:
+
+- `NEEDS_CONFIG` — the `APPLE_HEALTH_EXPORT_ZIPS_DIR` env var (the
+  drop-zone the v0.4 `list_zips` / `import_zip` MCP tools read from)
+  is not configured. Claude Desktop users set it via Settings → MCP →
+  apple-health-mcp-server → Export ZIPs directory; other MCP clients
+  set the env var directly.
+- `NEEDS_IMPORT` — the drop-zone is configured but no successful
+  import has happened yet. Ask Claude to call `list_zips` followed by
+  `import_zip(id="…")`.
+
+For the CLI import flow:
 
 ```bash
 apple-health-mcp-server import /path/to/apple_health_export
 ```
 
-After the import finishes, **restart the MCP server** (quit and reopen
-Claude Desktop / Claude Code / Codex, or stop and re-run the `serve`
-process). The server keeps a read-only DuckDB snapshot for the lifetime
-of the process; new rows only become visible to a fresh connection.
+**Stop the MCP server first** (quit Claude Desktop, kill the `serve`
+process, etc.) before running the CLI importer. v0.4 opens the serve
+handle writable so the upcoming `import_zip` tool can drive the
+importer inline; DuckDB holds an exclusive file lock for the lifetime
+of the writable handle, so a concurrent `apple-health-mcp-server
+import` from another shell would fail with a lock-conflict error.
+After the CLI import finishes, restart the server so the tools query
+against the fresh data.
 
 `get_import_history` is the one tool that stays callable on an empty
 DB — it returns an empty list, which is how you confirm "no imports

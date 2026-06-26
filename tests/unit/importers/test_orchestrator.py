@@ -131,6 +131,27 @@ def test_run_import_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         conn.close()
 
 
+def test_run_import_rejects_both_conn_and_db_path(tmp_path: Path) -> None:
+    """v0.4 (issue #148): ``run_import(conn=..., db_path=...)`` raises.
+
+    Silently ignoring ``db_path`` when both are passed would let a
+    misuse — ``import_zip`` defensively threading both arguments —
+    land the import in ``conn``'s file while ConfigError messages
+    interpolate the unrelated ``db_path``. The fail-fast at the
+    entrypoint converts that silent data-targeting bug into a
+    deterministic error at the boundary.
+    """
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    db_path = tmp_path / "h.duckdb"
+    conn = duckdb.connect(":memory:")
+    try:
+        with pytest.raises(ValueError, match="pass either"):
+            run_import(export_dir, db_path, conn=conn)
+    finally:
+        conn.close()
+
+
 def test_run_import_does_not_close_externally_owned_conn(tmp_path: Path) -> None:
     """v0.4 (issue #148): a caller-owned ``conn`` survives ``run_import``.
 

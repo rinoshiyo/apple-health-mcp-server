@@ -47,9 +47,13 @@ def create_server(
 ) -> FastMCP:
     """Build a :class:`FastMCP` instance with every tool registered.
 
-    ``conn`` is the (read-only) DuckDB handle the tools query against. The
-    connection is wrapped in a process-wide ``Lock`` because DuckDB's Python
-    binding is not safe to share across coroutines without serialisation.
+    ``conn`` is the DuckDB handle the tools query against. v0.4 opens
+    it writable so the upcoming ``import_zip`` MCP tool can drive the
+    importer inline; LLM-issued SELECT-only enforcement is the
+    responsibility of :mod:`server.safety` (see its module docstring for
+    the threat model). The connection is wrapped in a process-wide
+    ``Lock`` because DuckDB's Python binding is not safe to share
+    across coroutines without serialisation.
     """
     from mcp.server.fastmcp import FastMCP
 

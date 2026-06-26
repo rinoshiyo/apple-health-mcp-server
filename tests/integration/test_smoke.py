@@ -312,35 +312,37 @@ def test_query_records_date_only_end_date_includes_named_day(
 
 def test_fresh_install_serves_with_import_required_message(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``serve`` against a never-imported path boots and surfaces guidance.
 
-    End-to-end check of the path that used to crash before this fix:
-    point ``get_connection`` at a missing file, register a tool against
-    the read-only connection, and confirm the tool returns the v0.4
-    structured state-error envelope (so a fresh Claude Desktop install
-    sees actionable JSON guidance instead of silently empty results).
+    v0.4 (issue #148): the production serve path opens DuckDB
+    ``read_only=False`` so the upcoming ``import_zip`` MCP tool can
+    drive the importer inline. This integration test now mirrors that
+    setting; pre-v0.4 it opened ``read_only=True`` and silently
+    diverged from production, so a future regression in the writable
+    fresh-install bootstrap path (missing file -> schema-empty file ->
+    "Table imports does not exist") would have crashed every Claude
+    Desktop fresh install without failing this test.
     """
     import asyncio
 
     from apple_health_mcp.db.connection import get_connection
     from apple_health_mcp.server.data_state import (
-        EXPORT_ZIPS_DIR_ENV_VAR,
         DataState,
         build_state_error_payload,
     )
 
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
     db_path = tmp_path / "fresh" / "health.duckdb"
     assert not db_path.exists()
-    conn = get_connection(db_path, read_only=True)
+    conn = get_connection(db_path, read_only=False)
     try:
         # Bootstrap created the file + schema.
         assert db_path.exists()
         fn = bind_tool(list_record_types, conn)
         out = asyncio.run(fn())
-        # env unset -> NEEDS_CONFIG envelope.
+        # env unset -> NEEDS_CONFIG envelope (root conftest's autouse
+        # fixture clears APPLE_HEALTH_EXPORT_ZIPS_DIR so the assertion
+        # is deterministic).
         assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
         # ``get_import_history`` stays callable as the discovery path:
         # an empty list is the canonical "no imports yet" signal.

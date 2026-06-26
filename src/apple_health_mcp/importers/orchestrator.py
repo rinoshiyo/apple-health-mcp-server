@@ -116,6 +116,20 @@ def run_import(
     ``conn=None``; ``_open_db`` then resolves ``db_path`` and the
     orchestrator owns + closes that handle as before.
     """
+    # v0.4 (issue #148): callers must pick exactly one of ``conn`` / ``db_path``.
+    # Silently ignoring ``db_path`` when both are passed was the prior
+    # contract, but that lets a misuse like ``import_zip`` defensively
+    # threading both arguments corrupt the user's data targeting: the
+    # import would land in ``conn``'s file while ConfigError messages
+    # interpolate the unrelated ``db_path``. Fail fast at the entrypoint.
+    if conn is not None and db_path is not None:
+        raise ValueError(
+            "run_import: pass either ``conn`` or ``db_path``, not both -- "
+            "they would otherwise point at different files and the import "
+            "would land in ``conn``'s database while diagnostics quoted "
+            "``db_path``."
+        )
+
     start = time.monotonic()
     # Issue #130: take a single wall-clock UTC snapshot at run start so
     # ``import_id`` (which formats it) and ``imports.imported_at``
@@ -180,22 +194,15 @@ def run_import(
         if _has_prior_imports(conn):
             existing = load_existing_hashes(conn)
 
-        # DuckDB defaults to preserving insertion order during checkpoint,
-        # which costs an extra sort over millions of imported rows. The
-        # bulk-load path (issue #41) is unordered by design — Appender / COPY
-        # FROM CSV both write in the order rows arrive at the buffer, and
-        # downstream queries always re-sort via ORDER BY anyway — so we tell
-        # DuckDB to skip the preservation work.
-        #
-        # Scope: this is a session-scoped PRAGMA on the connection ``_open_db``
-        # just opened above; we close that connection in the ``finally`` at
-        # the bottom of ``run_import``. The override therefore lives for the
-        # lifetime of THIS import only, and cannot leak to a future caller
-        # that opens its own connection. A future refactor that calls
-        # ``run_import`` with an externally-owned conn would inherit the
-        # PRAGMA for that conn's remaining lifetime — if that ever happens,
-        # move the PRAGMA into ``get_connection(read_only=False)`` instead.
-        conn.execute("PRAGMA preserve_insertion_order = false;")
+        # ``preserve_insertion_order = false`` used to be set here for
+        # the duration of this CLI-owned connection (issue #41 perf).
+        # v0.4 (issue #148) moved it into ``db.connection.get_connection``'s
+        # writable branch so that ``run_import(conn=server_handle)`` -- the
+        # upcoming ``import_zip`` reuse path -- does not leak the override
+        # onto the server's live connection for the rest of its lifetime.
+        # Externally-owned conns (writable serve) already carry the PRAGMA
+        # from open; CLI-owned conns get it via the same ``_open_db`` /
+        # ``get_connection`` chain.
 
         _logger.info("Phase 1: Parsing export.xml")
         stats = import_xml(conn, xml_path, actual_import_id, existing=existing)

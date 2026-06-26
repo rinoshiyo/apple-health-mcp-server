@@ -27,6 +27,7 @@ from apple_health_mcp.server.data_state import (
     DataState,
     build_state_error_payload,
     check_data_state,
+    require_ready_or_state_error,
 )
 
 if TYPE_CHECKING:
@@ -78,31 +79,14 @@ def imports_present(
     return check_data_state(conn, lock=lock) == DataState.READY
 
 
-def require_imports_or_message(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    lock: Lock | None = None,
-) -> str | None:
-    """Return the structured state-error payload when not READY, else ``None``.
-
-    Used by the 4 multi-query tools (``get_workout_details``,
-    ``get_correlation_details``, ``get_ecg_data``, ``get_me_attributes``)
-    that cannot funnel through :func:`run_query`'s ``require_data``
-    gate. Returns the v0.4 structured JSON envelope (``state`` /
-    ``reason`` / ``suggested_action`` / ``human_message``) so the agent
-    can branch on ``suggested_action`` rather than substring-matching
-    the pre-v0.4 ``IMPORT_REQUIRED_MESSAGE`` plain-string sentinel that
-    this helper used to return.
-
-    Name kept for source-compat; the 4 tool sites are unchanged::
-
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
-    """
-    state = check_data_state(conn, lock=lock)
-    if state == DataState.READY:
-        return None
-    return build_state_error_payload(state)
+# v0.4 source-compat alias for the pre-v0.4 helper name; the 4 tool
+# sites (get_workout_details, get_correlation_details, get_ecg_data,
+# get_me_attributes) still import this name. Re-exports the canonical
+# ``require_ready_or_state_error`` from :mod:`server.data_state` so
+# the body lives in one place and a future drift in error-envelope
+# shape cannot diverge the two helpers (they were byte-identical
+# during the rename and would have aged apart otherwise).
+require_imports_or_message = require_ready_or_state_error
 
 
 def _coerce(value: object) -> Any:

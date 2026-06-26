@@ -35,7 +35,7 @@ import logging
 import os
 from enum import StrEnum
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     import duckdb
@@ -52,6 +52,53 @@ class DataState(StrEnum):
     READY = "READY"
     NEEDS_CONFIG = "NEEDS_CONFIG"
     NEEDS_IMPORT = "NEEDS_IMPORT"
+
+
+# Static envelope payloads. The two error states carry only constant
+# strings (``EXPORT_ZIPS_DIR_ENV_VAR`` is module-level and interpolated
+# at import time), so build the JSON once at module load instead of
+# allocating a dict + running ``json.dumps`` per tool call. Tests that
+# parse the JSON for content keep working unchanged.
+#
+# The NEEDS_CONFIG human_message fronts the env-var instruction so
+# Claude Code / Codex / non-Desktop MCP clients (which have no
+# user_config UI) get an actionable first line; Claude Desktop users
+# still see the Settings → MCP path they would expect, just framed as
+# the second route to the same setting.
+_STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
+    DataState.NEEDS_CONFIG: json.dumps(
+        {
+            "state": DataState.NEEDS_CONFIG.value,
+            "reason": f"{EXPORT_ZIPS_DIR_ENV_VAR} is not set",
+            "suggested_action": "ask_user_to_open_settings",
+            "human_message": (
+                f"Set the {EXPORT_ZIPS_DIR_ENV_VAR} environment variable "
+                "to the directory that holds your Apple Health export ZIPs. "
+                "Claude Desktop users can also configure this via "
+                "Settings → MCP → apple-health-mcp-server → "
+                "Export ZIPs directory; other MCP clients (Claude Code, "
+                "Codex, etc.) set the env var directly in the server "
+                "configuration."
+            ),
+        },
+        indent=2,
+        ensure_ascii=False,
+    ),
+    DataState.NEEDS_IMPORT: json.dumps(
+        {
+            "state": DataState.NEEDS_IMPORT.value,
+            "reason": "no successful Apple Health import found in this database",
+            "suggested_action": "call_list_zips",
+            "human_message": (
+                "No Apple Health export has been imported yet. Call "
+                "list_zips to discover ZIPs in your configured directory, "
+                "then import_zip(id) to import one."
+            ),
+        },
+        indent=2,
+        ensure_ascii=False,
+    ),
+}
 
 
 def check_data_state(
@@ -92,19 +139,19 @@ def check_data_state(
     single-thread test callers.
     """
     if lock is None:
-        row = _probe_imports_row(conn)
+        has_rows = _imports_table_has_rows(conn)
     else:
         with lock:
-            row = _probe_imports_row(conn)
-    if row is not None:
+            has_rows = _imports_table_has_rows(conn)
+    if has_rows:
         return DataState.READY
     if (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip():
         return DataState.NEEDS_IMPORT
     return DataState.NEEDS_CONFIG
 
 
-def _probe_imports_row(conn: duckdb.DuckDBPyConnection) -> tuple[object, ...] | None:
-    """Return the first ``imports`` row or ``None`` on a missing table.
+def _imports_table_has_rows(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Return True when the ``imports`` table holds at least one row.
 
     Catches broadly so any DuckDB error (catalog miss on an alien DB,
     file-locked write contention, etc.) reads as "no imports yet" and
@@ -113,10 +160,10 @@ def _probe_imports_row(conn: duckdb.DuckDBPyConnection) -> tuple[object, ...] | 
     can diagnose if needed.
     """
     try:
-        return conn.execute("SELECT 1 FROM imports LIMIT 1").fetchone()
+        return conn.execute("SELECT 1 FROM imports LIMIT 1").fetchone() is not None
     except Exception as exc:
         _logger.debug("imports probe failed (%s); treating as empty DB", exc)
-        return None
+        return False
 
 
 def build_state_error_payload(state: DataState) -> str:
@@ -128,36 +175,19 @@ def build_state_error_payload(state: DataState) -> str:
     schema mirrors the grill decision recorded in
     ``tmp/grill-sessions/v0-4-zip-import-tool-decisions-2026-06-26.md``.
 
-    Calling this with ``READY`` is a programming error (the READY path
-    is for the tool's normal SQL output, not for an error envelope);
-    raises ``ValueError`` so a regression surfaces at the call site
-    rather than silently shipping an empty-shaped error to the agent.
+    Looks up a precomputed payload (see :data:`_STATE_ERROR_PAYLOADS`)
+    so the dict + json.dumps cost is paid once at import. Calling this
+    with ``READY`` is a programming error (the READY path is for the
+    tool's normal SQL output, not for an error envelope); raises
+    ``ValueError`` so a regression surfaces at the call site rather
+    than silently shipping an empty-shaped error to the agent.
     """
-    if state == DataState.NEEDS_CONFIG:
-        payload = {
-            "state": DataState.NEEDS_CONFIG.value,
-            "reason": f"{EXPORT_ZIPS_DIR_ENV_VAR} is not set",
-            "suggested_action": "ask_user_to_open_settings",
-            "human_message": (
-                "Please open Claude Desktop → Settings → MCP → "
-                "apple-health-mcp-server → set the Export ZIPs directory, "
-                f"or set the {EXPORT_ZIPS_DIR_ENV_VAR} environment variable."
-            ),
-        }
-    elif state == DataState.NEEDS_IMPORT:
-        payload = {
-            "state": DataState.NEEDS_IMPORT.value,
-            "reason": "no successful Apple Health import found in this database",
-            "suggested_action": "call_list_zips",
-            "human_message": (
-                "No Apple Health export has been imported yet. Call "
-                "list_zips to discover ZIPs in your configured directory, "
-                "then import_zip(id) to import one."
-            ),
-        }
-    else:
-        raise ValueError(f"build_state_error_payload called with non-error state {state!r}")
-    return json.dumps(payload, indent=2, ensure_ascii=False)
+    try:
+        return _STATE_ERROR_PAYLOADS[state]
+    except KeyError:
+        raise ValueError(
+            f"build_state_error_payload called with non-error state {state!r}"
+        ) from None
 
 
 def require_ready_or_state_error(

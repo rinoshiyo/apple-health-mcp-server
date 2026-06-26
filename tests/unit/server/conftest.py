@@ -17,25 +17,11 @@ from apple_health_mcp.db import (
     get_in_memory_connection,
     rebuild_daily_stats,
 )
-from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 
-
-@pytest.fixture(autouse=True)
-def _clear_export_zips_dir_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Strip ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` from every server-test process.
-
-    v0.4 (issue #148): ``check_data_state`` returns ``NEEDS_CONFIG`` vs
-    ``NEEDS_IMPORT`` depending on whether this env var is set. Without
-    this fixture a developer (or CI shell) with the var exported would
-    flip every empty-DB test from NEEDS_CONFIG (the documented default
-    for a fresh install) to NEEDS_IMPORT, and the assertions pinning
-    the structured error payload would fail in a way that read as a
-    real regression but was actually env contamination.
-
-    Tests that need the NEEDS_IMPORT branch monkeypatch the var back
-    in explicitly so the choice is visible at the call site.
-    """
-    monkeypatch.delenv(EXPORT_ZIPS_DIR_ENV_VAR, raising=False)
+# v0.4 (issue #148): the env-clear autouse fixture was promoted to the
+# suite-root ``tests/conftest.py`` so every test (unit + integration)
+# sees the same clean baseline for ``APPLE_HEALTH_EXPORT_ZIPS_DIR``.
+# Server-specific fixtures resume below.
 
 
 _SEED_SQL = """
