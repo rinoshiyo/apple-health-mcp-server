@@ -55,6 +55,7 @@ def run_import(
     export_dir: Path,
     db_path: Path | None = None,
     *,
+    conn: duckdb.DuckDBPyConnection | None = None,
     import_id: str | None = None,
     force: bool = False,
     source_zip: tuple[str, datetime, int] | None = None,
@@ -104,6 +105,16 @@ def run_import(
     byte-identical re-import without rehashing the ZIP. CLI callers
     leave it ``None`` (the source artefact is a directory and the triple
     has no meaningful value there); ``imports.source_zip_*`` land NULL.
+
+    ``conn`` is the v0.4 (issue #148) seam that lets the upcoming
+    ``import_zip`` MCP tool reuse the server's already-open writable
+    connection instead of opening a second handle (DuckDB rejects
+    concurrent same-process opens of one on-disk file when either side
+    is writable). When ``conn`` is provided ``db_path`` is ignored and
+    the caller retains ownership of the connection -- the orchestrator
+    does NOT close it in the ``finally`` block. CLI callers pass
+    ``conn=None``; ``_open_db`` then resolves ``db_path`` and the
+    orchestrator owns + closes that handle as before.
     """
     start = time.monotonic()
     # Issue #130: take a single wall-clock UTC snapshot at run start so
@@ -120,7 +131,15 @@ def run_import(
     xml_path = export_dir / "export.xml"
     export_sha = _compute_file_sha256(xml_path)
 
-    conn = _open_db(db_path)
+    # v0.4 (issue #148): the caller may pass a pre-opened writable
+    # handle (typically the live serve connection the ``import_zip``
+    # MCP tool reuses). In that case we MUST NOT close it in the
+    # finally block below -- the server keeps using it. Track
+    # ownership so the legacy CLI path still gets its connection
+    # cleaned up.
+    externally_owned = conn is not None
+    if conn is None:
+        conn = _open_db(db_path)
     try:
         ensure_schema(conn)
         # Tier 1 requires the ``imports.export_xml_sha256`` column. The
@@ -287,7 +306,8 @@ def run_import(
         )
         return stats
     finally:
-        conn.close()
+        if not externally_owned:
+            conn.close()
 
 
 def _compute_file_sha256(path: Path) -> str | None:

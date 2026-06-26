@@ -12,8 +12,11 @@ from typing import Any
 import duckdb
 import pytest
 
+from apple_health_mcp.server.data_state import (
+    DataState,
+    build_state_error_payload,
+)
 from apple_health_mcp.server.query import (
-    IMPORT_REQUIRED_MESSAGE,
     OFFSET_DESCRIPTION,
     _coerce,
     _count_sql_from_page_sql,
@@ -196,15 +199,19 @@ def test_imports_present_returns_false_when_imports_table_missing() -> None:
     Without this, the surrounding gate would either propagate the
     CatalogException (crashing the tool call) or swallow it as
     ``"Error: Table imports does not exist"``, defeating the point of
-    surfacing ``IMPORT_REQUIRED_MESSAGE``.
+    surfacing the structured state-error payload.
     """
     conn = duckdb.connect(":memory:")
     assert imports_present(conn) is False
 
 
-def test_require_imports_or_message_returns_message_when_empty() -> None:
+def test_require_imports_or_message_returns_state_payload_when_empty() -> None:
+    """v0.4 (issue #148): the empty-DB path returns the structured
+    NEEDS_CONFIG payload (env var is cleared by the conftest autouse
+    fixture) instead of the pre-v0.4 plain-string IMPORT_REQUIRED_MESSAGE.
+    """
     conn = duckdb.connect(":memory:")
-    assert require_imports_or_message(conn) == IMPORT_REQUIRED_MESSAGE
+    assert require_imports_or_message(conn) == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
 def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
@@ -349,7 +356,12 @@ def test_run_query_envelope_row_transform_applies_before_total_strip() -> None:
 
 
 def test_run_query_envelope_gate_short_circuits_on_empty_db() -> None:
-    """An empty DB returns the import-required guidance string."""
+    """An empty DB returns the structured state-error payload.
+
+    v0.4 (issue #148): the env-cleared conftest fixture forces the
+    NEEDS_CONFIG branch so the assertion is deterministic regardless
+    of the developer's local environment.
+    """
     conn = duckdb.connect(":memory:")
     out = run_query_envelope(conn, "SELECT 1 AS x", [], offset=0)
-    assert out == IMPORT_REQUIRED_MESSAGE
+    assert out == build_state_error_payload(DataState.NEEDS_CONFIG)

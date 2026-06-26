@@ -654,6 +654,61 @@ def test_get_connection_read_only_rejects_legacy_v4_db_with_reimport_guidance(
     assert "<db>" not in str(excinfo.value)
 
 
+def test_get_connection_writable_rejects_legacy_v4_db_with_reimport_guidance(
+    tmp_path: Path,
+) -> None:
+    """v0.4 (issue #148): the writable serve path also rejects pre-v0.5 DBs.
+
+    The v0.4 server opens the connection ``read_only=False`` so the new
+    ``import_zip`` MCP tool can drive the importer inline. The legacy-DB
+    probe must fire on this path too -- a pre-v0.5 DB whose
+    schema_version trails CURRENT raises :class:`ConfigError` carrying
+    the re-import command, and the writable handle is closed before the
+    exception propagates so the DuckDB file lock does not survive a
+    failed startup. Otherwise an aborted server would leave the file
+    locked and the next attempt could not even open it to retry.
+    """
+    from apple_health_mcp.db.migrations import (
+        _reimport_required_message,
+        set_current_version,
+    )
+    from apple_health_mcp.db.schema import ensure_schema
+
+    db_path = tmp_path / "legacy_v4_writable.duckdb"
+    seeder = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(seeder)
+        set_current_version(seeder, 4)
+        seeder.execute("CHECKPOINT;")
+    finally:
+        seeder.close()
+
+    with pytest.raises(ConfigError) as excinfo:
+        get_connection(db_path, read_only=False)
+    assert str(excinfo.value) == _reimport_required_message(4, db_path)
+    # The file lock must be released so the file is openable again.
+    reopen = duckdb.connect(str(db_path), read_only=True)
+    reopen.close()
+
+
+def test_get_connection_writable_skips_probe_for_missing_file(
+    tmp_path: Path,
+) -> None:
+    """A missing-file path does NOT run the legacy-DB probe.
+
+    Mirrors the read-only path's empty-file bootstrap: the writable
+    path creates the file via DuckDB's normal first-open behaviour
+    without trying to read a non-existent ``schema_version`` table.
+    """
+    db_path = tmp_path / "writable_fresh.duckdb"
+    assert not db_path.exists()
+    conn = get_connection(db_path, read_only=False)
+    try:
+        assert db_path.exists()
+    finally:
+        conn.close()
+
+
 def test_get_connection_read_only_returns_quietly_on_current_db(
     tmp_path: Path, caplog: LogCaptureFixture
 ) -> None:

@@ -131,6 +131,35 @@ def test_run_import_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         conn.close()
 
 
+def test_run_import_does_not_close_externally_owned_conn(tmp_path: Path) -> None:
+    """v0.4 (issue #148): a caller-owned ``conn`` survives ``run_import``.
+
+    The upcoming ``import_zip`` MCP tool reuses the server's writable
+    handle (DuckDB rejects same-process concurrent opens of one file
+    when either side is writable). The orchestrator MUST treat that
+    handle as externally owned and skip the ``conn.close()`` in its
+    ``finally`` block; otherwise the very first ``import_zip`` call
+    would tear down the server's handle and every subsequent read tool
+    would surface ``Error: Connection closed`` instead of querying.
+    """
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(
+        '<?xml version="1.0"?><HealthData locale="en_US"/>', encoding="utf-8"
+    )
+    db_path = tmp_path / "h.duckdb"
+    owner = duckdb.connect(str(db_path), read_only=False)
+    try:
+        run_import(export_dir, conn=owner, import_id="imp_owned")
+        # The handle is still usable: a read-back query succeeds.
+        row = owner.execute(
+            "SELECT import_id FROM imports WHERE import_id = 'imp_owned'"
+        ).fetchone()
+        assert row == ("imp_owned",)
+    finally:
+        owner.close()
+
+
 def test_run_import_stamps_source_zip_triple_when_provided(
     tmp_path: Path,
 ) -> None:
