@@ -50,6 +50,11 @@ _EXPECTED_TOOL_NAMES = {
     # Issue #137: v0.3.0's 18th tool — runtime self-diagnosis for
     # the MSIX sandbox / env-override troubleshooting flow.
     "get_server_info",
+    # v0.4 (issue #148): ZIP-flow tools that let the agent discover +
+    # import an Apple Health export ZIP without the user opening a
+    # terminal. Tools 19 + 20.
+    "list_zips",
+    "import_zip",
 }
 
 
