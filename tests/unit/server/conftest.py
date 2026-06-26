@@ -18,6 +18,12 @@ from apple_health_mcp.db import (
     rebuild_daily_stats,
 )
 
+# v0.4 (issue #148): the env-clear autouse fixture was promoted to the
+# suite-root ``tests/conftest.py`` so every test (unit + integration)
+# sees the same clean baseline for ``APPLE_HEALTH_EXPORT_ZIPS_DIR``.
+# Server-specific fixtures resume below.
+
+
 _SEED_SQL = """
 INSERT INTO records VALUES
     ('rh1', 'HKQuantityTypeIdentifierHeartRate', 72.0, NULL, 'count/min',

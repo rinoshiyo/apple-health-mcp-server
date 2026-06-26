@@ -76,7 +76,12 @@ def test_run_server_unknown_transport_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "health.duckdb"
-    # Create an empty DB so get_connection(read_only=True) succeeds.
+    # v0.4: ``get_connection`` (writable in production) materialises an
+    # empty schema-only DB when the file is missing, so the unknown-
+    # transport branch can be exercised without pre-creating one. We
+    # still pre-seed below so the test pins both behaviours (file
+    # exists -> probe path; transport check still rejects the bogus
+    # name regardless).
     conn = duckdb.connect(str(db_path))
     ensure_schema(conn)
     conn.close()

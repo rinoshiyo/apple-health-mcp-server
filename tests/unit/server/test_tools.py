@@ -16,7 +16,10 @@ from typing import Any
 import duckdb
 import pytest
 
-from apple_health_mcp.server.query import IMPORT_REQUIRED_MESSAGE
+from apple_health_mcp.server.data_state import (
+    DataState,
+    build_state_error_payload,
+)
 from apple_health_mcp.server.tools import (
     get_activity_summaries,
     get_correlation_details,
@@ -235,7 +238,7 @@ def test_get_workout_details_db_error_path(
     """If a downstream query raises, the tool returns ``Error: ...``.
 
     Seeds an ``imports`` row so the empty-DB gate passes (otherwise the
-    tool would short-circuit to ``IMPORT_REQUIRED_MESSAGE`` before the
+    tool would short-circuit to the structured state-error payload before the
     downstream queries run), then drops the ``workouts`` table to force
     the first ``query_to_json`` call into a binder error.
     """
@@ -339,7 +342,7 @@ def test_get_workout_route_gate_failure_returns_error_string(
     # is the documented contract for a missing/corrupt ``imports`` table
     # and is asserted explicitly here so any future tightening of
     # ``imports_present`` shows up in this test.
-    assert out == IMPORT_REQUIRED_MESSAGE
+    assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
 def test_get_workout_route_limit_zero_errors(
@@ -531,13 +534,13 @@ def test_get_heart_rate_samples_gate_failure_returns_error_string(
     After the fix the gate runs inside ``run_query_envelope``'s own
     try block; dropping ``imports`` exercises that path and confirms
     the gate's ``imports_present`` fallback to ``False`` surfaces the
-    documented ``IMPORT_REQUIRED_MESSAGE`` instead of an ``Error:``
+    documented structured state-error payload instead of an ``Error:``
     traceback.
     """
     empty_conn.execute("DROP TABLE imports")
     fn = _bind(get_heart_rate_samples, empty_conn)
     out = asyncio.run(fn(record_hash="rh1"))
-    assert out == IMPORT_REQUIRED_MESSAGE
+    assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
 # --- list_correlations -------------------------------------------------------
@@ -826,7 +829,7 @@ def test_get_me_attributes_db_error(empty_conn: duckdb.DuckDBPyConnection) -> No
 # --- empty-DB gate (issue #38) -----------------------------------------------
 #
 # Every tool except ``get_import_history`` short-circuits to
-# ``IMPORT_REQUIRED_MESSAGE`` when the ``imports`` table is empty, so a fresh
+# structured state-error payload when the ``imports`` table is empty, so a fresh
 # install plumbed into Claude Desktop / Claude Code returns actionable
 # guidance to the LLM instead of an empty result that looks like "no data".
 
@@ -859,7 +862,7 @@ def test_tool_returns_import_required_message_on_empty_db(
     """Each gated tool returns the standard guidance string on an empty DB."""
     fn = _bind(module, empty_conn)
     out = asyncio.run(fn(**kwargs))
-    assert out == IMPORT_REQUIRED_MESSAGE
+    assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
 def test_get_import_history_returns_empty_list_on_empty_db(

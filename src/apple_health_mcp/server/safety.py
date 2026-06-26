@@ -1,14 +1,33 @@
-"""Read-only SQL validation and bounded-row LIMIT enforcement.
+"""SQL validation and bounded-row LIMIT enforcement.
 
-``run_custom_query`` exposes the DuckDB engine to LLM-generated SQL. Even
-opening the connection in read-only mode is not sufficient because DuckDB
-ships built-in functions that can read host files (``read_text``,
-``read_csv``, ...) or hit external networks (``read_json`` with a URL),
-plus a ``FROM '<path>.csv'`` / ``FROM 'https://...'`` auto-detect shortcut
-that reads files / URLs without naming any function. Those would leak data
-through the query result even on a read-only connection. Mirrors the Rust
-``server::mod`` defences (issues #1, #2) plus the quoted-path bypass
-discovered during the Python port review.
+**Threat model (v0.4, issue #148).** v0.4 opened the server's DuckDB
+handle ``read_only=False`` so the new ``import_zip`` MCP tool can drive
+the importer inline on the live connection. That dropped the
+OS-file-lock-level read-only barrier the v0.3.x server relied on as a
+second line of defence; this validator is now the SOLE wire-side
+guard between an LLM-issued ``run_custom_query`` statement and the
+DuckDB engine. Concretely, ``validate_query`` must reject every
+non-SELECT/WITH construct (DDL: CREATE / ALTER / DROP; DML: INSERT /
+UPDATE / DELETE / MERGE; admin / I/O: ATTACH / COPY / INSTALL / LOAD /
+PRAGMA; the quoted-path ``FROM '<path>'`` and ``FROM '<url>'`` shortcuts
+DuckDB auto-detects as file / URL reads) and every built-in function
+that exfiltrates host content via the query result (``read_text`` /
+``read_csv`` / ``read_parquet`` / ``read_json`` / ``glob`` and their
+``_auto`` variants).
+
+Any future code path that hands LLM-controlled SQL straight to
+``conn.execute`` without going through ``validate_query`` first loses
+the only guard. New tools that accept SQL from the agent MUST funnel
+through ``run_custom_query`` (or call ``validate_query`` directly) so
+the guard remains the single chokepoint.
+
+The validator mirrors the Rust ``server::mod`` defences (issues #1,
+#2) plus the quoted-path bypass discovered during the Python port
+review.
+
+``run_custom_query`` exposes the DuckDB engine to LLM-generated SQL.
+``MAX_CUSTOM_QUERY_ROWS`` caps result-set size so an unbounded SELECT
+cannot blow up the LLM context window.
 """
 
 from __future__ import annotations

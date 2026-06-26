@@ -222,39 +222,61 @@ def get_connection(
     in-place upgrades; the probe either silently confirms the DB is
     current or raises :class:`ConfigError` carrying the re-import
     guidance.
+
+    v0.4 (issue #148): the same legacy-DB probe also fires on the
+    writable serve path (``read_only=False``, used by the new
+    import-from-the-agent flow) so the `serve` startup contract
+    matches across both transport modes. The writable probe uses the
+    just-opened handle directly instead of taking a second read-only
+    open of the same file (DuckDB rejects concurrent same-process
+    opens of the same on-disk file when one of them is writable).
     """
     resolved = db_path if db_path is not None else resolve_db_path()
-    if read_only:
-        if not resolved.exists():
-            _materialise_empty_db(resolved)
-        else:
-            _migrate_if_needed(resolved)
-    else:
+    # Snapshot existence BEFORE ``duckdb.connect`` runs: the writable
+    # open creates the file on the spot, so a post-open ``exists()``
+    # would always return True and the "fresh-install bootstrap" /
+    # "pre-v0.4 legacy-DB probe" branches below would never fire on
+    # the writable path.
+    file_existed_before_open = resolved.exists()
+    if not read_only:
         _ensure_parent_dir(resolved)
+    # Bootstrap + legacy probe are the same on both transports. v0.4
+    # (issue #148) drove this symmetry: writable serve now opens the
+    # same file the read-only path used to, so they share the
+    # fresh-install schema bootstrap (otherwise a fresh writable open
+    # would land an empty file and the first tool call would crash with
+    # "Table imports does not exist") AND the probe-via-fresh-read-only-
+    # handle path (otherwise opening a pre-v0.4 DB writable would
+    # trigger DuckDB's internal storage-format upgrade -- mutating a
+    # file the package is about to refuse -- which is exactly what the
+    # v0.3.0 read-only-probe contract was designed to prevent).
+    if not file_existed_before_open:
+        _materialise_empty_db(resolved)
+    else:
+        _migrate_if_needed_via_separate_probe(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
     if not read_only:
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+        # v0.4 (issue #148): preserve_insertion_order=false used to be
+        # set inside ``run_import`` for the duration of one CLI-owned
+        # connection. With ``run_import(conn=...)`` reusing the server's
+        # live handle, setting the PRAGMA inside the importer would
+        # leak the override onto every subsequent serve query that
+        # passes through the same connection (DuckDB session-scopes
+        # PRAGMA). Set it once at writable-open time so the override is
+        # connection-stable for the serve's whole lifetime, matching
+        # the load-bearing comment the orchestrator carries.
+        conn.execute("PRAGMA preserve_insertion_order = false;")
     _apply_session_tz(conn)
     return conn
 
 
-def _migrate_if_needed(db_path: Path) -> None:
-    """Validate ``db_path``'s schema_version before opening read-only.
+def _migrate_if_needed_via_separate_probe(db_path: Path) -> None:
+    """Validate ``db_path``'s schema_version using a fresh read-only probe.
 
-    v0.3.0 dropped automatic in-place schema upgrades from pre-v0.3.0
-    DBs (:issue:`124`). Two outcomes only:
-
-    * Current DB (``schema_version == CURRENT_SCHEMA_VERSION``) -> return
-      silently. The serve path proceeds to its real read-only open.
-    * Pre-v0.3.0 DB (``0 < schema_version < CURRENT_SCHEMA_VERSION``
-      AND no in-place migration can close the gap) -> raise
-      :class:`ConfigError` carrying the canonical re-import guidance,
-      with ``db_path`` interpolated so the user can copy-paste the
-      ``rm`` / ``import`` commands verbatim.
-
-    Skip case: very-pre-v0.1.4 DBs that lack the ``imports`` table
-    fall through to the existing tool-level error handling rather
-    than crash here.
+    Used by the read-only serve path (``read_only=True``). Opens a
+    short-lived read-only handle, delegates to
+    :func:`_migrate_if_needed_on_handle`, then closes the probe.
 
     The probe is opened ``read_only=True`` -- before v0.3.0 it was
     writable so the deleted in-place migration could ALTER, but the
@@ -264,9 +286,42 @@ def _migrate_if_needed(db_path: Path) -> None:
     a writable open on a refused DB could trigger DuckDB's internal
     storage-format upgrade -- mutating a file the package is about to
     refuse. The read-only probe avoids both.
+    """
+    probe = duckdb.connect(str(db_path), read_only=True)
+    try:
+        _migrate_if_needed_on_handle(probe, db_path)
+    finally:
+        probe.close()
+
+
+def _migrate_if_needed_on_handle(
+    conn: duckdb.DuckDBPyConnection,
+    db_path: Path,
+) -> None:
+    """Shared schema_version validation for any caller-owned handle.
+
+    v0.3.0 dropped automatic in-place schema upgrades from pre-v0.3.0
+    DBs (:issue:`124`). Two outcomes only:
+
+    * Current DB (``schema_version == CURRENT_SCHEMA_VERSION``) -> return
+      silently. The serve path proceeds to its real open.
+    * Pre-v0.3.0 / pre-v0.4 DB (``0 < schema_version <
+      CURRENT_SCHEMA_VERSION`` AND no in-place migration can close
+      the gap) -> raise :class:`ConfigError` carrying the canonical
+      re-import guidance, with ``db_path`` interpolated so the user
+      can copy-paste the ``rm`` / ``import`` commands verbatim.
+
+    Skip case: very-pre-v0.1.4 DBs that lack the ``imports`` table
+    fall through to the existing tool-level error handling rather
+    than crash here.
 
     Imported lazily to avoid a top-level circular import between
     ``db.connection`` and ``db.migrations``.
+
+    v0.4 (issue #148): the helper accepts the caller's handle so the
+    writable serve path can re-use the just-opened writable connection
+    (DuckDB rejects same-process concurrent opens of one file when
+    either side is writable, so a second probe handle would fail).
     """
     from apple_health_mcp.db.migrations import (
         CURRENT_SCHEMA_VERSION,
@@ -274,35 +329,31 @@ def _migrate_if_needed(db_path: Path) -> None:
     )
     from apple_health_mcp.exceptions import ConfigError
 
-    probe = duckdb.connect(str(db_path), read_only=True)
-    try:
-        # Defer to the tool-level error path when the DB pre-dates the
-        # ``imports`` table; a probe-time crash here would hide the
-        # better "run import first" guidance the tool layer would give.
-        if not _table_exists_in_main_conn(probe, "imports"):
-            return
-        # ``get_current_version`` cannot be called on a read-only
-        # handle because it idempotently CREATE TABLE IF NOT EXISTS
-        # the sentinel; that helper is for the writable
-        # apply_pending_migrations path. We probe the sentinel
-        # ourselves: very-pre-v0.1.4 DBs lack the table and are
-        # treated as version 0 (the tool-level error path picks them
-        # up); newer DBs read the persisted integer.
-        if not _table_exists_in_main_conn(probe, "schema_version"):
-            return
-        row = probe.execute("SELECT MAX(version) FROM schema_version").fetchone()
-        current = int(row[0]) if row is not None and row[0] is not None else 0
-        if current >= CURRENT_SCHEMA_VERSION:
-            return
-        # v0.3.0 (#124): the DB is behind and the registry cannot bring
-        # it forward in place (apply_pending_migrations would raise the
-        # exact same ConfigError, but we can't call it on the read-only
-        # probe because future migrations would need ALTER). Re-raise
-        # the canonical message directly so behaviour stays bit-identical
-        # to the writable path.
-        raise ConfigError(_reimport_required_message(current, db_path))
-    finally:
-        probe.close()
+    # Defer to the tool-level error path when the DB pre-dates the
+    # ``imports`` table; a probe-time crash here would hide the
+    # better "run import first" guidance the tool layer would give.
+    if not _table_exists_in_main_conn(conn, "imports"):
+        return
+    # ``get_current_version`` cannot be called on a read-only
+    # handle because it idempotently CREATE TABLE IF NOT EXISTS
+    # the sentinel; that helper is for the writable
+    # apply_pending_migrations path. We probe the sentinel
+    # ourselves: very-pre-v0.1.4 DBs lack the table and are
+    # treated as version 0 (the tool-level error path picks them
+    # up); newer DBs read the persisted integer.
+    if not _table_exists_in_main_conn(conn, "schema_version"):
+        return
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = int(row[0]) if row is not None and row[0] is not None else 0
+    if current >= CURRENT_SCHEMA_VERSION:
+        return
+    # v0.3.0 (#124): the DB is behind and the registry cannot bring
+    # it forward in place (apply_pending_migrations would raise the
+    # exact same ConfigError, but we can't call it on the read-only
+    # probe because future migrations would need ALTER). Re-raise
+    # the canonical message directly so behaviour stays bit-identical
+    # to the writable path.
+    raise ConfigError(_reimport_required_message(current, db_path))
 
 
 def _table_exists_in_main_conn(conn: duckdb.DuckDBPyConnection, name: str) -> bool:

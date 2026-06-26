@@ -315,26 +315,35 @@ def test_fresh_install_serves_with_import_required_message(
 ) -> None:
     """``serve`` against a never-imported path boots and surfaces guidance.
 
-    End-to-end check of the path that used to crash before this fix:
-    point ``get_connection`` at a missing file, register a tool against
-    the read-only connection, and confirm the tool returns
-    ``IMPORT_REQUIRED_MESSAGE`` (so a fresh Claude Desktop install sees
-    "run the importer" instead of silently empty results).
+    v0.4 (issue #148): the production serve path opens DuckDB
+    ``read_only=False`` so the upcoming ``import_zip`` MCP tool can
+    drive the importer inline. This integration test now mirrors that
+    setting; pre-v0.4 it opened ``read_only=True`` and silently
+    diverged from production, so a future regression in the writable
+    fresh-install bootstrap path (missing file -> schema-empty file ->
+    "Table imports does not exist") would have crashed every Claude
+    Desktop fresh install without failing this test.
     """
     import asyncio
 
     from apple_health_mcp.db.connection import get_connection
-    from apple_health_mcp.server.query import IMPORT_REQUIRED_MESSAGE
+    from apple_health_mcp.server.data_state import (
+        DataState,
+        build_state_error_payload,
+    )
 
     db_path = tmp_path / "fresh" / "health.duckdb"
     assert not db_path.exists()
-    conn = get_connection(db_path, read_only=True)
+    conn = get_connection(db_path, read_only=False)
     try:
         # Bootstrap created the file + schema.
         assert db_path.exists()
         fn = bind_tool(list_record_types, conn)
         out = asyncio.run(fn())
-        assert out == IMPORT_REQUIRED_MESSAGE
+        # env unset -> NEEDS_CONFIG envelope (root conftest's autouse
+        # fixture clears APPLE_HEALTH_EXPORT_ZIPS_DIR so the assertion
+        # is deterministic).
+        assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
         # ``get_import_history`` stays callable as the discovery path:
         # an empty list is the canonical "no imports yet" signal.
         rows = call_tool(bind_tool(get_import_history, conn))

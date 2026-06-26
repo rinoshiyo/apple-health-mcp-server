@@ -23,7 +23,9 @@ src/apple_health_mcp/
   logging_config.py logging setup (stderr only, stdout reserved for MCP)
   importers/        XML / ECG / GPX importers + dedup + orchestrator
   db/               DuckDB schema + connection helpers + migrations
-  server/           FastMCP server, query validation, and 17 tool modules
+  server/           FastMCP server, SQL safety validator, DataState helper,
+                    and tool modules (canonical list in
+                    server/tools/__init__.py::ALL_TOOLS)
   models/           Pydantic v2 schemas (reserved for future use)
 ```
 

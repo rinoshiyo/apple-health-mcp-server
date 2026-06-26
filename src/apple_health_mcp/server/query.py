@@ -23,26 +23,17 @@ from decimal import Decimal
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
-from apple_health_mcp import REPO_URL
+from apple_health_mcp.server.data_state import (
+    DataState,
+    build_state_error_payload,
+    check_data_state,
+    require_ready_or_state_error,
+)
 
 if TYPE_CHECKING:
     import duckdb
 
 _logger = logging.getLogger(__name__)
-
-
-# Wire string returned to the MCP client whenever a tool is invoked against
-# a database that has never been seeded by ``apple-health-mcp-server import``.
-# Exposed as a module-level constant so both the server and the test suite
-# anchor on the same exact text; consumers parsing tool responses should
-# match this prefix rather than the trailing URL (which may change between
-# minor versions).
-IMPORT_REQUIRED_MESSAGE = (
-    "Error: No Apple Health data has been imported yet. "
-    "Run `apple-health-mcp-server import <export-dir>` to ingest your "
-    "export, then restart this MCP server. "
-    f"See {REPO_URL}#usage for details."
-)
 
 
 def normalise_end_date(value: str) -> str:
@@ -74,54 +65,28 @@ def imports_present(
     *,
     lock: Lock | None = None,
 ) -> bool:
-    """Return ``True`` when at least one row exists in the ``imports`` table.
+    """Return ``True`` when the data-state machine reports READY.
 
-    Used by every tool whose contract assumes at least one import has
-    happened; ``get_import_history`` is the single exception and skips this
-    check so callers can confirm the empty-DB state without seeing the
-    guidance message.
+    Backwards-compatible wrapper retained for callers that only care
+    about the boolean "do we have data?" question; new code should call
+    :func:`apple_health_mcp.server.data_state.check_data_state` directly
+    so the NEEDS_CONFIG vs NEEDS_IMPORT distinction stays visible at the
+    call site.
 
-    The DB connection holds a read-only snapshot for its lifetime, so a
-    fresh ``import`` from another process is not visible until the MCP
-    server is restarted (this is why the README's Troubleshooting section
-    spells out "restart the server"). We still re-query rather than cache
-    because the check is a single aggregate over a one-row table.
-
-    A missing ``imports`` table (the DB was opened against an unrelated
-    DuckDB file, or a stale pre-schema-version export) is treated as
-    "no imports yet" so the tool layer surfaces ``IMPORT_REQUIRED_MESSAGE``
-    instead of a cryptic ``Error: Table imports does not exist`` — the
-    user's actionable next step is the same either way (run the importer
-    against the right path), and burying the SQL error in a generic
-    "Error: ..." would defeat the whole point of this gate.
+    The probe is delegated to ``check_data_state`` so the missing-table
+    /alien-DB cases stay handled in one place.
     """
-    try:
-        rows = query_to_json(conn, "SELECT COUNT(*) AS n FROM imports", lock=lock)
-    except Exception as exc:
-        _logger.debug("imports_present probe failed (%s); treating as empty DB", exc)
-        return False
-    # ``_coerce`` types come back as ``Any``; mypy's no-any-return rule wants
-    # an explicit bool here even though the COUNT(*) value is always an int.
-    return bool(rows[0]["n"] > 0)
+    return check_data_state(conn, lock=lock) == DataState.READY
 
 
-def require_imports_or_message(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    lock: Lock | None = None,
-) -> str | None:
-    """Return ``IMPORT_REQUIRED_MESSAGE`` when the DB is empty, else ``None``.
-
-    The 4 multi-query tools (``get_workout_details``,
-    ``get_correlation_details``, ``get_ecg_data``, ``get_me_attributes``)
-    cannot funnel through :func:`run_query`'s ``require_data`` gate because
-    they assemble their payload from several ``query_to_json`` calls. They
-    use this helper so the gate lives in one place::
-
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
-    """
-    return None if imports_present(conn, lock=lock) else IMPORT_REQUIRED_MESSAGE
+# v0.4 source-compat alias for the pre-v0.4 helper name; the 4 tool
+# sites (get_workout_details, get_correlation_details, get_ecg_data,
+# get_me_attributes) still import this name. Re-exports the canonical
+# ``require_ready_or_state_error`` from :mod:`server.data_state` so
+# the body lives in one place and a future drift in error-envelope
+# shape cannot diverge the two helpers (they were byte-identical
+# during the rename and would have aged apart otherwise).
+require_imports_or_message = require_ready_or_state_error
 
 
 def _coerce(value: object) -> Any:
@@ -226,15 +191,18 @@ def run_query(
     logging defaults to INFO, so query bodies stay out of the standard log
     stream unless the operator opts in.
 
-    When ``require_data`` is ``True`` (the default), an empty ``imports``
-    table short-circuits with :data:`IMPORT_REQUIRED_MESSAGE` so a freshly
-    installed server returns actionable guidance instead of an empty list
-    that an LLM might interpret as "the user has no heart-rate data".
-    ``get_import_history`` is the single tool that opts out.
+    When ``require_data`` is ``True`` (the default), a non-READY data
+    state short-circuits with the structured-error JSON envelope
+    described in :mod:`apple_health_mcp.server.data_state` so a freshly
+    installed server returns actionable guidance instead of an empty
+    list that an LLM might interpret as "the user has no heart-rate
+    data". ``get_import_history`` is the single tool that opts out.
     """
     try:
-        if require_data and not imports_present(conn, lock=lock):
-            return IMPORT_REQUIRED_MESSAGE
+        if require_data:
+            state = check_data_state(conn, lock=lock)
+            if state != DataState.READY:
+                return build_state_error_payload(state)
         rows = query_to_json(conn, sql, params, lock=lock)
     except Exception as exc:
         _logger.debug("query failed: %s", exc)
@@ -317,8 +285,10 @@ def run_query_envelope(
     runs per item before ``_total`` is dropped.
     """
     try:
-        if require_data and not imports_present(conn, lock=lock):
-            return IMPORT_REQUIRED_MESSAGE
+        if require_data:
+            state = check_data_state(conn, lock=lock)
+            if state != DataState.READY:
+                return build_state_error_payload(state)
         rows = query_to_json(conn, sql, params, lock=lock)
         if rows:
             total = int(rows[0]["_total"])
