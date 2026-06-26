@@ -12,17 +12,21 @@ rehashed on every directory scan.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import run_query_payload
+from apple_health_mcp.server.tools._zip_inspect import (
+    ID_PREFIX_LEN,
+    is_apple_health_zip,
+    load_sha_cache,
+    stream_sha256,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -42,17 +46,6 @@ DESCRIPTION = (
     "Use this BEFORE import_zip: pick an entry, then call "
     "import_zip(id=…)."
 )
-
-
-# 1 MB chunk for streaming sha256 — same constant family as the XML
-# importer's read chunk; sized to keep the OS page cache warm without
-# blowing up memory.
-_SHA256_READ_CHUNK_BYTES = 1024 * 1024
-
-# sha256 short-prefix length used as the ``id`` field. 8 hex chars =
-# 32 bits of entropy; collision probability is ~negligible for the
-# realistic case of ≤100 ZIPs in a user's drop-zone.
-_ID_PREFIX_LEN = 8
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
@@ -102,26 +95,20 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                 }
             )
 
-        sha_cache = _load_sha_cache(conn, lock=lock)
+        # ``imports`` is monotonic (rows only appended, never deleted),
+        # so taking the cache snapshot under the lock and then walking
+        # the directory unlocked is consistency-safe: a fresh import
+        # landing mid-scan can only flip a future ``list_zips`` entry
+        # from ``imported=false`` to ``imported=true``, never the other
+        # way; the stale answer self-corrects on the next call.
+        sha_cache = load_sha_cache(conn, lock=lock)
         imported_set = set(sha_cache.values())
 
         zips: list[dict[str, Any]] = []
         for path in entries:
-            stat = path.stat()
-            mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-            cache_key = (stat.st_size, mtime_dt)
-            sha = sha_cache.get(cache_key) or _stream_sha256(path)
-            zips.append(
-                {
-                    "id": sha[:_ID_PREFIX_LEN],
-                    "file_name": path.name,
-                    "mtime": mtime_dt.isoformat(),
-                    "size": stat.st_size,
-                    "sha256": sha,
-                    "imported": sha in imported_set,
-                    "is_apple_health": _is_apple_health_zip(path),
-                }
-            )
+            entry = _describe_zip(path, sha_cache, imported_set)
+            if entry is not None:  # pragma: no branch - None only on rare TOCTOU
+                zips.append(entry)
 
         if not zips:
             hint = (
@@ -147,81 +134,38 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         )
 
 
-def _load_sha_cache(
-    conn: duckdb.DuckDBPyConnection,
-    *,
-    lock: Lock,
-) -> dict[tuple[int, datetime], str]:
-    """Build a ``(size, mtime) → sha256`` lookup from ``imports``.
+def _describe_zip(
+    path: Path,
+    sha_cache: dict[tuple[int, datetime], str],
+    imported_set: set[str],
+) -> dict[str, Any] | None:
+    """Build one ``zips`` entry, or ``None`` if the file vanished mid-scan.
 
-    The ``imports`` table records the source ZIP triple
-    (``source_zip_sha256`` / ``source_zip_mtime`` / ``source_zip_size``)
-    set by past ``import_zip`` calls. Matching a directory entry's
-    (size, mtime) against this cache lets ``list_zips`` skip rehashing
-    a 1.2 GB ZIP whose stat has not changed since the last import.
-    The original file name is intentionally NOT part of the key: a user
-    who renames or duplicates a ZIP between scans should still hit the
-    cache, and the sha256 is the canonical content identity anyway.
-    """
-    rows = query_to_json(
-        conn,
-        "SELECT source_zip_sha256, source_zip_mtime, source_zip_size "
-        "FROM imports WHERE source_zip_sha256 IS NOT NULL",
-        lock=lock,
-    )
-    cache: dict[tuple[int, datetime], str] = {}
-    for row in rows:
-        sha = row["source_zip_sha256"]
-        size_raw = row["source_zip_size"]
-        mtime_raw = row["source_zip_mtime"]
-        # Defensive: the SELECT already filters sha IS NOT NULL, but
-        # the size / mtime columns could land NULL on a pre-v0.4 row
-        # that a future migration brings forward without backfilling
-        # the triple. The whole row is unusable as a cache entry then,
-        # so skip it silently.
-        if sha is None or size_raw is None or mtime_raw is None:  # pragma: no cover - defensive
-            continue
-        mtime = _parse_iso(mtime_raw)
-        cache[(int(size_raw), mtime)] = str(sha)
-    return cache
-
-
-def _parse_iso(value: object) -> datetime:
-    """Coerce a query-to-json-serialised TIMESTAMPTZ value into a datetime.
-
-    ``query_to_json`` stringifies tz-aware datetimes via
-    ``datetime.isoformat(sep=" ")`` -- the expected input here. The
-    ``isinstance(value, datetime)`` fast-path keeps the helper robust
-    against a future ``_coerce`` change that stops stringifying.
-    """
-    if isinstance(value, datetime):  # pragma: no cover - future-proofing
-        return value
-    return datetime.fromisoformat(str(value))
-
-
-def _stream_sha256(path: Path) -> str:
-    """Return the hex sha256 of ``path`` by streaming 1 MB chunks."""
-    hasher = hashlib.sha256()
-    with path.open("rb") as fp:
-        for chunk in iter(lambda: fp.read(_SHA256_READ_CHUNK_BYTES), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-def _is_apple_health_zip(path: Path) -> bool:
-    """Detect whether ``path`` looks like an Apple Health export.
-
-    Apple's Health-app share-sheet produces a ZIP whose top-level
-    folder is ``apple_health_export/`` containing ``export.xml``. Some
-    third-party tools repackage just the inner directory contents at
-    the root. Both shapes are accepted; anything else is flagged so
-    the agent can ask "did you mean a different ZIP?" before paying
-    the import cost.
+    The TOCTOU window between ``iterdir`` and ``stat`` is real (companion
+    apps may rotate ZIPs into / out of the drop-zone). Catching the
+    expected ``FileNotFoundError`` / ``PermissionError`` per entry keeps
+    a transient directory mutation from crashing the entire ``list_zips``
+    call -- the agent retries on the next scan.
     """
     try:
-        with zipfile.ZipFile(path) as zf:
-            names = zf.namelist()
-    except (zipfile.BadZipFile, OSError) as exc:  # pragma: no cover - defensive
-        _logger.debug("is_apple_health probe failed for %s (%s)", path, exc)
-        return False
-    return any(name in {"apple_health_export/export.xml", "export.xml"} for name in names)
+        stat = path.stat()
+    except (FileNotFoundError, PermissionError) as exc:  # pragma: no cover - rare
+        _logger.debug("skipping %s during list_zips scan (%s)", path, exc)
+        return None
+    mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    cache_key = (stat.st_size, mtime_dt)
+    cached = sha_cache.get(cache_key)
+    try:
+        sha = cached or stream_sha256(path)
+    except (FileNotFoundError, PermissionError) as exc:  # pragma: no cover - rare
+        _logger.debug("skipping %s while hashing during list_zips (%s)", path, exc)
+        return None
+    return {
+        "id": sha[:ID_PREFIX_LEN],
+        "file_name": path.name,
+        "mtime": mtime_dt.isoformat(),
+        "size": stat.st_size,
+        "sha256": sha,
+        "imported": sha in imported_set,
+        "is_apple_health": is_apple_health_zip(path),
+    }

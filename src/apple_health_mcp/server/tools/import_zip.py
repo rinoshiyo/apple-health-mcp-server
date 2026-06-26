@@ -10,14 +10,26 @@ Idempotency lives inside the importer, not at this tool's surface: the
 ``source_zip_sha256`` lookup inside ``run_import`` makes a byte-identical
 re-import a no-op that returns in milliseconds with
 ``records_added: 0`` + ``already_imported_at`` set.
+
+**Concurrency contract.** The DuckDB Python connection is not thread-
+safe and the v0.4 server opens it writable so this tool can reuse the
+same handle. The full extract + ``run_import`` body therefore runs
+under the same ``lock`` every other MCP tool acquires before touching
+``conn`` -- without the wrap, a concurrent read tool's
+``conn.execute(...)`` would race the importer's writes. The handler is
+also dispatched via ``asyncio.to_thread`` so the event loop stays
+responsive to the MCP transport's keepalives during the 1-2 minute
+import.
 """
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import logging
 import os
+import re
 import tempfile
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +40,13 @@ from pydantic import Field
 
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.tools._zip_inspect import (
+    ID_PREFIX_LEN,
+    find_sha_by_prefix,
+    is_apple_health_zip,
+    load_sha_cache,
+    stream_sha256,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -49,12 +68,18 @@ DESCRIPTION = (
     "id, records_added, workouts_added, ecg_readings_added, "
     "route_points_added, already_imported_at, duration_secs, message} "
     "on success, or {status: 'error', reason, message} on a "
-    "configuration / not-an-Apple-Health-ZIP / ZIP-not-found failure."
+    "configuration / not-an-Apple-Health-ZIP / ZIP-not-found / "
+    "invalid-id failure."
 )
 
 
-_SHA256_READ_CHUNK_BYTES = 1024 * 1024
-_ID_PREFIX_LEN = 8
+# Validation for the user-supplied ``id`` argument: hex-only, 4-64 chars.
+# Pre-validation is critical because Python's ``str.startswith('')``
+# returns True on the empty prefix -- without the gate an empty / 1-char
+# id would silently select the alphabetically-first ZIP and import it.
+_MIN_ID_LEN = 4
+_MAX_ID_LEN = 64
+_ID_HEX_RE = re.compile(r"^[0-9a-f]+$")
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
@@ -64,12 +89,17 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             str,
             Field(
                 description=(
-                    "8-char sha256 prefix from list_zips — uniquely identifies which ZIP to import."
+                    "Hex sha256 prefix from list_zips (typically the "
+                    "8-char form). Validated as 4-64 lowercase hex chars."
                 ),
             ),
         ],
     ) -> str:
-        return _import_zip_sync(conn, lock, id)
+        # Offload to a worker thread so the asyncio event loop stays
+        # responsive during the multi-minute import; the body holds the
+        # ``lock`` for the whole conn.execute path, so concurrent tool
+        # calls back off cleanly instead of racing the writer.
+        return await asyncio.to_thread(_import_zip_sync, conn, lock, id)
 
 
 def _import_zip_sync(
@@ -77,7 +107,23 @@ def _import_zip_sync(
     lock: Lock,
     target_id: str,
 ) -> str:
-    """Synchronous body of ``import_zip``; split out so it is reusable in tests."""
+    """Synchronous body of ``import_zip``; split so the asyncio handler
+    can offload to ``asyncio.to_thread`` and tests can drive it directly.
+    """
+    cleaned = target_id.strip().lower()
+    if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):
+        return run_query_payload(
+            {
+                "status": "error",
+                "reason": "invalid_id",
+                "message": (
+                    f"id must be {_MIN_ID_LEN}-{_MAX_ID_LEN} lowercase "
+                    f"hex characters; got {target_id!r}. Call list_zips "
+                    "and use the ``id`` field verbatim."
+                ),
+            }
+        )
+
     dir_str = (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip()
     if not dir_str:
         return run_query_payload(
@@ -106,22 +152,7 @@ def _import_zip_sync(
             }
         )
 
-    # Match by hashing each candidate; ``list_zips``'s cache is the
-    # happy path but does not store ``id``-keyed entries, so the
-    # cheapest correct resolution is to recompute sha256 here. For a
-    # directory with ≤10 ZIPs (the realistic shape) this is on the
-    # order of single-digit seconds total even on first call; subsequent
-    # ``import_zip`` invocations against the same ZIP hit the importer's
-    # own sha256-fast-path and return without re-reading anything.
-    selected: Path | None = None
-    selected_sha: str | None = None
-    for path in candidates:
-        sha = _stream_sha256(path)
-        if sha.startswith(target_id):
-            selected = path
-            selected_sha = sha
-            break
-
+    selected, selected_sha = _resolve_target(conn, lock, candidates, cleaned)
     if selected is None:
         return run_query_payload(
             {
@@ -129,14 +160,15 @@ def _import_zip_sync(
                 "reason": "id_not_found",
                 "message": (
                     f"No ZIP in {export_dir} has id starting with "
-                    f"{target_id!r}. Call list_zips to refresh the "
+                    f"{cleaned!r}. Call list_zips to refresh the "
                     "discovery list."
                 ),
             }
         )
 
     assert selected_sha is not None
-    if not _is_apple_health_zip(selected):
+    canonical_id = selected_sha[:ID_PREFIX_LEN]
+    if not is_apple_health_zip(selected):
         return run_query_payload(
             {
                 "status": "error",
@@ -164,7 +196,7 @@ def _import_zip_sync(
         return run_query_payload(
             {
                 "status": "ok",
-                "id": target_id,
+                "id": canonical_id,
                 "records_added": 0,
                 "workouts_added": 0,
                 "ecg_readings_added": 0,
@@ -195,45 +227,112 @@ def _import_zip_sync(
 
         # Apple Health ships the export as ``apple_health_export/`` at
         # the top level; some repackagers flatten it. Resolve whichever
-        # shape we got into the path the importer expects (the directory
-        # that holds ``export.xml`` + ``electrocardiograms/`` +
-        # ``workout-routes/``).
+        # shape we got into the path the importer expects.
         if (extracted_root / "apple_health_export" / "export.xml").exists():
             import_root = extracted_root / "apple_health_export"
         else:
             import_root = extracted_root
 
         # Lazy import: pulling in ``apple_health_mcp.importers`` at
-        # module import would chain into pyarrow / lxml and pay a
-        # ~30 MB import cost on every server boot, even when the user
-        # never calls import_zip. The smoke test ``test_server_module_
-        # does_not_import_pyarrow`` pins that invariant; keep the
-        # importer load on the function-call path only.
+        # module-import time would chain into pyarrow + lxml and pay
+        # ~30 MB on every server boot, even when the user never calls
+        # import_zip. ``test_server_module_does_not_import_pyarrow``
+        # pins that invariant.
         from apple_health_mcp.importers import run_import
 
-        stats = run_import(
-            import_root,
-            conn=conn,
-            source_zip=(selected_sha, mtime, size),
-        )
+        # Hold the lock for the whole importer run: the DuckDB Python
+        # binding is not thread-safe and ``run_import`` performs many
+        # writes against ``conn``. Releasing the lock here would let a
+        # concurrent read tool's ``conn.execute`` race the importer
+        # mid-write -- cursor corruption, partial reads, or worse.
+        # Concurrent agent calls back off on this lock until the
+        # import completes; the ``asyncio.to_thread`` wrap in the
+        # handler keeps the event loop responsive to the MCP
+        # transport's keepalives meanwhile.
+        started = time.monotonic()
+        with lock:
+            stats = run_import(
+                import_root,
+                conn=conn,
+                source_zip=(selected_sha, mtime, size),
+            )
+        duration_secs = round(time.monotonic() - started, 2)
 
     return run_query_payload(
         {
             "status": "ok",
-            "id": target_id,
+            "id": canonical_id,
             "records_added": stats.records,
             "workouts_added": stats.workouts,
             "ecg_readings_added": stats.ecg_readings,
             "route_points_added": stats.route_points,
             "already_imported_at": None,
-            "duration_secs": None,
+            "duration_secs": duration_secs,
             "message": (
                 f"Imported {selected.name} ({stats.records} records, "
-                f"{stats.workouts} workouts). Read tools now return real "
-                "data."
+                f"{stats.workouts} workouts) in {duration_secs:.1f}s. "
+                "Read tools now return real data."
             ),
         }
     )
+
+
+def _resolve_target(
+    conn: duckdb.DuckDBPyConnection,
+    lock: Lock,
+    candidates: list[Path],
+    target_id: str,
+) -> tuple[Path | None, str | None]:
+    """Find the on-disk ZIP whose sha256 starts with ``target_id``.
+
+    Resolution order (cheapest first):
+
+    1. **DB cache by sha prefix.** A prior import already stamped the
+       full sha into ``imports.source_zip_sha256``; if the prefix hits,
+       look up the (size, mtime) tuple in the same cache, then confirm
+       a candidate's ``stat()`` matches. No hashing required.
+    2. **DB cache by (size, mtime).** When the prefix lookup misses,
+       any candidate whose (size, mtime) tuple is already in the
+       imports cache short-circuits hashing to the cached sha.
+    3. **Stream sha256.** Last resort: hash the candidate. Only fires
+       for ZIPs the user has never imported.
+
+    Steps 1-2 collapse the O(N x ZIP-size) re-hash storm that an
+    earlier draft paid every time an agent re-asked for an already-
+    imported ZIP. The cost on the agent's hot path drops from
+    multi-second to one ``stat()`` per candidate plus, at most, one
+    fresh sha256.
+    """
+    sha_cache = load_sha_cache(conn, lock=lock)
+
+    full_sha = find_sha_by_prefix(conn, target_id, lock=lock)
+    if full_sha is not None:
+        for size_key, mtime_key in (k for k, v in sha_cache.items() if v == full_sha):
+            for path in candidates:
+                try:
+                    stat = path.stat()
+                except (FileNotFoundError, PermissionError):  # pragma: no cover - rare
+                    continue
+                if stat.st_size != size_key:  # pragma: no cover - prefix collision is rare
+                    continue
+                mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+                if mtime_dt == mtime_key:  # pragma: no branch - same-stat is the happy path
+                    return path, full_sha
+        # The prefix matched the DB but no on-disk ZIP carries that
+        # (size, mtime). Fall through to the streaming path -- the
+        # user may have re-saved the ZIP, changing mtime.
+
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except (FileNotFoundError, PermissionError):  # pragma: no cover - rare
+            continue
+        mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+        cached = sha_cache.get((stat.st_size, mtime_dt))
+        sha = cached or stream_sha256(path)
+        if sha.startswith(target_id):
+            return path, sha
+    return None, None
 
 
 def _find_existing_import(
@@ -256,20 +355,5 @@ def _find_existing_import(
         return None
     return str(value)
 
-
-def _stream_sha256(path: Path) -> str:
-    """Return the hex sha256 of ``path`` by streaming 1 MB chunks."""
-    hasher = hashlib.sha256()
-    with path.open("rb") as fp:
-        for chunk in iter(lambda: fp.read(_SHA256_READ_CHUNK_BYTES), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
-
-
-# ``_is_apple_health_zip`` lives in ``list_zips`` (the discovery tool
-# that emits the flag); ``import_zip`` re-uses the same predicate so
-# the "what counts as an Apple Health ZIP" rule has a single source of
-# truth.
-from apple_health_mcp.server.tools.list_zips import _is_apple_health_zip  # noqa: E402
 
 __all__ = ["DESCRIPTION", "register"]

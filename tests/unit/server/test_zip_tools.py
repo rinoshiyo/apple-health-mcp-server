@@ -214,6 +214,65 @@ def _call_import_zip(conn: duckdb.DuckDBPyConnection, *, id: str) -> dict[str, o
     return json.loads(raw)
 
 
+def test_import_zip_rejects_empty_id() -> None:
+    """An empty id MUST NOT silently select the alphabetically-first ZIP.
+
+    Python's ``str.startswith('')`` returns True on every haystack, so
+    without the validation gate an empty / 1-char prefix would import
+    an arbitrary file. Pin the explicit ``invalid_id`` envelope.
+    """
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_import_zip(conn, id="")
+        assert out["status"] == "error"
+        assert out["reason"] == "invalid_id"
+    finally:
+        conn.close()
+
+
+def test_import_zip_rejects_non_hex_id() -> None:
+    """Non-hex characters in id are rejected before any directory scan."""
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_import_zip(conn, id="ZZZZZZZZ")
+        assert out["status"] == "error"
+        assert out["reason"] == "invalid_id"
+    finally:
+        conn.close()
+
+
+def test_import_zip_accepts_uppercase_hex_id(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Uppercase hex is normalised to lowercase before prefix matching.
+
+    list_zips emits lowercase, but a user who copy-pasted the value
+    from a different tool (or capitalised it by accident) should not
+    hit invalid_id.
+    """
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    import hashlib
+
+    sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    db_path = tmp_path / "h.duckdb"
+    conn = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(conn)
+        apply_pending_migrations(conn, db_path=db_path)
+        out = _call_import_zip(conn, id=sha[:8].upper())
+        assert out["status"] == "ok"
+        # Canonical id on the wire is lowercase, 8 chars, regardless of
+        # what the user passed.
+        assert out["id"] == sha[:8]
+    finally:
+        conn.close()
+
+
 def test_import_zip_errors_when_env_unset() -> None:
     """env unset → ``status: error`` + ``reason: export_zips_dir_not_set``."""
     conn = get_in_memory_connection()
@@ -316,6 +375,92 @@ def test_import_zip_drives_run_import_against_live_handle(
         assert row is not None
         assert row[0] == sha
         assert row[1] == zip_path.stat().st_size
+    finally:
+        conn.close()
+
+
+def test_import_zip_resolves_via_db_cache_fast_path(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Second invocation with a known sha prefix uses the DB cache lookup.
+
+    Once a ZIP has been imported, its full sha lives in
+    ``imports.source_zip_sha256``. ``_resolve_target`` first tries
+    ``find_sha_by_prefix`` against that table and matches a candidate
+    file by (size, mtime) without re-streaming the bytes. This test
+    proves both that the DB-cache branch is taken (no re-hash needed)
+    AND that the result reaches the idempotent ``already_imported_at``
+    envelope correctly.
+    """
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+
+    db_path = tmp_path / "h.duckdb"
+    conn = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(conn)
+        apply_pending_migrations(conn, db_path=db_path)
+        import hashlib
+
+        sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+        # First import: populates source_zip_* triple in imports.
+        first = _call_import_zip(conn, id=sha[:8])
+        assert first["status"] == "ok"
+        # Second import via prefix: hits the DB cache fast-path.
+        second = _call_import_zip(conn, id=sha[:8])
+        assert second["status"] == "ok"
+        assert second["records_added"] == 0
+        assert second["already_imported_at"] is not None
+        assert second["id"] == sha[:8]
+    finally:
+        conn.close()
+
+
+def test_import_zip_falls_through_when_db_prefix_match_lacks_disk_file(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A DB-cache prefix hit with no matching on-disk (size,mtime) falls
+    through to streaming; if no candidate matches the streamed sha
+    either, the user sees ``id_not_found``.
+
+    Pins the fall-through path: prior imports left an ``imports`` row
+    whose sha prefix matches the requested id, but the actual ZIP file
+    has been deleted or replaced. The resolver must not return the
+    stale DB row; it must fall back to hashing on-disk files and
+    surface ``id_not_found`` when nothing matches.
+    """
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    db_path = tmp_path / "h.duckdb"
+    conn = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(conn)
+        apply_pending_migrations(conn, db_path=db_path)
+        # Seed imports with a fake prior import whose sha starts with
+        # ``deadbeef`` but no on-disk file matches (the directory is
+        # empty).
+        from datetime import UTC, datetime
+
+        fake_sha = "deadbeef" + ("0" * 56)
+        conn.execute(
+            "INSERT INTO imports (import_id, export_dir, imported_at, "
+            "source_zip_sha256, source_zip_mtime, source_zip_size) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                "imp_stale",
+                "/tmp/stale",
+                datetime(2024, 1, 1, tzinfo=UTC),
+                fake_sha,
+                datetime(2024, 1, 1, tzinfo=UTC),
+                12345,
+            ],
+        )
+        # Directory is empty; nothing on disk matches the prefix.
+        out = _call_import_zip(conn, id="deadbeef")
+        assert out["status"] == "error"
+        assert out["reason"] == "id_not_found"
     finally:
         conn.close()
 

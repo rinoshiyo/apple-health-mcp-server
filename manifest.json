@@ -4,7 +4,7 @@
   "display_name": "Apple Health",
   "version": "0.3.0",
   "description": "Make Claude your personal health AI — locally.",
-  "long_description": "Ingests an Apple Health export (export.xml + electrocardiograms/*.csv + workout-routes/*.gpx) into a local DuckDB database and exposes 20 read-oriented MCP tools over it (records / workouts / heart rate samples / ECG readings / activity summaries / state of mind / etc., plus a validated SELECT-only escape hatch). v0.4 adds zip-flow tools: drop your export ZIP into the configured directory and let Claude discover + import it for you. All data stays local; nothing is uploaded.",
+  "long_description": "Ingests an Apple Health export (export.xml + electrocardiograms/*.csv + workout-routes/*.gpx) into a local DuckDB database and exposes 20 MCP tools over it: 18 read-oriented (records / workouts / heart rate samples / ECG readings / activity summaries / state of mind / etc., plus a validated SELECT-only escape hatch) and 2 zip-flow (list_zips discovers Apple Health export ZIPs in a configured directory; import_zip ingests one). Drop your export ZIP into the configured directory and ask Claude — no terminal commands required. All data stays local; nothing is uploaded.",
   "author": {
     "name": "Yoshinori Ishii",
     "url": "https://github.com/rinoshiyo"
@@ -34,7 +34,7 @@
     "export_zips_dir": {
       "type": "directory",
       "title": "Export ZIPs directory",
-      "description": "Folder where you keep your Apple Health export ZIPs (the ones the Health app produces when you tap Share → Export). v0.4 onward, Claude reads this folder via list_zips, then drives import_zip to ingest whichever ZIP you pick — no terminal commands required. You can drop multiple generations of the export side-by-side (the latest one is suggested by date), and the importer uses an internal sha256 cache so re-imports of a byte-identical ZIP take milliseconds. Suggested locations: ~/Documents/AppleHealth on macOS / Linux, %USERPROFILE%\\Documents\\AppleHealth on Windows.",
+      "description": "Folder where you keep your Apple Health export ZIPs (the ones the Health app produces when you tap Share → Export). v0.4 onward, Claude reads this folder via list_zips, then drives import_zip to ingest whichever ZIP you pick — no terminal commands required. You can drop multiple generations of the export side-by-side (the latest one is suggested by date), and the importer uses an internal sha256 cache so re-imports of a byte-identical ZIP take milliseconds. Suggested locations: ~/Documents/AppleHealth on macOS / Linux, %USERPROFILE%\\Documents\\AppleHealth on Windows. Windows users: avoid paths under %LOCALAPPDATA% — Claude Desktop's MSIX sandbox virtualises that root and the server will not see ZIPs you drop there from Explorer.",
       "required": false
     }
   },
