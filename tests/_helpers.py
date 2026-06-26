@@ -68,7 +68,11 @@ def call_tool(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> Any:
     return json.loads(raw)
 
 
-def seed_one_import(conn: duckdb.DuckDBPyConnection) -> None:
+def seed_one_import(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    import_id: str = "imp1",
+) -> None:
     """Insert a single placeholder row into ``imports``.
 
     Several DB-error-path tests need the empty-DB gate to pass so the tool
@@ -76,10 +80,22 @@ def seed_one_import(conn: duckdb.DuckDBPyConnection) -> None:
     here keeps the placeholder columns in one place, matching the synthetic
     fixture pattern documented in ``tests/fixtures/README.md`` (no real
     device UUIDs or source names anywhere in the repo).
+
+    Uses a column-list INSERT so future nullable column adds to ``imports``
+    do not require an N-place rewrite across the test suite: a new column
+    that schema declares NULL-able lands NULL implicitly here without any
+    test edit. The same pattern is already used by
+    ``tests/unit/importers/test_incremental_reimport.py``; the first
+    v0.4 (issue #148) PR promotes it to the single seed helper so each
+    future schema-add bump touches only schema + this file.
+
+    ``import_id`` is overridable for the few sites that pin a specific
+    value; the default ``"imp1"`` matches the previous inline literal.
     """
     conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
+        "INSERT INTO imports (import_id, export_dir, imported_at) "
+        "VALUES (?, '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00')",
+        [import_id],
     )
 
 

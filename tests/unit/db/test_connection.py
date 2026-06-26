@@ -19,6 +19,7 @@ from apple_health_mcp.db.connection import (
     resolve_db_path,
 )
 from apple_health_mcp.exceptions import ConfigError
+from tests._helpers import seed_one_import
 
 if TYPE_CHECKING:
     from pytest import LogCaptureFixture, MonkeyPatch
@@ -427,7 +428,8 @@ def test_get_connection_read_only_materialises_empty_db_when_missing(
         with pytest.raises(duckdb.Error):
             conn.execute(
                 "INSERT INTO imports VALUES "
-                "('x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
+                "('x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, "
+                "NULL, 0, NULL, NULL, NULL)"
             )
     finally:
         conn.close()
@@ -498,10 +500,7 @@ def test_get_connection_read_only_preserves_existing_data_after_bootstrap(
     db_path = tmp_path / "ro.duckdb"
     seeder = get_connection(db_path)
     ensure_schema(seeder)
-    seeder.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 1, 0, 1, NULL, 1)"
-    )
+    seed_one_import(seeder)
     seeder.close()
 
     conn = get_connection(db_path, read_only=True)
@@ -610,6 +609,47 @@ def test_get_connection_read_only_rejects_legacy_v2_db_with_reimport_guidance(
     # against a future refactor that accidentally re-introduces the
     # ``<db>`` placeholder by dropping the path argument somewhere
     # along the call chain).
+    assert str(db_path) in str(excinfo.value)
+    assert "<db>" not in str(excinfo.value)
+
+
+def test_get_connection_read_only_rejects_legacy_v4_db_with_reimport_guidance(
+    tmp_path: Path,
+) -> None:
+    """v0.4 (issue #148): a v=4 DB (the v0.3.0 stable baseline) opened by
+    ``serve`` after the v0.4 / schema_version=5 bump raises
+    :class:`ConfigError` with the canonical re-import guidance.
+
+    Covers the read-only probe path (``_migrate_if_needed``) for the v=4
+    case explicitly, in addition to the writable-path coverage
+    ``test_apply_pending_migrations_rejects_v4_db_after_v0_4_zip_source_bump``
+    already pins. Both paths share their re-import message, so a future
+    regression that special-cases v=2 in either path would surface here
+    instead of as a runtime crash for the first v0.3.x user who upgraded.
+    """
+    from apple_health_mcp.db.migrations import (
+        _reimport_required_message,
+        set_current_version,
+    )
+    from apple_health_mcp.db.schema import ensure_schema
+
+    db_path = tmp_path / "legacy_v4.duckdb"
+    seeder = duckdb.connect(str(db_path), read_only=False)
+    try:
+        # The v=4 baseline is the v0.3.0 stable schema. Build it via
+        # ensure_schema (which lays down the current canonical shape
+        # including the v0.4 source_zip_* columns -- that's fine; the
+        # rejection path looks at schema_version, not at column
+        # presence) and stamp the version sentinel at 4.
+        ensure_schema(seeder)
+        set_current_version(seeder, 4)
+        seeder.execute("CHECKPOINT;")
+    finally:
+        seeder.close()
+
+    with pytest.raises(ConfigError) as excinfo:
+        get_connection(db_path, read_only=True)
+    assert str(excinfo.value) == _reimport_required_message(4, db_path)
     assert str(db_path) in str(excinfo.value)
     assert "<db>" not in str(excinfo.value)
 

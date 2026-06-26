@@ -107,6 +107,63 @@ def test_run_import_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             "SELECT record_count, workout_count FROM imports WHERE import_id = 'imp_e2e'"
         ).fetchone()
         assert row == (1, 1)
+        # v0.4 (issue #148): pin the positional order of every column the
+        # orchestrator's INSERT writes after ``workout_count``. A future
+        # hand-edit that transposes ``export_xml_sha256`` <->
+        # ``records_after_dedup`` (or shuffles the source_zip triple)
+        # would otherwise survive both ``test_imports_has_source_zip_columns``
+        # (schema metadata) and the assertion above (early columns only).
+        # CLI ``import <dir>`` leaves the source_zip triple NULL; the sha256
+        # is populated by ``_compute_file_sha256`` so we assert non-NULL
+        # without binding to the actual hex value.
+        row = conn.execute(
+            "SELECT export_xml_sha256, records_after_dedup, "
+            "source_zip_sha256, source_zip_mtime, source_zip_size "
+            "FROM imports WHERE import_id = 'imp_e2e'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is not None and len(row[0]) == 64
+        assert row[1] == 1
+        assert row[2] is None
+        assert row[3] is None
+        assert row[4] is None
+    finally:
+        conn.close()
+
+
+def test_run_import_stamps_source_zip_triple_when_provided(
+    tmp_path: Path,
+) -> None:
+    """``source_zip=(sha, mtime, size)`` lands on ``imports.source_zip_*``.
+
+    v0.4 (issue #148) seam for the upcoming ``import_zip`` MCP tool: the
+    orchestrator stamps the triple verbatim into the ``imports`` row so
+    ``list_zips`` can later look it up and skip a byte-identical re-import
+    without rehashing the ZIP. Pins the wiring so a future refactor of
+    the INSERT positionals cannot silently swallow the value.
+    """
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(
+        '<?xml version="1.0"?><HealthData locale="en_US"/>', encoding="utf-8"
+    )
+    db_path = tmp_path / "h.duckdb"
+    sha = "a" * 64
+    mtime = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
+    size = 1_234_567_890
+
+    run_import(export_dir, db_path, import_id="imp_zip", source_zip=(sha, mtime, size))
+
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        row = conn.execute(
+            "SELECT source_zip_sha256, source_zip_mtime, source_zip_size "
+            "FROM imports WHERE import_id = 'imp_zip'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == sha
+        assert row[1] == mtime
+        assert row[2] == size
     finally:
         conn.close()
 

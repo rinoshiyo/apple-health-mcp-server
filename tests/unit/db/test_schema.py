@@ -89,6 +89,26 @@ def test_workout_routes_has_device_column(conn: duckdb.DuckDBPyConnection) -> No
     assert row[0] == 1
 
 
+def test_imports_has_source_zip_columns(conn: duckdb.DuckDBPyConnection) -> None:
+    """v0.4 (issue #148): the ``imports`` table carries the source-ZIP
+    triple so ``list_zips`` / ``import_zip`` can skip a byte-identical
+    re-import without rehashing a 1.2 GB ZIP. Pin column names + types
+    so a future drift in the schema fires the test rather than ghosts
+    through to runtime.
+    """
+    rows = conn.execute(
+        "SELECT column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema='main' AND table_name='imports' "
+        "AND column_name IN ('source_zip_sha256', 'source_zip_mtime', 'source_zip_size') "
+        "ORDER BY column_name"
+    ).fetchall()
+    assert rows == [
+        ("source_zip_mtime", "TIMESTAMP WITH TIME ZONE"),
+        ("source_zip_sha256", "VARCHAR"),
+        ("source_zip_size", "BIGINT"),
+    ]
+
+
 def test_deduplicate_records(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
@@ -187,8 +207,8 @@ def test_deduplicate_extra_tables(conn: duckdb.DuckDBPyConnection) -> None:
         INSERT INTO correlation_members VALUES
           ('c1','h1','imp1'),('c1','h1','imp1');
         INSERT INTO imports VALUES
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1),
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1);
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1,NULL,NULL,NULL),
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1,NULL,NULL,NULL);
         INSERT INTO export_metadata VALUES
           ('imp1','2024-01-01 06:00:00','ja_JP'),
           ('imp1','2024-01-01 06:00:00','ja_JP');

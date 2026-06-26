@@ -24,7 +24,10 @@ DESCRIPTION = (
     "children at the top level by spec. NULL on rows finalized before "
     "v0.3.0 #129 AND on Tier-2 incremental re-imports where the dedup "
     "pass was skipped -- treat NULL as 'no dedup measurement available' "
-    "rather than computing a misleading delta)."
+    "rather than computing a misleading delta), source_zip_sha256 / "
+    "source_zip_mtime / source_zip_size (identity of the source ZIP "
+    "for re-import dedup; NULL on rows produced by the CLI "
+    "`import <dir>` path because the source artefact was a directory)."
 )
 
 # Explicit column list (rather than ``SELECT *``) mirrors the audit-batch
@@ -34,7 +37,8 @@ DESCRIPTION = (
 # above so the LLM-facing prose and SQL projection stay in sync.
 _SQL = (
     "SELECT import_id, export_dir, imported_at, record_count, "
-    "workout_count, duration_secs, export_xml_sha256, records_after_dedup "
+    "workout_count, duration_secs, export_xml_sha256, records_after_dedup, "
+    "source_zip_sha256, source_zip_mtime, source_zip_size "
     "FROM imports ORDER BY imported_at DESC"
 )
 

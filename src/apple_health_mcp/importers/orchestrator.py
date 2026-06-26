@@ -57,6 +57,7 @@ def run_import(
     *,
     import_id: str | None = None,
     force: bool = False,
+    source_zip: tuple[str, datetime, int] | None = None,
 ) -> ImportStats:
     """Run the full XML -> ECG -> GPX -> finalize pipeline on ``export_dir``.
 
@@ -94,6 +95,15 @@ def run_import(
     the prior row anyway), ``force=True`` is functionally equivalent
     to no flag at all -- adding it to every command "just to be safe"
     has no effect on a changed file.
+
+    ``source_zip`` is the v0.4 (issue #148) hook for the upcoming
+    ``import_zip`` MCP tool: a ``(sha256_hex, mtime, size_bytes)``
+    triple captured from the source ZIP file the tool extracted into a
+    temp directory. The orchestrator stamps the triple into the matching
+    ``imports`` row so ``list_zips`` / ``import_zip`` can later skip a
+    byte-identical re-import without rehashing the ZIP. CLI callers
+    leave it ``None`` (the source artefact is a directory and the triple
+    has no meaningful value there); ``imports.source_zip_*`` land NULL.
     """
     start = time.monotonic()
     # Issue #130: take a single wall-clock UTC snapshot at run start so
@@ -225,8 +235,9 @@ def run_import(
             """
             INSERT INTO imports (
                 import_id, export_dir, imported_at, record_count, workout_count,
-                duration_secs, export_xml_sha256, records_after_dedup
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                duration_secs, export_xml_sha256, records_after_dedup,
+                source_zip_sha256, source_zip_mtime, source_zip_size
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
@@ -242,6 +253,13 @@ def run_import(
                 duration_secs,
                 export_sha,
                 records_after_dedup,
+                # v0.4 (issue #148): the source ZIP triple, stamped only
+                # when the upcoming ``import_zip`` MCP tool drives this
+                # call. CLI ``import <dir>`` callers pass ``None`` and
+                # all three land NULL.
+                source_zip[0] if source_zip is not None else None,
+                source_zip[1] if source_zip is not None else None,
+                source_zip[2] if source_zip is not None else None,
             ],
         )
 

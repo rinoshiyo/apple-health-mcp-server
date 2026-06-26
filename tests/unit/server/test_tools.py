@@ -239,10 +239,7 @@ def test_get_workout_details_db_error_path(
     downstream queries run), then drops the ``workouts`` table to force
     the first ``query_to_json`` call into a binder error.
     """
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE workouts")
     fn = _bind(get_workout_details, empty_conn)
     out = asyncio.run(fn(workout_hash="wh1"))
@@ -584,10 +581,7 @@ def test_get_correlation_details_missing(
 
 
 def test_get_correlation_details_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE correlations")
     fn = _bind(get_correlation_details, empty_conn)
     out = asyncio.run(fn(correlation_hash="x"))
@@ -683,10 +677,7 @@ def test_get_ecg_data_missing_returns_zero_stats(
 
 
 def test_get_ecg_data_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE ecg_readings")
     fn = _bind(get_ecg_data, empty_conn)
     out = asyncio.run(fn(ecg_hash="x"))
@@ -737,10 +728,14 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     rows = _call(fn)
     assert rows[0]["import_id"] == "imp1"
     # L1: ``get_import_history`` now selects explicit columns instead of
-    # ``SELECT *``. Assert the exact wire-facing set so a future
+    # ``SELECT *``. Assert the exact wire-facing ORDER so a future
     # ``ALTER TABLE imports ADD COLUMN`` cannot leak into the response
-    # without an intentional description + SQL update.
-    expected_fields = {
+    # without an intentional description + SQL update, AND a future
+    # re-order of the SQL projection cannot silently flip the LLM-
+    # readable narrative order. Pre-v0.4 the assertion was on
+    # ``set(...)`` equality only; the ordered ``list(...)`` form here
+    # closes that gap (raised by /code-review angle B candidate).
+    expected_fields = [
         "import_id",
         "export_dir",
         "imported_at",
@@ -748,13 +743,16 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
         "workout_count",
         "duration_secs",
         "export_xml_sha256",
-        # Issue #129 (PR-D): post-Phase-4-dedup row count. Pinning the
-        # field's presence in the wire shape locks the breaking change
-        # in -- a future ``ALTER TABLE imports DROP COLUMN`` would have
-        # to update this set too.
+        # Issue #129 (PR-D): post-Phase-4-dedup row count.
         "records_after_dedup",
-    }
-    assert set(rows[0].keys()) == expected_fields
+        # v0.4 (issue #148): identity of the source ZIP for re-import
+        # dedup. NULL on CLI-driven rows; populated by the upcoming
+        # ZIP-flow tools.
+        "source_zip_sha256",
+        "source_zip_mtime",
+        "source_zip_size",
+    ]
+    assert list(rows[0].keys()) == expected_fields
 
 
 # --- list_state_of_mind ------------------------------------------------------
@@ -811,20 +809,14 @@ def test_get_me_attributes_returns_empty_when_import_lacks_me_row(
     """Import done but no ``<Me>`` element -> empty object, not the gate message."""
     # Seed a single ``imports`` row so the empty-DB gate does not fire — we
     # are testing the ``rows[0] if rows else {}`` branch in the tool itself.
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
-    )
+    seed_one_import(empty_conn)
     fn = _bind(get_me_attributes, empty_conn)
     payload = _call(fn)
     assert payload == {}
 
 
 def test_get_me_attributes_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
-    empty_conn.execute(
-        "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
-    )
+    seed_one_import(empty_conn)
     empty_conn.execute("DROP TABLE me_attributes")
     fn = _bind(get_me_attributes, empty_conn)
     out = asyncio.run(fn())

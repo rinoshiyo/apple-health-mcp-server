@@ -249,7 +249,21 @@ CREATE TABLE IF NOT EXISTS imports (
     export_xml_sha256  VARCHAR,
     -- NULL on rows from pre-#129 imports and on Tier-2 incremental
     -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
-    records_after_dedup BIGINT
+    records_after_dedup BIGINT,
+    -- v0.4 (issue #148): the source ZIP triple. ``source_zip_sha256`` is
+    -- the hex sha256 of the whole ZIP file; ``source_zip_mtime`` /
+    -- ``source_zip_size`` form the cheap (mtime, size) cache key that
+    -- avoids re-hashing a 1.2 GB ZIP on every directory scan. All three
+    -- are NULL on rows produced by the CLI ``import <dir>`` path or by
+    -- any pre-v0.4 importer build because the source artefact was a
+    -- directory rather than a ZIP. ``source_zip_mtime`` is a stat()
+    -- snapshot used as a cache key only -- do not render it to users
+    -- alongside ``imported_at``; it is not a user-facing wall-clock
+    -- event despite sharing the TIMESTAMPTZ type for schema-wide
+    -- consistency.
+    source_zip_sha256  VARCHAR,
+    source_zip_mtime   TIMESTAMPTZ,
+    source_zip_size    BIGINT
 );
 
 -- Captures the root <HealthData locale="..."> attribute and the
