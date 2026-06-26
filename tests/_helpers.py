@@ -79,7 +79,8 @@ def seed_one_import(conn: duckdb.DuckDBPyConnection) -> None:
     """
     conn.execute(
         "INSERT INTO imports VALUES "
-        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, NULL, 0)"
+        "('imp1', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', "
+        "0, 0, 0, NULL, 0, NULL, NULL, NULL)"
     )
 
 

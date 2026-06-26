@@ -264,6 +264,28 @@ def test_apply_pending_migrations_rejects_v3_db_after_v0_3_0_records_after_dedup
         conn.close()
 
 
+def test_apply_pending_migrations_rejects_v4_db_after_v0_4_zip_source_bump() -> None:
+    """A v=4 DB (the v0.3.0 stable baseline) is rejected by the v0.4 / issue
+    #148 ``CURRENT_SCHEMA_VERSION = 5`` bump.
+
+    The bump adds the ``imports.source_zip_sha256`` / ``source_zip_mtime`` /
+    ``source_zip_size`` triple with no in-place migration registered for
+    v=4 -> v=5; the same fresh-start contract that PR #126 introduced for
+    v=2 -> v=3 and PR-D for v=3 -> v=4 applies here. Sole existing user
+    is the maintainer; the cost of re-importing is dwarfed by the cost
+    of writing + testing an ALTER TABLE migration path for one user.
+    """
+    db_path = "/tmp/example-v4.duckdb"
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, 4)
+        with pytest.raises(ConfigError) as excinfo:
+            apply_pending_migrations(conn, db_path=db_path)
+        assert str(excinfo.value) == _reimport_required_message(4, db_path)
+    finally:
+        conn.close()
+
+
 def test_apply_pending_migrations_does_not_raise_when_max_target_reaches_current(
     monkeypatch: MonkeyPatch,
 ) -> None:

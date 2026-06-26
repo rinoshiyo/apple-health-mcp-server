@@ -225,8 +225,9 @@ def run_import(
             """
             INSERT INTO imports (
                 import_id, export_dir, imported_at, record_count, workout_count,
-                duration_secs, export_xml_sha256, records_after_dedup
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                duration_secs, export_xml_sha256, records_after_dedup,
+                source_zip_sha256, source_zip_mtime, source_zip_size
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
@@ -242,6 +243,14 @@ def run_import(
                 duration_secs,
                 export_sha,
                 records_after_dedup,
+                # v0.4 (issue #148): the source ZIP triple. The CLI
+                # ``import <dir>`` path passes a directory, so all three
+                # land NULL here; the ZIP-flow ``import_zip`` MCP tool
+                # populates them via the same orchestrator call after a
+                # follow-up refactor adds a parameter for the triple.
+                None,
+                None,
+                None,
             ],
         )
 
