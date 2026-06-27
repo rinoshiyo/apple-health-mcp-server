@@ -117,11 +117,25 @@ If you prefer to wire the server up by hand, edit
   "mcpServers": {
     "apple-health": {
       "command": "uvx",
-      "args": ["apple-health-mcp-server", "serve"]
+      "args": ["apple-health-mcp-server", "serve"],
+      "env": {
+        "APPLE_HEALTH_EXPORT_ZIPS_DIR": "/Users/<you>/Documents/AppleHealth"
+      }
     }
   }
 }
 ```
+
+`APPLE_HEALTH_EXPORT_ZIPS_DIR` is the folder where you keep your
+Apple Health export ZIPs. v0.4's `list_zips` + `import_zip` MCP
+tools read from this directory so Claude can discover + ingest your
+export without you ever opening a terminal. Replace the path above
+with a real folder you control (e.g. `~/Documents/AppleHealth`
+expanded by your shell, or
+`C:\Users\<you>\Documents\AppleHealth` on Windows). The MCPB
+bundle install dialog promotes the **Export ZIPs directory** field
+into this same env var; the JSON example is the same wire shape for
+operators who skip the bundle.
 
 Then fully quit Claude Desktop and reopen — the config is only re-read
 at startup (closing the window is not enough).
@@ -135,13 +149,20 @@ Easiest path is the CLI helper, which writes the entry into the right
 scope and survives future schema tweaks:
 
 ```bash
-claude mcp add --transport stdio --scope user apple-health -- uvx apple-health-mcp-server serve
+claude mcp add --transport stdio --scope user \
+  --env APPLE_HEALTH_EXPORT_ZIPS_DIR=$HOME/Documents/AppleHealth \
+  apple-health -- uvx apple-health-mcp-server serve
 ```
 
 - `--scope user` registers the server for every project (writes to
   `~/.claude.json`). Use `--scope project` to share via a
   version-controlled `.mcp.json` at the repo root, or `--scope local`
   (the default) for the current project only.
+- `--env APPLE_HEALTH_EXPORT_ZIPS_DIR=…` points the v0.4 ZIP-flow
+  tools (`list_zips` / `import_zip`) at the folder where you keep
+  your Apple Health export ZIPs. Without it those tools surface a
+  ``NEEDS_CONFIG`` envelope and the agent has to ask you to
+  configure the path before it can import anything.
 - The `--` separator is mandatory when the server command takes its own
   arguments — without it Claude Code would try to parse `serve` as one
   of its own flags.
@@ -155,7 +176,9 @@ Equivalent manual entry inside the chosen JSON file:
       "type": "stdio",
       "command": "uvx",
       "args": ["apple-health-mcp-server", "serve"],
-      "env": {}
+      "env": {
+        "APPLE_HEALTH_EXPORT_ZIPS_DIR": "/Users/<you>/Documents/AppleHealth"
+      }
     }
   }
 }
@@ -184,7 +207,13 @@ with `CODEX_HOME=` if needed):
 [mcp_servers.apple-health]
 command = "uvx"
 args = ["apple-health-mcp-server", "serve"]
+env = { APPLE_HEALTH_EXPORT_ZIPS_DIR = "/Users/<you>/Documents/AppleHealth" }
 ```
+
+`APPLE_HEALTH_EXPORT_ZIPS_DIR` points the v0.4 ZIP-flow tools
+(`list_zips` / `import_zip`) at your Apple Health export drop-zone;
+without it those tools return a ``NEEDS_CONFIG`` envelope and the
+agent has to ask you to configure the path before it can import.
 
 Edits to `config.toml` take effect on the next `codex` invocation —
 restart any running session to apply them. The CLI also exposes
