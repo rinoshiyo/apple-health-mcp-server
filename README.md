@@ -60,20 +60,22 @@ each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/relea
 > on macOS, the official installer on Windows). Without `uv` on `PATH`
 > Claude Desktop will fail with a generic spawn error after install.
 
-> **Windows first-run warmup (issue #127).** Before you install the
-> bundle, run **once** in a terminal:
+> **First-run warmup (recommended).** Before you install the bundle,
+> run **once** in a terminal:
 >
-> ```powershell
+> ```bash
 > uvx --from "apple-health-mcp-server@latest" apple-health-mcp-server --help
 > ```
 >
-> Claude Desktop spawns the MCP server multiple times in parallel on its
-> first boot. Each parallel `uvx` invocation tries to install the same
-> Python interpreter at the same time and they can race on the
+> Claude Desktop spawns the MCP server multiple times in parallel on
+> its first boot. Each parallel `uvx` invocation tries to install the
+> same Python interpreter at the same time and they can race on the
 > minor-version-link directory, leaving a half-initialised cache that
 > every subsequent launch then trips over (`Missing expected target
 > directory for Python minor version link`). One warm-up invocation
-> serialises the install and avoids the race.
+> serialises the install and avoids the race. The race has been
+> observed reliably on Windows; macOS / Linux filesystems are more
+> forgiving but the warmup is still the cheap-and-correct precaution.
 
 Then:
 

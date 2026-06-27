@@ -57,10 +57,10 @@ Claude Desktop で最も簡単な手順は、 各
 > 公式インストーラ）。 `PATH` に `uv` が無いと Claude Desktop は
 > インストール後に汎用的な spawn エラーで失敗します。
 
-> **Windows 初回起動の warmup (issue #127)。** バンドル install 前に
-> ターミナルで **1 回だけ** 下記を実行してください:
+> **初回起動の warmup (推奨)。** バンドル install 前にターミナルで
+> **1 回だけ** 下記を実行してください:
 >
-> ```powershell
+> ```bash
 > uvx --from "apple-health-mcp-server@latest" apple-health-mcp-server --help
 > ```
 >
@@ -70,6 +70,9 @@ Claude Desktop で最も簡単な手順は、 各
 > 半端な状態で残り、 以降の起動が毎回 `Missing expected target
 > directory for Python minor version link` で失敗します。 事前に
 > 1 回 warmup しておけば install が直列化されて回避できます。
+> 顕在化が確認されているのは Windows ですが、 macOS / Linux でも
+> 理論上同じ race が起こりうる (file system 的にはより安全寄り) ため、
+> 全 OS で warmup を 1 回挟むのが安価で確実な予防策です。
 
 その後:
 
