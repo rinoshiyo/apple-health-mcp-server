@@ -429,7 +429,7 @@ def test_get_connection_read_only_materialises_empty_db_when_missing(
             conn.execute(
                 "INSERT INTO imports VALUES "
                 "('x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, "
-                "NULL, 0, NULL, NULL, NULL)"
+                "NULL, 0, FALSE, NULL, NULL, NULL)"
             )
     finally:
         conn.close()

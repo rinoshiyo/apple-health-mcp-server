@@ -92,7 +92,7 @@ INSERT INTO correlation_members VALUES ('cor_bp', 'rbp_s', 'imp1');
 INSERT INTO correlation_members VALUES ('cor_bp', 'rbp_d', 'imp1');
 INSERT INTO imports VALUES
     ('imp1', '/tmp/export', TIMESTAMP '2024-01-01 00:00:00', 3, 1, 5.0,
-     NULL, 3, NULL, NULL, NULL);
+     NULL, 3, FALSE, NULL, NULL, NULL);
 -- StateOfMind seed (record + dedicated row) so list_state_of_mind has data
 INSERT INTO records VALUES
     ('som1', 'HKCategoryTypeIdentifierStateOfMind', 0.5, NULL, NULL,

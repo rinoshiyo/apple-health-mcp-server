@@ -250,7 +250,19 @@ CREATE TABLE IF NOT EXISTS imports (
     export_xml_sha256  VARCHAR,
     -- NULL on rows from pre-#129 imports and on Tier-2 incremental
     -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
+    -- The ``dedup_skipped`` flag below disambiguates the two NULL
+    -- cases: dedup_skipped=true means "Tier-2 incremental, measurement
+    -- skipped on purpose", dedup_skipped=false means "Tier-1 full
+    -- import, records_after_dedup is a real value", dedup_skipped
+    -- NULL means "pre-#163 row, unknown which case".
     records_after_dedup BIGINT,
+    -- v0.5 (issue #163): distinguishes "measurement skipped" (true) vs
+    -- "measurement available, zero or N collapses" (false). Without
+    -- this, history readers could not tell a clean Tier-1 import with
+    -- zero duplicates apart from a Tier-2 incremental that never
+    -- measured. NULL on pre-#163 rows so the existing NULL semantics
+    -- of records_after_dedup are not retroactively overwritten.
+    dedup_skipped      BOOLEAN,
     -- v0.4 (issue #148): the source ZIP triple. ``source_zip_sha256`` is
     -- the hex sha256 of the whole ZIP file; ``source_zip_mtime`` /
     -- ``source_zip_size`` form the cheap (mtime, size) cache key that

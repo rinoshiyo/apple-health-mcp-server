@@ -11,6 +11,17 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
+- **`imports.dedup_skipped` BOOLEAN column + wire field** (issue
+  #163). Distinguishes a clean Tier-1 fresh import that found zero
+  Correlation-child duplicates (`records_after_dedup ==
+  record_count`, `dedup_skipped=false`) from a Tier-2 incremental
+  re-import that never measured (`records_after_dedup IS NULL`,
+  `dedup_skipped=true`). Pre-#163 rows stay `dedup_skipped=NULL` so
+  the existing NULL semantics of `records_after_dedup` are not
+  retroactively overwritten. `get_import_history` projection and
+  DESCRIPTION extended; `CURRENT_SCHEMA_VERSION` bumped 5→6 (any
+  v=5 DB triggers the v0.4.1 fresh-reset path).
+
 - **Doc-tests pinning README to runtime constants** (issues #121 +
   #122). `tests/unit/test_docs_in_sync.py` fails CI if the env-vars
   table drifts from `xml._PROGRESS_INTERVAL_{DEFAULT,MIN,MAX}_SECS`

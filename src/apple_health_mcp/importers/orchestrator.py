@@ -286,15 +286,22 @@ def run_import(
             ).fetchone()
             assert post_dedup_row is not None
             records_after_dedup: int | None = int(post_dedup_row[0])
+            dedup_skipped = False
         else:
             records_after_dedup = None
+            # Issue #163: explicit "Phase 4 dedup was skipped on
+            # purpose" signal. Distinguishes a clean Tier-1 import that
+            # found zero duplicates (records_after_dedup == record_count,
+            # dedup_skipped=False) from a Tier-2 incremental that never
+            # measured (records_after_dedup IS NULL, dedup_skipped=True).
+            dedup_skipped = True
         conn.execute(
             """
             INSERT INTO imports (
                 import_id, export_dir, imported_at, record_count, workout_count,
-                duration_secs, export_xml_sha256, records_after_dedup,
+                duration_secs, export_xml_sha256, records_after_dedup, dedup_skipped,
                 source_zip_sha256, source_zip_mtime, source_zip_size
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 actual_import_id,
@@ -310,6 +317,7 @@ def run_import(
                 duration_secs,
                 export_sha,
                 records_after_dedup,
+                dedup_skipped,
                 # v0.4 (issue #148): the source ZIP triple, stamped only
                 # when the upcoming ``import_zip`` MCP tool drives this
                 # call. CLI ``import <dir>`` callers pass ``None`` and

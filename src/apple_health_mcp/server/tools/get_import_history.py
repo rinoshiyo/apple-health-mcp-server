@@ -24,10 +24,16 @@ DESCRIPTION = (
     "children at the top level by spec. NULL on rows finalized before "
     "v0.3.0 #129 AND on Tier-2 incremental re-imports where the dedup "
     "pass was skipped -- treat NULL as 'no dedup measurement available' "
-    "rather than computing a misleading delta), source_zip_sha256 / "
-    "source_zip_mtime / source_zip_size (identity of the source ZIP "
-    "for re-import dedup; NULL on rows produced by the CLI "
-    "`import <dir>` path because the source artefact was a directory)."
+    "rather than computing a misleading delta), dedup_skipped (v0.5 #163; "
+    "true means the Phase-4 dedup pass was skipped on purpose -- the "
+    "Tier-2 incremental re-import case where records_after_dedup is "
+    "NULL by design; false means measurement happened and "
+    "records_after_dedup carries a real value, including the "
+    "zero-collapse case; NULL on pre-#163 rows where the two cases were "
+    "not yet distinguished), source_zip_sha256 / source_zip_mtime / "
+    "source_zip_size (identity of the source ZIP for re-import dedup; "
+    "NULL on rows produced by the CLI `import <dir>` path because the "
+    "source artefact was a directory)."
 )
 
 # Explicit column list (rather than ``SELECT *``) mirrors the audit-batch
@@ -38,7 +44,7 @@ DESCRIPTION = (
 _SQL = (
     "SELECT import_id, export_dir, imported_at, record_count, "
     "workout_count, duration_secs, export_xml_sha256, records_after_dedup, "
-    "source_zip_sha256, source_zip_mtime, source_zip_size "
+    "dedup_skipped, source_zip_sha256, source_zip_mtime, source_zip_size "
     "FROM imports ORDER BY imported_at DESC"
 )
 

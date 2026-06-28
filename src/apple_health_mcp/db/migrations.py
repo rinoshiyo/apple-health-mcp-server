@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 Migration = Callable[["duckdb.DuckDBPyConnection"], None]
 

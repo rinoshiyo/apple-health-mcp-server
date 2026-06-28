@@ -977,6 +977,10 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
         "export_xml_sha256",
         # Issue #129 (PR-D): post-Phase-4-dedup row count.
         "records_after_dedup",
+        # Issue #163 (v0.5): distinguishes "Phase-4 dedup skipped on
+        # purpose" (Tier-2 incremental) from a Tier-1 fresh import where
+        # measurement actually happened.
+        "dedup_skipped",
         # v0.4 (issue #148): identity of the source ZIP for re-import
         # dedup. NULL on CLI-driven rows; populated by the upcoming
         # ZIP-flow tools.
