@@ -126,14 +126,17 @@ Done once before the first release tag is pushed.
 ### Cutting a release
 
 0. **Bump `[project] version` in `pyproject.toml` AND `version` in
-   `manifest.json`, then run `uv lock` so `uv.lock` picks up the new
-   project version.** Merge that change to `main` via a PR. The CI
-   `metadata-checks` job in `.github/workflows/ci.yml` runs
-   `scripts/check_version_parity.py` and fails the PR if the three
-   files disagree, so the drift surfaces at PR time rather than at
-   `v*` tag push. The release workflow then re-verifies the tag
-   against pyproject (build job) and manifest.json (build_bundle job)
-   as a defence-in-depth gate.
+   `manifest.json`, then run `uv lock --upgrade-package
+   apple-health-mcp-server` so `uv.lock` picks up the new project
+   version without pulling in unrelated transitive bumps.** A bare
+   `uv lock` would let the resolver upgrade arbitrary transitive deps
+   (a pyarrow / duckdb / mypy point release that happens to land the
+   same day), mixing the version bump with unreviewed dependency
+   churn. The narrowly-scoped `--upgrade-package` form keeps the
+   bump PR a single logical change. Merge to `main` via a PR. The CI
+   `metadata-checks` job runs `scripts/check_version_parity.py` and
+   fails the PR if the three files disagree, and the release workflow
+   re-runs the same script before publish as defence-in-depth.
 
 1. Pre-flight (run locally before tagging):
 

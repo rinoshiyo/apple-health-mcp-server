@@ -155,6 +155,15 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Verify three-file version parity (pyproject ↔ manifest ↔ uv.lock)
+        # ci.yml's metadata-checks job runs the same script on every PR,
+        # but a uv.lock drift can land on main after merge (rebase
+        # without re-lock, admin push that bypasses branch protection,
+        # dependabot bump that skips PR review). Re-running the script
+        # here guarantees the tagged commit has all three files in
+        # agreement before publishing to PyPI.
+        run: python3 scripts/check_version_parity.py
+
       - name: Verify tag matches pyproject version
         # A tag of `v0.1.1` paired with a pyproject still on `0.1.0`
         # would silently publish `0.1.0` again (or get rejected by
