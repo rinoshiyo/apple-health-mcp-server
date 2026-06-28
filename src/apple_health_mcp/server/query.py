@@ -378,8 +378,18 @@ def run_query_envelope(
     # v0.5 (issue #171): when the size clamp drops items, expose the
     # resume offset so callers can page the remainder. When the size
     # clamp is satisfied, fall back to the row-count vs total comparison.
-    if truncated_by_size or offset + len(kept) < total:
-        next_offset: int | None = offset + len(kept)
+    # Post-#175 code-review #1/#2 (CONFIRMED): if the clamp returns
+    # kept=[] (first item alone already exceeds the budget), advancing
+    # ``next_offset`` by 0 returns the same offset back to the caller
+    # and creates an infinite-paging loop. Treat "nothing fits" as a
+    # terminal state (next_offset=None) so the agent stops paging and
+    # surfaces the situation to the user via ``truncated_by_size`` +
+    # ``size_budget_bytes`` instead.
+    next_offset: int | None
+    if not kept and truncated_by_size:
+        next_offset = None
+    elif truncated_by_size or offset + len(kept) < total:
+        next_offset = offset + len(kept)
     else:
         next_offset = None
     payload: dict[str, Any] = {

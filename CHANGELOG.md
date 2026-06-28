@@ -9,6 +9,19 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`run_query_envelope` paging halt when no item fits the size budget**
+  (post-PR #175 code-review #1/#2). When the size clamp dropped every
+  item (budget < first-item cost), `next_offset` was set to the
+  caller's current offset, so an agent paging blindly via
+  `next_offset` looped forever on the same empty response. The
+  envelope now returns `next_offset: null` in that case so the agent
+  surfaces `truncated_by_size` + `size_budget_bytes` to the user and
+  halts. This is the v0.4.1 Finding 9 hazard re-promoted from the
+  per-tool `_clip_to_size_budget` in `get_workout_route` to the
+  shared `run_query_envelope` helper.
+
 ### Performance
 
 - **`import_zip` releases the server lock during ZIP extraction**
