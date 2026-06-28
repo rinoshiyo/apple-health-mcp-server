@@ -9,6 +9,21 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- **CI `metadata-checks` job — version parity and LP version-literal
+  guards** (issues #115 + #119). Two PR-time gates land in
+  `ci.yml`. (1) `scripts/check_version_parity.py` fails if
+  `pyproject.toml`, `manifest.json`, and `uv.lock` disagree on the
+  project version, replacing the manual three-file bump dance with a
+  PR-time failure rather than the post-tag hot-fix path PR #80 had to
+  take after v0.2.0. (2) `scripts/check_lp_no_version_literal.py`
+  fails if `docs/i18n/{ja,en}.json` embed a `vN.M.K` literal outside
+  the sanctioned `footer.version` slot, codifying the 2026-06-25 LP
+  grill decision (everywhere else uses `/releases/latest`). The
+  convention is also written into `CLAUDE.md` §8 (release ops) and
+  §9 (new LP Copy Conventions section).
+
 ### Fixed
 
 - **`run_query_envelope` paging halt when no item fits the size budget**
