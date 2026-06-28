@@ -9,6 +9,19 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- **3-state ZIP inspection** (issue #158). `list_zips` now emits a
+  `zip_status` field per entry — `valid_apple_health` /
+  `valid_non_apple_health` / `invalid_zip` — and `import_zip` returns
+  a dedicated `reason: "invalid_zip"` envelope when the file cannot
+  be parsed as a ZIP archive at all (corruption, partial transfer, an
+  HTML error page renamed to `.zip`). The pre-existing
+  `not_apple_health_export` reason now strictly means "valid ZIP, no
+  Apple Health marker"; the user-facing recovery action is different
+  in each case (re-download vs. pick a different file). The legacy
+  `is_apple_health: bool` field is retained for wire compatibility.
+
 ### Fixed
 
 - **v0.4 upgrade path no longer wedges the server** (issue #156). A

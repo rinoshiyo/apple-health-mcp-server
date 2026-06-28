@@ -42,8 +42,9 @@ from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.query import query_to_json, run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
+    ZipInspection,
     find_sha_by_prefix,
-    is_apple_health_zip,
+    inspect_zip,
     load_sha_cache,
     stream_sha256,
 )
@@ -68,8 +69,13 @@ DESCRIPTION = (
     "id, records_added, workouts_added, ecg_readings_added, "
     "route_points_added, already_imported_at, duration_secs, message} "
     "on success, or {status: 'error', reason, message} on a "
-    "configuration / not-an-Apple-Health-ZIP / ZIP-not-found / "
-    "invalid-id failure."
+    "configuration / invalid-zip / not-an-Apple-Health-ZIP / "
+    "ZIP-not-found / invalid-id failure. The ``invalid_zip`` reason "
+    "signals the file is not a valid ZIP archive (corruption, partial "
+    "download, an HTML page renamed to .zip) and the user should "
+    "re-download; ``not_apple_health_export`` signals a valid ZIP that "
+    "is just missing the Apple Health marker and the user should pick "
+    "a different file."
 )
 
 
@@ -168,15 +174,30 @@ def _import_zip_sync(
 
     assert selected_sha is not None
     canonical_id = selected_sha[:ID_PREFIX_LEN]
-    if not is_apple_health_zip(selected):
+    inspection = inspect_zip(selected)
+    if inspection == ZipInspection.INVALID_ZIP:
+        return run_query_payload(
+            {
+                "status": "error",
+                "reason": "invalid_zip",
+                "message": (
+                    f"{selected.name} is not a valid ZIP archive. The file "
+                    "may be corrupted, partially downloaded, or have a "
+                    ".zip extension by mistake (e.g. an HTML page renamed). "
+                    "Re-download or re-export your Apple Health data and "
+                    "try again."
+                ),
+            }
+        )
+    if inspection == ZipInspection.VALID_NON_APPLE_HEALTH:
         return run_query_payload(
             {
                 "status": "error",
                 "reason": "not_apple_health_export",
                 "message": (
-                    f"{selected.name} does not contain "
-                    "apple_health_export/export.xml or export.xml at "
-                    "the top level. Did you mean a different ZIP?"
+                    f"{selected.name} is a valid ZIP but does not contain "
+                    "apple_health_export/export.xml or export.xml at the "
+                    "top level. Did you mean a different ZIP?"
                 ),
             }
         )

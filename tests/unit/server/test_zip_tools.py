@@ -602,3 +602,135 @@ def test_list_zips_skips_unparseable_imports_rows(
         assert isinstance(out["zips"], list)
     finally:
         conn.close()
+
+
+# --- v0.4.1 (issue #158): inspect_zip 3-state classification -----------
+
+
+def test_inspect_zip_returns_invalid_for_html_file(tmp_path: Path) -> None:
+    """An HTML file renamed to .zip reads as INVALID_ZIP.
+
+    Common Apple Health share-sheet failure mode: a network error page
+    saved with the user's chosen filename. The body is HTML, the ZIP
+    reader bails immediately, and the user should re-download.
+    """
+    from apple_health_mcp.server.tools._zip_inspect import (
+        ZipInspection,
+        inspect_zip,
+    )
+
+    fake = tmp_path / "fake.zip"
+    fake.write_bytes(b"<html><body>404</body></html>")
+    assert inspect_zip(fake) == ZipInspection.INVALID_ZIP
+
+
+def test_inspect_zip_returns_invalid_for_truncated_archive(tmp_path: Path) -> None:
+    """A partial ZIP header without payload reads as INVALID_ZIP."""
+    from apple_health_mcp.server.tools._zip_inspect import (
+        ZipInspection,
+        inspect_zip,
+    )
+
+    truncated = tmp_path / "partial.zip"
+    # First four bytes are the ZIP local-file header signature, then
+    # garbage cuts the central directory off.
+    truncated.write_bytes(b"PK\x03\x04" + b"\x00" * 16)
+    assert inspect_zip(truncated) == ZipInspection.INVALID_ZIP
+
+
+def test_inspect_zip_returns_valid_non_apple_health_for_random_zip(
+    tmp_path: Path,
+) -> None:
+    """A parseable ZIP without the export marker reads as VALID_NON_APPLE_HEALTH."""
+    from apple_health_mcp.server.tools._zip_inspect import (
+        ZipInspection,
+        inspect_zip,
+    )
+
+    zip_path = tmp_path / "random.zip"
+    _make_zip(zip_path, with_export_xml=False)
+    assert inspect_zip(zip_path) == ZipInspection.VALID_NON_APPLE_HEALTH
+
+
+def test_inspect_zip_returns_valid_apple_health_for_export_zip(
+    tmp_path: Path,
+) -> None:
+    """A real-shaped Apple Health export reads as VALID_APPLE_HEALTH."""
+    from apple_health_mcp.server.tools._zip_inspect import (
+        ZipInspection,
+        inspect_zip,
+    )
+
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    assert inspect_zip(zip_path) == ZipInspection.VALID_APPLE_HEALTH
+
+
+def test_is_apple_health_zip_remains_backwards_compatible(tmp_path: Path) -> None:
+    """The legacy boolean helper still maps to VALID_APPLE_HEALTH only."""
+    from apple_health_mcp.server.tools._zip_inspect import is_apple_health_zip
+
+    good = tmp_path / "good.zip"
+    _make_zip(good)
+    bad = tmp_path / "bad.zip"
+    _make_zip(bad, with_export_xml=False)
+    invalid = tmp_path / "invalid.zip"
+    invalid.write_bytes(b"<html>oops</html>")
+
+    assert is_apple_health_zip(good) is True
+    assert is_apple_health_zip(bad) is False
+    assert is_apple_health_zip(invalid) is False
+
+
+def test_list_zips_returns_zip_status_field(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``list_zips`` exposes the 3-state ``zip_status`` field per entry."""
+    good = tmp_path / "good.zip"
+    _make_zip(good)
+    bad = tmp_path / "bad.zip"
+    _make_zip(bad, with_export_xml=False)
+    invalid = tmp_path / "invalid.zip"
+    invalid.write_bytes(b"<html>oops</html>")
+
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_list_zips(conn)
+        zips_list = out["zips"]
+        assert isinstance(zips_list, list) and len(zips_list) == 3
+        by_name = {e["file_name"]: e for e in zips_list}
+        assert by_name["good.zip"]["zip_status"] == "valid_apple_health"
+        assert by_name["bad.zip"]["zip_status"] == "valid_non_apple_health"
+        assert by_name["invalid.zip"]["zip_status"] == "invalid_zip"
+        # Backward-compatible boolean still mirrors the VALID_APPLE_HEALTH branch.
+        assert by_name["good.zip"]["is_apple_health"] is True
+        assert by_name["bad.zip"]["is_apple_health"] is False
+        assert by_name["invalid.zip"]["is_apple_health"] is False
+    finally:
+        conn.close()
+
+
+def test_import_zip_returns_invalid_zip_reason_for_html_file(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An HTML-renamed .zip surfaces ``reason: invalid_zip``, not the old
+    ``not_apple_health_export`` collision."""
+    fake = tmp_path / "fake.zip"
+    fake.write_bytes(b"<html><body>404</body></html>")
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    import hashlib
+
+    sha = hashlib.sha256(fake.read_bytes()).hexdigest()
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_import_zip(conn, id=sha[:8])
+        assert out["status"] == "error"
+        assert out["reason"] == "invalid_zip"
+        assert "re-download" in str(out["message"]).lower()
+    finally:
+        conn.close()
