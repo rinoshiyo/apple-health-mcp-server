@@ -913,14 +913,27 @@ def test_incremental_skipped_workout_does_not_double_count_events(
 _runner = CliRunner()
 
 
-def test_cli_force_flag_threads_through_to_run_import(
+def test_cli_force_flag_threads_through_to_extract_zip_and_import(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``import --force`` reaches ``run_import(force=True)``."""
+    """v0.5 (issue #170): ``import --force <zip>`` threads force=True through
+    to ``extract_zip_and_import`` (the CLI / MCP shared helper)."""
+    import zipfile
+
     captured: dict[str, object] = {}
 
-    def fake_run_import(export_path: Path, db: Path | None, *, force: bool = False) -> object:
+    def fake_extract(
+        zip_path: Path,
+        source_zip: tuple[str, object, int],
+        *,
+        db_path: Path | None = None,
+        conn: object = None,
+        import_id: str | None = None,
+        force: bool = False,
+    ) -> object:
         captured["force"] = force
+        captured["zip_path"] = zip_path
+        captured["source_zip"] = source_zip
 
         class _Stats:
             records = 0
@@ -930,15 +943,21 @@ def test_cli_force_flag_threads_through_to_run_import(
 
         return _Stats()
 
-    monkeypatch.setattr("apple_health_mcp.importers.run_import", fake_run_import, raising=False)
-
-    export_dir = tmp_path / "export"
-    export_dir.mkdir()
-    (export_dir / "export.xml").write_text(
-        '<?xml version="1.0"?><HealthData locale="en_US"/>', encoding="utf-8"
+    monkeypatch.setattr(
+        "apple_health_mcp.importers.zip_extract.extract_zip_and_import",
+        fake_extract,
+        raising=True,
     )
 
+    zip_path = tmp_path / "export.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr(
+            "apple_health_export/export.xml",
+            '<?xml version="1.0"?><HealthData locale="en_US"/>',
+        )
+
     db = tmp_path / "h.duckdb"
-    result = _runner.invoke(cli.app, ["--db", str(db), "import", "--force", str(export_dir)])
+    result = _runner.invoke(cli.app, ["--db", str(db), "import", "--force", str(zip_path)])
     assert result.exit_code == 0, result.output
     assert captured["force"] is True
+    assert captured["zip_path"] == zip_path

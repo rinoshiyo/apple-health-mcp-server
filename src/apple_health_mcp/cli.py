@@ -2,8 +2,11 @@
 
 Two subcommands:
 
-* ``import <export>`` -- ingest an Apple Health export into the local DB
-  via :func:`apple_health_mcp.importers.run_import`.
+* ``import <export.zip>`` -- ingest an Apple Health export ZIP into the
+  local DB. The CLI extracts the ZIP into a temp directory and drives
+  the same pipeline the MCP ``import_zip`` tool uses, so the two
+  entry points stamp the same ``imports.source_zip_sha256`` triple
+  and idempotency works across CLI / MCP boundaries (v0.5, issue #170).
 * ``serve`` -- run the FastMCP server. Defaults to stdio (so it drops into
   Claude Desktop / Codex / Cursor as-is); HTTP is opt-in via
   ``--transport http --port 8080``.
@@ -85,9 +88,14 @@ def _root(
 @app.command(name="import")
 def import_cmd(
     ctx: typer.Context,
-    export_path: Path = typer.Argument(
+    zip_path: Path = typer.Argument(
         ...,
-        help="Path to the Apple Health extracted export directory.",
+        help=(
+            "Path to the Apple Health export ZIP file (the file the Health "
+            "app produces via Share → Export). v0.5 dropped directory "
+            "acceptance — the CLI now extracts the ZIP internally so the "
+            "user never has to unzip manually."
+        ),
     ),
     force: bool = typer.Option(
         False,
@@ -102,16 +110,77 @@ def import_cmd(
         ),
     ),
 ) -> None:
-    """Import an Apple Health export into the local DuckDB database."""
+    """Import an Apple Health export ZIP into the local DuckDB database.
+
+    v0.5 (issue #170): the subcommand accepts a ``.zip`` file path
+    only -- directory acceptance was removed so the CLI and the MCP
+    ``import_zip`` tool stamp the same ``imports.source_zip_*`` triple
+    and idempotency works uniformly across both entry points.
+    """
     # Imported lazily so `apple-health-mcp-server serve` does not pay the
-    # importer / lxml import cost on every CLI invocation.
+    # importer / lxml / zipfile import cost on every CLI invocation.
+    import zipfile
+    from datetime import UTC, datetime
+
+    from apple_health_mcp._zip_util import (
+        ZipInspection,
+        inspect_zip,
+        stream_sha256,
+    )
     from apple_health_mcp.exceptions import AppleHealthMCPError
-    from apple_health_mcp.importers import run_import
+    from apple_health_mcp.importers.zip_extract import extract_zip_and_import
 
     db: Path | None = ctx.obj["db"]
-    _logger.info("import invoked: export=%s db=%s force=%s", export_path, db, force)
+    _logger.info("import invoked: zip=%s db=%s force=%s", zip_path, db, force)
+
+    # Validate path shape early so the user gets a clear error before
+    # the importer modules load lxml / pyarrow.
+    if not zip_path.exists():
+        _logger.error("import failed: %s does not exist", zip_path)
+        raise typer.Exit(code=1)
+    if zip_path.is_dir():
+        _logger.error(
+            "import failed: %s is a directory. v0.5 requires a .zip file path; "
+            "the CLI extracts the ZIP internally (see CHANGELOG and issue #170).",
+            zip_path,
+        )
+        raise typer.Exit(code=1)
+
+    inspection = inspect_zip(zip_path)
+    if inspection == ZipInspection.INVALID_ZIP:
+        _logger.error(
+            "import failed: %s is not a valid ZIP archive. The file may be "
+            "corrupted, partially downloaded, or have a .zip extension by "
+            "mistake. Re-download or re-export your Apple Health data.",
+            zip_path,
+        )
+        raise typer.Exit(code=1)
+    if inspection == ZipInspection.VALID_NON_APPLE_HEALTH:
+        _logger.error(
+            "import failed: %s is a valid ZIP but does not contain "
+            "apple_health_export/export.xml or export.xml at the top level. "
+            "Did you mean a different ZIP?",
+            zip_path,
+        )
+        raise typer.Exit(code=1)
+
+    stat = zip_path.stat()
+    sha = stream_sha256(zip_path)
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    source_zip = (sha, mtime, stat.st_size)
+
     try:
-        stats = run_import(export_path, db, force=force)
+        stats = extract_zip_and_import(zip_path, source_zip, db_path=db, force=force)
+    except zipfile.BadZipFile as exc:
+        # Extraction-phase failure: ``zip_extract`` re-raises any OSError
+        # from ``extractall`` as BadZipFile so the two corruption / IO
+        # failure modes share one recovery path. Importer-phase OSError
+        # (DuckDB writes, ECG / GPX file IO) bypasses this branch and
+        # falls through to the AppleHealthMCPError handler below — or
+        # propagates uncaught when it isn't a typed AppleHealthMCPError
+        # (rare; would indicate an importer bug worth surfacing).
+        _logger.error("import failed: failed to extract %s: %s", zip_path, exc)
+        raise typer.Exit(code=1) from exc
     except AppleHealthMCPError as exc:
         _logger.error("import failed: %s", exc)
         raise typer.Exit(code=1) from exc

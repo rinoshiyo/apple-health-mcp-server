@@ -9,6 +9,22 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Breaking
+
+- **CLI `import` subcommand accepts a ZIP path only** (issue #170). The
+  argument shape changed from `apple-health-mcp-server import <dir>`
+  to `apple-health-mcp-server import <export.zip>`. Pre-v0.5 the CLI
+  took a directory (typically `apple_health_export/` after manual
+  unzip); v0.5 onward the CLI extracts the ZIP internally so users
+  never have to unzip manually. The CLI and the MCP `import_zip` tool
+  now go through the same `importers.zip_extract.extract_zip_and_import`
+  helper, so both stamp the matching `imports.source_zip_*` triple
+  and idempotency works uniformly across CLI / MCP boundaries (the
+  pre-v0.5 CLI left `source_zip_sha256 = NULL` and the MCP
+  `_find_existing_import` check missed those rows). Existing users
+  who run `import <dir>` get a typed exit-1 with a CHANGELOG pointer
+  rather than a silent shape mismatch.
+
 ### Fixed
 
 - **`get_workout_route` size budget honours indent=2 serialization**

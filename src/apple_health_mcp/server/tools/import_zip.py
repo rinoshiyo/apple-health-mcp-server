@@ -28,7 +28,6 @@ import asyncio
 import logging
 import os
 import re
-import tempfile
 import time
 import zipfile
 from datetime import UTC, datetime
@@ -249,53 +248,47 @@ def _import_zip_sync(
             }
         )
 
-    with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
-        extracted_root = Path(tmpdir)
-        try:
-            with zipfile.ZipFile(selected) as zf:
-                zf.extractall(extracted_root)
-        except (zipfile.BadZipFile, OSError) as exc:
-            _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
-            return run_query_payload(
-                {
-                    "status": "error",
-                    "reason": "zip_extract_failed",
-                    "message": f"Failed to extract {selected.name}: {exc}",
-                }
-            )
+    # v0.5 (issue #170): the extract + run_import body is shared with
+    # the CLI's ``import <zip>`` subcommand via
+    # ``importers.zip_extract.extract_zip_and_import``. Lazy import to
+    # keep the server boot off the importer / lxml / pyarrow path —
+    # ``test_server_module_does_not_import_pyarrow`` pins that invariant.
+    from apple_health_mcp.importers.zip_extract import extract_zip_and_import
 
-        # Apple Health ships the export as ``apple_health_export/`` at
-        # the top level; some repackagers flatten it. Resolve whichever
-        # shape we got into the path the importer expects.
-        if (extracted_root / "apple_health_export" / "export.xml").exists():
-            import_root = extracted_root / "apple_health_export"
-        else:
-            import_root = extracted_root
-
-        # Lazy import: pulling in ``apple_health_mcp.importers`` at
-        # module-import time would chain into pyarrow + lxml and pay
-        # ~30 MB on every server boot, even when the user never calls
-        # import_zip. ``test_server_module_does_not_import_pyarrow``
-        # pins that invariant.
-        from apple_health_mcp.importers import run_import
-
-        # Hold the lock for the whole importer run: the DuckDB Python
-        # binding is not thread-safe and ``run_import`` performs many
-        # writes against ``conn``. Releasing the lock here would let a
-        # concurrent read tool's ``conn.execute`` race the importer
-        # mid-write -- cursor corruption, partial reads, or worse.
-        # Concurrent agent calls back off on this lock until the
-        # import completes; the ``asyncio.to_thread`` wrap in the
-        # handler keeps the event loop responsive to the MCP
-        # transport's keepalives meanwhile.
-        started = time.monotonic()
+    # Hold the lock for the whole importer run: the DuckDB Python
+    # binding is not thread-safe and ``run_import`` performs many
+    # writes against ``conn``. Releasing the lock here would let a
+    # concurrent read tool's ``conn.execute`` race the importer
+    # mid-write -- cursor corruption, partial reads, or worse.
+    # Concurrent agent calls back off on this lock until the
+    # import completes; the ``asyncio.to_thread`` wrap in the
+    # handler keeps the event loop responsive to the MCP
+    # transport's keepalives meanwhile.
+    started = time.monotonic()
+    try:
         with lock:
-            stats = run_import(
-                import_root,
-                conn=conn,
+            stats = extract_zip_and_import(
+                selected,
                 source_zip=(selected_sha, mtime, size),
+                conn=conn,
             )
-        duration_secs = round(time.monotonic() - started, 2)
+    except zipfile.BadZipFile as exc:
+        # Extraction-phase failure only: ``zip_extract`` re-raises any
+        # OSError from ``extractall`` as BadZipFile so the two
+        # extraction-time failure modes (corruption / IO) share one
+        # envelope. Importer-phase OSError (DuckDB writes, ECG / GPX
+        # file IO) bypasses this branch so it does not get misclassified
+        # as "zip_extract_failed" — it surfaces as the importer's own
+        # typed exception or an upstream AppleHealthMCPError instead.
+        _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
+        return run_query_payload(
+            {
+                "status": "error",
+                "reason": "zip_extract_failed",
+                "message": f"Failed to extract {selected.name}: {exc}",
+            }
+        )
+    duration_secs = round(time.monotonic() - started, 2)
 
     return run_query_payload(
         {

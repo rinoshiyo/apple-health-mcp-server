@@ -229,16 +229,22 @@ Source: <https://developers.openai.com/codex/mcp> (fetched 2026-06-22).
 ### Importing your export
 
 Before any tool returns data you have to ingest your export once.
-Apple gives you a directory containing `export.xml`, an
-`electrocardiograms/` folder, and a `workout-routes/` folder; point
-the importer at the directory itself:
+Apple gives you a single `export.zip` file via the Health app's
+Share → Export → Health Data flow. **v0.5 onward the CLI takes the
+ZIP path directly — you no longer have to unzip it manually**:
 
 ```bash
-uvx apple-health-mcp-server import /path/to/apple_health_export
+uvx apple-health-mcp-server import /path/to/export.zip
 ```
 
-The import is idempotent — re-running it with a newer export merges
-the new rows into the existing database via the `import_id` column.
+The CLI extracts the ZIP into a temporary directory internally and
+drives the same pipeline the MCP `import_zip` tool uses, so a
+re-import from the CLI and a re-import via Claude land the same
+`imports.source_zip_*` triple — idempotency works uniformly across
+both entry points. The import is idempotent: re-running with a
+byte-identical ZIP no-ops in milliseconds, and re-running with a
+newer export merges the new rows into the existing database via
+the `import_id` column.
 
 Phase 1 (XML parse) emits a single-line progress entry every
 10 seconds (`INFO progress: xml NN% (X / Y MB, ~Z min remaining)`)
@@ -414,7 +420,7 @@ Renaming, removing, or changing the parsing rules of any of these is a major bum
 
 **CLI parameters** — used by callers that pipe `apple-health-mcp-server` into shell scripts, service supervisors, or wire it into Claude Desktop / Claude Code configs:
 
-- **Subcommands**: `import <export-dir>`, `serve`
+- **Subcommands**: `import <export.zip>` (v0.5+; pre-v0.5 took a directory), `serve`
 - **Top-level flags**: `--db <path>` (DB path override, applies to both subcommands), `--tz <name>` (overrides `APPLE_HEALTH_TZ`)
 - **`serve` flags**: `--transport stdio|http` (default `stdio`), `--host <addr>` (HTTP bind host), `--port <int>` (HTTP port)
 
@@ -536,8 +542,9 @@ Recovery is a one-time re-import:
 # Remove the pre-v0.3.0 DB (the default location, override with --db).
 rm ~/.local/share/apple-health-mcp/health.duckdb
 
-# Re-import from the latest Apple Health export.zip you extracted.
-uvx apple-health-mcp-server@latest import /path/to/apple_health_export
+# Re-import from the latest Apple Health export.zip (v0.5+ takes the
+# ZIP path directly; pre-v0.5 needed you to unzip first).
+uvx apple-health-mcp-server@latest import /path/to/export.zip
 ```
 
 The importer takes a couple of minutes on a multi-GB `export.xml` and
@@ -576,7 +583,7 @@ The `state` is one of:
 For the CLI import flow:
 
 ```bash
-apple-health-mcp-server import /path/to/apple_health_export
+apple-health-mcp-server import /path/to/export.zip
 ```
 
 **Stop the MCP server first** (quit Claude Desktop, kill the `serve`
