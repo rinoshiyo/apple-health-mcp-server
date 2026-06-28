@@ -266,6 +266,46 @@ def _count_sql_from_page_sql(sql: str) -> str:
     return f"SELECT COUNT(*) AS _total FROM ({base}) AS _envelope_count"
 
 
+# v0.5 (issue #171): host-side transport ceiling shared by every
+# envelope-shaped read tool. The MCP runtime truncates responses
+# larger than ~1 MB to a generic "Tool result is too large" string,
+# so the server must clip below that threshold itself. 950 KB leaves
+# ~50 KB of headroom for envelope keys (``truncated_by_size``,
+# ``size_budget_bytes``, ``total``, ``next_offset``) plus indent=2
+# overhead.
+DEFAULT_SIZE_BUDGET_BYTES: Final[int] = 950_000
+
+
+def clip_items_to_size_budget(
+    items: list[dict[str, Any]],
+    budget_bytes: int = DEFAULT_SIZE_BUDGET_BYTES,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Greedily prefix ``items`` to stay under ``budget_bytes`` of JSON.
+
+    Returns ``(kept, truncated)``. ``truncated`` is True when at least
+    one item was dropped because adding it would overflow the budget.
+    The per-item byte estimate MUST match the serialization options
+    ``run_query_payload`` actually uses (``indent=2``,
+    ``ensure_ascii=False``) — a compact estimate under-counts by ~50%
+    on a 6-field row, enough to let payloads breach the 1 MB host
+    transport ceiling even when this clamp reported
+    ``truncated_by_size=False``. The check runs BEFORE the envelope
+    wrapper is built because the envelope adds a fixed ~200 bytes that
+    we treat as headroom inside the budget.
+    """
+    kept: list[dict[str, Any]] = []
+    used = 0
+    truncated = False
+    for item in items:
+        approx = len(json.dumps(item, ensure_ascii=False, indent=2)) + 2
+        if used + approx > budget_bytes:
+            truncated = True
+            break
+        kept.append(item)
+        used += approx
+    return kept, truncated
+
+
 def run_query_envelope(
     conn: duckdb.DuckDBPyConnection,
     sql: str,
@@ -275,15 +315,32 @@ def run_query_envelope(
     lock: Lock | None = None,
     require_data: bool = True,
     row_transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    size_budget_bytes: int | None = None,
 ) -> str:
-    """Execute ``sql`` and return a ``{items, total, next_offset}`` envelope.
+    """Execute ``sql`` and return the standard paged envelope.
 
-    See issue #108 for the full contract. ``sql`` must project
-    ``COUNT(*) OVER () AS _total`` so ``total`` is one round trip in the
-    common case; an ``offset`` past the end falls back to a second
-    targeted ``COUNT(*)`` so the wire ``total`` never lies. ``row_transform``
-    runs per item before ``_total`` is dropped.
+    Wire shape:
+    ``{items, total, next_offset, truncated_by_size, size_budget_bytes}``.
+
+    See issue #108 for the original pagination contract; v0.5 (issue
+    #171) added ``truncated_by_size`` / ``size_budget_bytes`` so every
+    envelope-shaped read tool stays under the host MCP runtime's 1 MB
+    transport ceiling. When the clamp drops at least one item, the
+    ``next_offset`` is set to the resume point so the caller can page
+    the remainder cleanly.
+
+    ``sql`` must project ``COUNT(*) OVER () AS _total`` so ``total``
+    is one round trip in the common case; an ``offset`` past the end
+    falls back to a second targeted ``COUNT(*)`` so the wire ``total``
+    never lies. ``row_transform`` runs per item before ``_total`` is
+    dropped and before the size clamp is applied. ``size_budget_bytes``
+    defaults to :data:`DEFAULT_SIZE_BUDGET_BYTES` (950 KB) when
+    ``None``; pass a smaller integer for tools that emit unusually
+    large per-item rows. The lookup happens at call time so tests can
+    monkeypatch :data:`DEFAULT_SIZE_BUDGET_BYTES` to force truncation.
     """
+    if size_budget_bytes is None:
+        size_budget_bytes = DEFAULT_SIZE_BUDGET_BYTES
     try:
         if require_data:
             state = check_data_state(conn, lock=lock)
@@ -317,10 +374,19 @@ def run_query_envelope(
         item = row_transform(row) if row_transform is not None else row
         item.pop("_total", None)
         items.append(item)
-    next_offset: int | None = offset + len(items) if (offset + len(items)) < total else None
+    kept, truncated_by_size = clip_items_to_size_budget(items, size_budget_bytes)
+    # v0.5 (issue #171): when the size clamp drops items, expose the
+    # resume offset so callers can page the remainder. When the size
+    # clamp is satisfied, fall back to the row-count vs total comparison.
+    if truncated_by_size or offset + len(kept) < total:
+        next_offset: int | None = offset + len(kept)
+    else:
+        next_offset = None
     payload: dict[str, Any] = {
-        "items": items,
+        "items": kept,
         "total": total,
         "next_offset": next_offset,
+        "truncated_by_size": truncated_by_size,
+        "size_budget_bytes": size_budget_bytes,
     }
     return run_query_payload(payload)

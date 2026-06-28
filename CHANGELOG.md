@@ -9,6 +9,24 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Changed
+
+- **Size-budget clamp shared across every envelope-shaped read tool**
+  (issue #171). The 1 MB host transport ceiling guard previously
+  exclusive to `get_workout_route` (v0.4.1) is now inside
+  `run_query_envelope`, so `query_records` / `list_workouts` /
+  `list_ecg_readings` / `get_heart_rate_samples` / etc. all carry
+  `truncated_by_size` + `size_budget_bytes` fields and self-clip
+  before the wire response exceeds the host runtime's 1 MB ceiling.
+  `next_offset` is set to the resume point when the clamp drops
+  items so the caller can page the remainder cleanly. The
+  per-tool `_clip_to_size_budget` / `_SIZE_BUDGET_BYTES` constants
+  in `get_workout_route` moved to
+  `server.query.clip_items_to_size_budget` /
+  `DEFAULT_SIZE_BUDGET_BYTES`. `get_workout_route`'s per-field
+  rounding (lat/lon 6 digits, etc.) stays a route-only payload trim
+  applied via the envelope's `row_transform` hook.
+
 ### Breaking
 
 - **CLI `import` subcommand accepts a ZIP path only** (issue #170). The
