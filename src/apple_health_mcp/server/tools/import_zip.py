@@ -157,6 +157,24 @@ def _import_zip_sync(
                 ),
             }
         )
+    except NotADirectoryError:
+        # v0.4.1 (issue #160 code-review #4): mirror list_zips's typed
+        # envelope when APPLE_HEALTH_EXPORT_ZIPS_DIR points at a file
+        # instead of a directory. Pre-fix this raised through to
+        # FastMCP as an unstructured MCP error; the sibling list_zips
+        # has caught NotADirectoryError since v0.4.0, so import_zip
+        # was the only path with the gap.
+        return run_query_payload(
+            {
+                "status": "error",
+                "reason": "export_zips_dir_not_a_directory",
+                "message": (
+                    f"Path {export_dir} is not a directory. Point "
+                    f"{EXPORT_ZIPS_DIR_ENV_VAR} at a folder containing "
+                    "your Apple Health export ZIP, not a file."
+                ),
+            }
+        )
 
     selected, selected_sha = _resolve_target(conn, lock, candidates, cleaned)
     if selected is None:

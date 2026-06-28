@@ -9,6 +9,41 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`get_workout_route` size budget honours indent=2 serialization**
+  (post-v0.4.1 code-review #2). `_clip_to_size_budget` was estimating
+  per-item byte cost with a compact `json.dumps` call while
+  `run_query_payload` actually serializes with `indent=2`, undercounting
+  by ~50%. A long-form workout (e.g. `limit=7000`) could pass the
+  950 KB clamp with `truncated_by_size: false` and still produce a
+  ~1.3 MB wire payload that the host MCP runtime truncated to a
+  generic "Tool result is too large" message — the exact failure mode
+  issue #160 set out to prevent. The estimator now uses indent=2
+  to match the actual wire cost.
+- **`import_zip` handles `APPLE_HEALTH_EXPORT_ZIPS_DIR` pointing at
+  a file** (post-v0.4.1 code-review #4). The tool now catches
+  `NotADirectoryError` and returns a typed
+  `reason: "export_zips_dir_not_a_directory"` envelope, matching the
+  contract `list_zips` has carried since v0.4.0. Pre-fix the
+  exception propagated through `asyncio.to_thread` as an unstructured
+  MCP error.
+
+### Internal
+
+- Orchestrator atomicity comment corrected (code-review #5): the
+  reset uses its own `BEGIN/COMMIT`, not the importer's autocommit;
+  a mid-pipeline crash leaves an empty schema, not a "previously-stale
+  DB intact" as the prior comment promised.
+- `_CANONICAL_TABLE_NAMES` regex now carries a fragility warning
+  (code-review #6) so a future SQL reformat that inserts a comment
+  between `IF NOT EXISTS` and the table name doesn't silently
+  disable `reset_db_for_fresh_import`.
+- `run_custom_query` trailing-line-comment safety regression test
+  added on the live envelope path (code-review #8); `enforce_limit`
+  docstring clarifies it is now a test-only helper since v0.4.1
+  switched to inline `stmt.limit(MAX + 1).sql(...)`.
+
 ## [0.4.1] - 2026-06-28
 
 ### Documentation

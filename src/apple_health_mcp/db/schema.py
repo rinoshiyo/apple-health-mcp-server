@@ -818,6 +818,17 @@ def populate_workout_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
 # automatically. ``daily_record_stats`` is dropped by ``rebuild_daily_stats``
 # (CREATE OR REPLACE TABLE) rather than ensure_schema, so it appears on
 # the reset list below but not in the canonical table count.
+#
+# FRAGILITY (v0.4.1 code-review #6): the regex matches
+# ``CREATE TABLE IF NOT EXISTS\s+<name>``. Only whitespace is permitted
+# between ``EXISTS`` and the table name. If a future edit inserts an
+# inline SQL comment between them (e.g. ``CREATE TABLE IF NOT EXISTS
+# -- per-column note\n foo (...)``) the regex silently returns an
+# empty tuple and ``reset_db_for_fresh_import`` becomes a no-op --
+# the very failure mode the function exists to prevent. When editing
+# ``_CREATE_TABLES_SQL`` keep ``CREATE TABLE IF NOT EXISTS <name>``
+# on a single uninterrupted line, or replace this regex derivation
+# with an explicit tuple literal.
 _CANONICAL_TABLE_NAMES: tuple[str, ...] = tuple(
     re.findall(r"\bCREATE TABLE IF NOT EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\b", _CREATE_TABLES_SQL)
 )

@@ -164,10 +164,20 @@ def run_import(
         # re-run the CLI; that broke the v0.4 terminal-zero install
         # pitch because the default DB path on Windows lives behind
         # the MSIX AppContainer sandbox redirect and is invisible to
-        # Explorer / PowerShell. The reset lands inside the same
-        # transaction as the importer's writes via DuckDB's autocommit,
-        # so a mid-import crash leaves the previously-stale DB intact
-        # for the next attempt to retry.
+        # Explorer / PowerShell.
+        #
+        # Atomicity caveat (v0.4.1 code-review #5): reset_db_for_fresh_import
+        # opens its own ``BEGIN TRANSACTION ... COMMIT`` and closes it
+        # before ``ensure_schema`` and the importer writes begin --
+        # those run under separate autocommit statements. If the host
+        # process is killed between the reset COMMIT and the end of
+        # the import pipeline, the DB is left with the new (empty)
+        # canonical schema and no rows; the previously-stale data is
+        # NOT preserved. This is intentional: stale-shape rows are
+        # not safe to read against the current package, and the next
+        # ``import_zip`` call walks the same path and re-ingests from
+        # the source ZIP. Do not promise "previously-stale DB intact"
+        # in user-facing copy.
         if schema_version_is_stale(conn):
             _logger.warning(
                 "Detected stale schema in %s; performing fresh-reset before re-import.",

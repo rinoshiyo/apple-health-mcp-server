@@ -170,18 +170,26 @@ def _clip_to_size_budget(
 
     Returns ``(kept, truncated)``. ``truncated`` is ``True`` when at
     least one item was dropped because adding it would overflow the
-    budget. The per-item byte estimate uses ``json.dumps`` with the
-    same options ``run_query_payload`` would have used (no indent,
-    ``ensure_ascii=False``) so the rolling tally tracks the actual
-    wire cost. The check is run BEFORE the envelope wrapper is built
-    because the envelope adds a fixed ~200 bytes that we treat as
-    headroom inside ``_SIZE_BUDGET_BYTES``.
+    budget. The per-item byte estimate MUST match the serialization
+    options ``run_query_payload`` actually uses (``indent=2``,
+    ``ensure_ascii=False``) -- a compact estimate under-counts by
+    roughly 50% on a 6-field route point, which is enough to let
+    payloads breach the 1 MB host transport ceiling even when this
+    clamp reported ``truncated_by_size=False``. The check runs BEFORE
+    the envelope wrapper is built because the envelope adds a fixed
+    ~200 bytes that we treat as headroom inside ``_SIZE_BUDGET_BYTES``.
     """
     kept: list[dict[str, Any]] = []
     used = 0
     truncated = False
     for item in items:
-        approx = len(json.dumps(item, ensure_ascii=False)) + 2  # ", " between items
+        # indent=2 mirrors run_query_payload's actual serialization;
+        # the +2 covers the ",\n" separator between array elements
+        # under indent=2 (compact would only add ", " — 2 bytes —
+        # but indent=2 emits "," + newline + indent and the rolling
+        # tally already approximates the extra indent inside the
+        # per-item dump).
+        approx = len(json.dumps(item, ensure_ascii=False, indent=2)) + 2
         if used + approx > budget_bytes:
             truncated = True
             break

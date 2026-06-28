@@ -872,6 +872,34 @@ def test_run_custom_query_returns_sql_error_string(
     assert out.startswith("Error:")
 
 
+def test_run_custom_query_caps_unbounded_select_despite_trailing_comment(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """v0.4.1 code-review #8: trailing ``-- comment`` must not bypass the cap.
+
+    ``safety.py`` documents its validator as the SOLE wire-side guard
+    after v0.4 opened the DuckDB handle writable. The historic
+    ``test_enforce_limit_survives_trailing_line_comment`` pinned this
+    property on ``enforce_limit``, but ``run_custom_query`` no longer
+    invokes that helper -- it calls ``stmt.limit(MAX + 1).sql(...)``
+    inline. This test pins the equivalent invariant on the live
+    production path so a future refactor to naive string concatenation
+    (``sql + f' LIMIT {N}'``) cannot silently swallow the LIMIT inside
+    the trailing comment and let an unbounded result set blow the LLM
+    context window.
+    """
+    from apple_health_mcp.server.safety import MAX_CUSTOM_QUERY_ROWS
+
+    fn = _bind(run_custom_query, seeded_conn)
+    payload = _call(
+        fn,
+        query=f"SELECT * FROM range({MAX_CUSTOM_QUERY_ROWS + 25}) -- trailing line comment",
+    )
+    assert payload["row_count"] <= MAX_CUSTOM_QUERY_ROWS
+    assert payload["truncated"] is True
+    assert payload["user_supplied_limit"] is False
+
+
 # --- list_data_sources -------------------------------------------------------
 
 

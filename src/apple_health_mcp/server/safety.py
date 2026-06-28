@@ -162,6 +162,16 @@ def enforce_limit(stmt: exp.Query, max_rows: int = MAX_CUSTOM_QUERY_ROWS) -> str
     the LIMIT is materialised inside the AST rather than appended as text.
     Appending text after a trailing ``-- ...`` line comment would otherwise
     push the LIMIT into the comment and bypass the row cap.
+
+    NOTE (v0.4.1 / issue #159): no production caller invokes this
+    helper any more -- ``run_custom_query`` builds its SQL inline via
+    ``stmt.limit(MAX + 1).sql(...)`` so it can probe for overflow
+    truncation. The helper remains as a test-only API to keep the
+    historic ``test_enforce_limit_survives_trailing_line_comment``
+    pin alive; the equivalent invariant on the live ``run_custom_query``
+    path is covered by
+    ``test_run_custom_query_caps_unbounded_select_despite_trailing_comment``
+    in ``tests/unit/server/test_tools.py``.
     """
     if stmt.args.get("limit") is not None:
         return stmt.sql(dialect="duckdb")
