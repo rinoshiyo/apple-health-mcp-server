@@ -527,10 +527,12 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
     recreates it with the legacy VARCHAR ``sample_time`` column so the
     file plausibly represents what a user who imported under v0.2.x and
     then upgraded the package to v0.3.0 would have on disk. Stamps
-    ``schema_version=2`` so :func:`apply_pending_migrations` -- and
-    therefore :func:`_migrate_if_needed` -- raises the canonical
-    re-import :class:`ConfigError` instead of silently bumping the
-    sentinel.
+    ``schema_version=2`` so :func:`_migrate_if_needed_on_handle` sees a
+    stale sentinel and the data-state machine surfaces
+    ``NEEDS_REIMPORT`` on the next read tool call (v0.4.1, issue #156).
+    Pre-v0.4.1 the same sentinel would have triggered the
+    ``apply_pending_migrations`` ConfigError refusal that v0.5 (#178)
+    retired.
 
     Each phase runs on its own DuckDB connection + CHECKPOINT so the
     next read-only open does not inherit a stale catalog snapshot from
@@ -708,14 +710,14 @@ def test_get_connection_read_only_returns_quietly_on_current_db(
     against a current DB. A future contributor that adds a noisy
     startup log will fail this test.
     """
-    from apple_health_mcp.db.migrations import apply_pending_migrations
+    from apple_health_mcp.db.migrations import stamp_current_version
     from apple_health_mcp.db.schema import ensure_schema
 
     db_path = tmp_path / "current.duckdb"
     seeder = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
-        apply_pending_migrations(seeder)
+        stamp_current_version(seeder)
     finally:
         seeder.close()
 

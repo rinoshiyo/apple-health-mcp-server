@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from apple_health_mcp.db.connection import get_connection
-from apple_health_mcp.db.migrations import apply_pending_migrations, schema_version_is_stale
+from apple_health_mcp.db.migrations import schema_version_is_stale, stamp_current_version
 from apple_health_mcp.db.schema import ensure_schema, reset_db_for_fresh_import
 from apple_health_mcp.importers._existing_hashes import (
     ExistingHashes,
@@ -160,13 +160,13 @@ def run_import(
         # v0.4.1 (issue #156): when the DB carries a stale
         # ``schema_version`` (imported under an older package release),
         # drop every package-owned table so ``ensure_schema`` below
-        # rebuilds the canonical shape and ``apply_pending_migrations``
-        # stamps the current sentinel. The legacy contract refused to
-        # open such DBs and asked the user to ``rm`` the file +
-        # re-run the CLI; that broke the v0.4 terminal-zero install
-        # pitch because the default DB path on Windows lives behind
-        # the MSIX AppContainer sandbox redirect and is invisible to
-        # Explorer / PowerShell.
+        # rebuilds the canonical shape and ``stamp_current_version``
+        # (called further down) records the current sentinel. The
+        # legacy contract refused to open such DBs and asked the user
+        # to ``rm`` the file + re-run the CLI; that broke the v0.4
+        # terminal-zero install pitch because the default DB path on
+        # Windows lives behind the MSIX AppContainer sandbox redirect
+        # and is invisible to Explorer / PowerShell.
         #
         # Atomicity caveat (v0.4.1 code-review #5): reset_db_for_fresh_import
         # opens its own ``BEGIN TRANSACTION ... COMMIT`` and closes it
@@ -187,17 +187,17 @@ def run_import(
             )
             reset_db_for_fresh_import(conn)
         ensure_schema(conn)
-        # Tier 1 requires the ``imports.export_xml_sha256`` column. The
-        # migration is idempotent on a fresh DB (``ADD COLUMN IF NOT
-        # EXISTS`` no-ops because ``ensure_schema`` already declared it)
-        # and patches a pre-#62 on-disk DB to v2. ``db_path`` is
-        # threaded through so the v0.3.0 (#124) re-import ConfigError
-        # surfaces the user's actual path in the recovery command --
-        # particularly important on the import path because the error
-        # message includes "apple-health-mcp-server --db <path> import
-        # <export>" which would otherwise echo the literal "<path>"
-        # placeholder back at a user who just typed the real one.
-        apply_pending_migrations(conn, db_path=db_path)
+        # v0.5 (issue #178): retired ``apply_pending_migrations``. The
+        # migration registry went empty once v0.3.0 made fresh-import
+        # the upgrade contract, and v0.4.1 (#156)
+        # ``schema_version_is_stale`` + ``reset_db_for_fresh_import``
+        # (called above) made the ConfigError rejection path
+        # unreachable too — by the time the importer writes the
+        # sentinel, the DB is guaranteed to either be empty or have
+        # just been fresh-reset. ``stamp_current_version`` is the thin
+        # wrapper that records :data:`CURRENT_SCHEMA_VERSION` on the
+        # schema_version sentinel.
+        stamp_current_version(conn)
 
         # Tier 1: sha256 fast path. Skip the whole import when the
         # incoming export.xml is byte-identical to the last successful
