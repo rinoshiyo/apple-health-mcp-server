@@ -287,6 +287,31 @@ def test_apply_pending_migrations_rejects_v4_db_after_v0_4_zip_source_bump() -> 
         conn.close()
 
 
+def test_apply_pending_migrations_rejects_v5_db_after_v0_5_dedup_skipped_bump() -> None:
+    """A v=5 DB (the v0.4.x baseline) is rejected by the v0.5 / issue #163
+    ``CURRENT_SCHEMA_VERSION = 6`` bump.
+
+    The bump adds the ``imports.dedup_skipped BOOLEAN NOT NULL`` column
+    with no in-place migration registered for v=5 -> v=6; the same
+    fresh-start contract that PR #126 introduced for v=2 -> v=3 and
+    PR-D for v=3 -> v=4 and #148 for v=4 -> v=5 applies here. Sole
+    existing user is the maintainer; the cost of re-importing is
+    dwarfed by the cost of writing + testing an ALTER TABLE migration
+    path for one user, AND the column is NOT NULL so a fresh-start
+    is the only way to guarantee every row carries the explicit
+    Tier-1 vs Tier-2 signal #163 introduced.
+    """
+    db_path = "/tmp/example-v5.duckdb"
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, 5)
+        with pytest.raises(ConfigError) as excinfo:
+            apply_pending_migrations(conn, db_path=db_path)
+        assert str(excinfo.value) == _reimport_required_message(5, db_path)
+    finally:
+        conn.close()
+
+
 def test_apply_pending_migrations_does_not_raise_when_max_target_reaches_current(
     monkeypatch: MonkeyPatch,
 ) -> None:

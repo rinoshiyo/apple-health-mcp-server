@@ -477,24 +477,35 @@ def test_tier2_incremental_imports_row_carries_null_records_after_dedup(
     conn = duckdb.connect(str(db), read_only=True)
     try:
         # imp_first ran Phase-4 dedup: records_after_dedup is the
-        # post-dedup count, NOT NULL.
+        # post-dedup count, NOT NULL. dedup_skipped is FALSE — the
+        # measurement happened and the column carries a real value.
         first = conn.execute(
-            "SELECT records_after_dedup FROM imports WHERE import_id = ?",
+            "SELECT records_after_dedup, dedup_skipped FROM imports WHERE import_id = ?",
             ["imp_first"],
         ).fetchone()
         assert first is not None and first[0] is not None and int(first[0]) > 0
+        assert first[1] is False, (
+            f"Tier-1 fresh imp_first must stamp dedup_skipped=false "
+            f"(got {first[1]!r}); see issue #163."
+        )
 
         # imp_second skipped dedup (Tier 2): records_after_dedup MUST be
         # NULL so downstream consumers see "no dedup measurement
         # available" instead of a misleading "1 row inserted" number.
+        # dedup_skipped is TRUE — the explicit signal that the NULL is
+        # intentional, not a pre-#129 legacy row (issue #163).
         second = conn.execute(
-            "SELECT records_after_dedup FROM imports WHERE import_id = ?",
+            "SELECT records_after_dedup, dedup_skipped FROM imports WHERE import_id = ?",
             ["imp_second"],
         ).fetchone()
         assert second is not None
         assert second[0] is None, (
             "Tier-2 incremental imp_second must stamp records_after_dedup=NULL "
             f"(got {second[0]!r}); see PR #141 F1."
+        )
+        assert second[1] is True, (
+            f"Tier-2 incremental imp_second must stamp dedup_skipped=true "
+            f"(got {second[1]!r}); see issue #163."
         )
     finally:
         conn.close()
