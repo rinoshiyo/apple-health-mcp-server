@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from apple_health_mcp.db import ensure_schema, get_in_memory_connection
-from apple_health_mcp.db.migrations import apply_pending_migrations
+from apple_health_mcp.db.migrations import stamp_current_version
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.tools import import_zip as import_zip_mod
 from apple_health_mcp.server.tools import list_zips as list_zips_mod
@@ -263,7 +263,7 @@ def test_import_zip_accepts_uppercase_hex_id(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         out = _call_import_zip(conn, id=sha[:8].upper())
         assert out["status"] == "ok"
         # Canonical id on the wire is lowercase, 8 chars, regardless of
@@ -358,7 +358,7 @@ def test_import_zip_drives_run_import_against_live_handle(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
@@ -401,7 +401,7 @@ def test_import_zip_resolves_via_db_cache_fast_path(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
@@ -437,7 +437,7 @@ def test_import_zip_falls_through_when_db_prefix_match_lacks_disk_file(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         # Seed imports with a fake prior import whose sha starts with
         # ``deadbeef`` but no on-disk file matches (the directory is
         # empty).
@@ -478,7 +478,7 @@ def test_import_zip_returns_already_imported_envelope_on_byte_identical_reimport
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
@@ -511,7 +511,7 @@ def test_import_zip_handles_flat_apple_health_zip(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
@@ -549,7 +549,7 @@ def test_import_zip_returns_zip_extract_failed_on_corrupt_archive(
     conn = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
-        apply_pending_migrations(conn, db_path=db_path)
+        stamp_current_version(conn)
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()

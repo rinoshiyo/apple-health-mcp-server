@@ -708,14 +708,14 @@ def test_get_connection_read_only_returns_quietly_on_current_db(
     against a current DB. A future contributor that adds a noisy
     startup log will fail this test.
     """
-    from apple_health_mcp.db.migrations import apply_pending_migrations
+    from apple_health_mcp.db.migrations import stamp_current_version
     from apple_health_mcp.db.schema import ensure_schema
 
     db_path = tmp_path / "current.duckdb"
     seeder = duckdb.connect(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
-        apply_pending_migrations(seeder)
+        stamp_current_version(seeder)
     finally:
         seeder.close()
 

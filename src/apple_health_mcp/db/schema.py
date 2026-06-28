@@ -857,7 +857,7 @@ _CANONICAL_TABLE_NAMES: tuple[str, ...] = tuple(
 # Extra tables to drop during ``reset_db_for_fresh_import`` that are NOT
 # declared by ``_CREATE_TABLES_SQL`` but live in the same database:
 # ``daily_record_stats`` is materialised by ``rebuild_daily_stats``, and
-# ``schema_version`` is the sentinel ``apply_pending_migrations`` owns.
+# ``schema_version`` is the sentinel ``stamp_current_version`` owns.
 _AUXILIARY_RESET_TABLES: tuple[str, ...] = ("daily_record_stats", "schema_version")
 
 
@@ -879,8 +879,8 @@ def reset_db_for_fresh_import(conn: duckdb.DuckDBPyConnection) -> None:
     materialised ``daily_record_stats`` and the migration sentinel
     ``schema_version`` table is dropped under a single transaction so
     a crash mid-reset cannot leave a partial schema behind. The
-    follow-up ``ensure_schema`` + ``apply_pending_migrations`` call
-    pair rebuilds the canonical shape and stamps the current sentinel.
+    follow-up ``ensure_schema`` + ``stamp_current_version`` call pair
+    rebuilds the canonical shape and stamps the current sentinel.
 
     The caller MUST hold a writable connection; the function does not
     take a lock argument because the v0.4 importer entry point

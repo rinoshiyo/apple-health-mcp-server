@@ -10,10 +10,10 @@ from apple_health_mcp.db.connection import (
 )
 from apple_health_mcp.db.migrations import (
     CURRENT_SCHEMA_VERSION,
-    apply_pending_migrations,
     get_current_version,
     schema_version_is_stale,
     set_current_version,
+    stamp_current_version,
 )
 from apple_health_mcp.db.schema import (
     TABLE_COUNT,
@@ -27,7 +27,6 @@ from apple_health_mcp.db.schema import (
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "TABLE_COUNT",
-    "apply_pending_migrations",
     "deduplicate_tables",
     "default_db_path",
     "ensure_schema",
@@ -40,4 +39,5 @@ __all__ = [
     "resolve_db_path",
     "schema_version_is_stale",
     "set_current_version",
+    "stamp_current_version",
 ]

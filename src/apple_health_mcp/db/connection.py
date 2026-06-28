@@ -386,15 +386,16 @@ def _materialise_empty_db(db_path: Path) -> None:
       our ``exists()`` check and the rename, ``os.replace`` is skipped so
       we never clobber user data with our empty scaffold.
 
-    The schema is built via ``ensure_schema`` + ``apply_pending_migrations``
-    so the bootstrap path stamps the same ``schema_version`` row the import
-    path would; otherwise a future v2 migration would re-run v1's ALTERs
-    against tables that already carry the v2 shape.
+    The schema is built via ``ensure_schema`` + ``stamp_current_version``
+    so the bootstrap path stamps the same ``schema_version`` row the
+    import path would. v0.5 (issue #178) retired the
+    ``apply_pending_migrations`` wrapper that this used to call; the
+    only operation it ever performed here was the version stamp.
 
     Imported lazily to avoid a top-level circular import between
     ``db.connection`` and ``db.schema`` / ``db.migrations``.
     """
-    from apple_health_mcp.db.migrations import apply_pending_migrations
+    from apple_health_mcp.db.migrations import stamp_current_version
     from apple_health_mcp.db.schema import ensure_schema
 
     _logger.warning(
@@ -415,10 +416,12 @@ def _materialise_empty_db(db_path: Path) -> None:
         try:
             bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
             ensure_schema(bootstrap)
-            # Fresh DB (current == 0) so the v0.3.0 (#124) re-import
-            # ConfigError guard never fires; ``db_path`` is passed for
-            # signature consistency only.
-            apply_pending_migrations(bootstrap, db_path=db_path)
+            # v0.5 (issue #178): stamp the version sentinel. The pre-#178
+            # ``apply_pending_migrations`` call did the same thing on a
+            # fresh bootstrap (the ConfigError rejection branch never
+            # fired here because ``current == 0``); the new helper drops
+            # the dead migration loop.
+            stamp_current_version(bootstrap)
         finally:
             bootstrap.close()
         if not db_path.exists():

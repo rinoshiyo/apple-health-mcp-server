@@ -9,6 +9,25 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Changed
+
+- **Retire migration scaffolding from `db.migrations`** (issue #178,
+  internal cleanup, wire-facing behaviour unchanged). The
+  registry-style `apply_pending_migrations` + the only-ever-registered
+  `_add_export_xml_sha256_column` step + the `_reimport_required_message`
+  / `_REIMPORT_REQUIRED_TEMPLATE` / `_REGISTERED_TARGETS` / `MIGRATIONS`
+  members + the matching v=2/v=3/v=4/v=5 rejection tests were dead
+  code by v0.5: v0.3.0 (#124) made fresh-import the upgrade contract,
+  and v0.4.1 (#156) `schema_version_is_stale` +
+  `reset_db_for_fresh_import` made the ConfigError rejection path
+  unreachable too — the read tools surface `NEEDS_REIMPORT` and the
+  write tools auto-reset before the next import. `migrations.py`
+  shrinks from ~306 lines to ~110, with the remaining surface
+  (`CURRENT_SCHEMA_VERSION`, `schema_version_is_stale`,
+  `get/set_current_version`, new `stamp_current_version` thin wrapper)
+  matching what callers actually use. Orchestrator + bootstrap
+  `connection.py` paths now call `stamp_current_version` directly.
+
 ### Added
 
 - **`get_workout_route` server-side downsampling + heart-rate join**

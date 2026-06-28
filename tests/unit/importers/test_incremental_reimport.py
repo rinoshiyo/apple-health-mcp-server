@@ -31,10 +31,6 @@ from typer.testing import CliRunner
 
 from apple_health_mcp import cli
 from apple_health_mcp.db import ensure_schema, get_in_memory_connection
-from apple_health_mcp.db.migrations import (
-    _add_export_xml_sha256_column,
-    apply_pending_migrations,
-)
 from apple_health_mcp.importers import run_import
 from apple_health_mcp.importers._existing_hashes import (
     ExistingHashes,
@@ -302,68 +298,6 @@ def test_has_prior_imports_distinguishes_empty_from_seeded(
     assert _has_prior_imports(fresh_conn) is False
     fresh_conn.execute("INSERT INTO imports (import_id, export_dir) VALUES ('p', '/tmp/p')")
     assert _has_prior_imports(fresh_conn) is True
-
-
-# ----------------------------------------------------------------------------
-# Migration upgrade path.
-# ----------------------------------------------------------------------------
-
-
-def test_migration_adds_export_xml_sha256_to_pre_62_db(
-    fresh_conn: duckdb.DuckDBPyConnection,
-) -> None:
-    """A pre-#62 schema (no sha256 column) gets the column via the migration."""
-    fresh_conn.execute("DROP TABLE imports")
-    fresh_conn.execute(
-        """
-        CREATE TABLE imports (
-            import_id     VARCHAR,
-            export_dir    VARCHAR NOT NULL,
-            imported_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            record_count  BIGINT,
-            workout_count BIGINT,
-            duration_secs DOUBLE
-        );
-        """
-    )
-    fresh_conn.execute(
-        "INSERT INTO imports (import_id, export_dir) VALUES ('legacy', '/tmp/legacy')"
-    )
-
-    _add_export_xml_sha256_column(fresh_conn)
-    # Column now exists; existing row backfilled to NULL.
-    row = fresh_conn.execute(
-        "SELECT export_xml_sha256 FROM imports WHERE import_id = 'legacy'"
-    ).fetchone()
-    assert row == (None,)
-
-
-def test_migration_noop_on_post_62_db(
-    fresh_conn: duckdb.DuckDBPyConnection,
-) -> None:
-    """Already-current schemas survive the idempotent ALTER without error."""
-    # The fixture ran ensure_schema, so the column already exists.
-    _add_export_xml_sha256_column(fresh_conn)
-    # Second invocation must also be safe.
-    _add_export_xml_sha256_column(fresh_conn)
-
-
-def test_migration_noop_when_imports_table_absent() -> None:
-    """An ALTER on a missing table would crash; the guard turns it into a no-op.
-
-    apply_pending_migrations is callable on a freshly-opened connection
-    that has not yet run ``ensure_schema``; the version sentinel only
-    needs the ``schema_version`` table. The migration's empty-DB guard
-    keeps that contract intact.
-    """
-    c = get_in_memory_connection()
-    try:
-        _add_export_xml_sha256_column(c)  # no exception
-        # apply_pending_migrations still stamps the version sentinel.
-        result = apply_pending_migrations(c)
-        assert result >= 2
-    finally:
-        c.close()
 
 
 # ----------------------------------------------------------------------------
