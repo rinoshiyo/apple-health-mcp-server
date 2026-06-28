@@ -390,3 +390,8 @@ def test_run_query_envelope_accepts_explicit_size_budget() -> None:
     assert payload["truncated_by_size"] is True
     assert payload["size_budget_bytes"] == 10
     assert payload["items"] == []
+    # Post-#175 code-review #1/#2 (CONFIRMED) fix: when the clamp
+    # drops every item, ``next_offset`` MUST be ``None`` so an agent
+    # paging blindly via ``next_offset`` does not loop forever on
+    # the same empty response.
+    assert payload["next_offset"] is None

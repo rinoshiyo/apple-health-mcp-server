@@ -439,23 +439,47 @@ def test_get_workout_route_truncates_by_size_when_budget_exhausted(
     monkeypatch: pytest.MonkeyPatch,
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """v0.4.1 (issue #160): the size-budget clamp clips items and flags it.
+    """v0.4.1 (issue #160) + v0.5 (issue #171): size-budget clamp.
 
-    Lower the budget to a value that fits one of the seeded rows but
-    not both, then assert the envelope reports ``truncated_by_size:
-    true`` and exposes a usable ``next_offset`` so the caller can
-    page the rest.
+    Set the budget to a value that fits exactly one route point but
+    not both. The envelope should report ``truncated_by_size: true``,
+    keep one item, and surface a usable ``next_offset`` so the caller
+    can page the second item. Budget 300 bytes accommodates one
+    rounded route point (~190 B indented) plus envelope overhead but
+    not two.
     """
     from apple_health_mcp.server import query as query_module
 
-    monkeypatch.setattr(query_module, "DEFAULT_SIZE_BUDGET_BYTES", 130)
+    monkeypatch.setattr(query_module, "DEFAULT_SIZE_BUDGET_BYTES", 300)
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1")
     assert payload["truncated_by_size"] is True
     assert payload["total"] == 2
-    assert len(payload["items"]) < 2
-    assert payload["next_offset"] is not None
-    assert payload["size_budget_bytes"] == 130
+    assert len(payload["items"]) == 1
+    assert payload["next_offset"] == 1
+    assert payload["size_budget_bytes"] == 300
+
+
+def test_get_workout_route_returns_none_next_offset_when_no_item_fits(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Post-PR #175 code-review #1/#2 fix: budget too small for even ONE
+    item must yield ``next_offset=None`` so paging halts.
+
+    Pre-fix: ``next_offset = offset + len(kept) = offset + 0 = offset``,
+    so an agent paging blindly via ``next_offset`` looped forever.
+    """
+    from apple_health_mcp.server import query as query_module
+
+    # Budget 50 bytes is smaller than a single route point's indent=2
+    # serialization (~190 B), so the clamp drops everything.
+    monkeypatch.setattr(query_module, "DEFAULT_SIZE_BUDGET_BYTES", 50)
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh1")
+    assert payload["truncated_by_size"] is True
+    assert payload["items"] == []
+    assert payload["next_offset"] is None
 
 
 # --- envelope helper: review F3 (limit < 1 rejected uniformly) --------------
