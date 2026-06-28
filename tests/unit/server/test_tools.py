@@ -66,7 +66,13 @@ def _items(fn: Any, **kwargs: Any) -> Any:
     """
     payload = _call(fn, **kwargs)
     assert isinstance(payload, dict)
-    assert set(payload.keys()) == {"items", "total", "next_offset"}
+    assert set(payload.keys()) == {
+        "items",
+        "total",
+        "next_offset",
+        "truncated_by_size",
+        "size_budget_bytes",
+    }
     items = payload["items"]
     assert isinstance(items, list)
     return items
@@ -440,9 +446,9 @@ def test_get_workout_route_truncates_by_size_when_budget_exhausted(
     true`` and exposes a usable ``next_offset`` so the caller can
     page the rest.
     """
-    from apple_health_mcp.server.tools import get_workout_route as module
+    from apple_health_mcp.server import query as query_module
 
-    monkeypatch.setattr(module, "_SIZE_BUDGET_BYTES", 130)
+    monkeypatch.setattr(query_module, "DEFAULT_SIZE_BUDGET_BYTES", 130)
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1")
     assert payload["truncated_by_size"] is True
@@ -526,9 +532,21 @@ def test_query_records_envelope_offset_past_end_keeps_total(
     # Walk one beyond the end — used to wire ``total=0`` because the
     # ``COUNT(*) OVER ()`` window has no row to ride on.
     page_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=2)
-    assert page_past == {"items": [], "total": 2, "next_offset": None}
+    assert page_past == {
+        "items": [],
+        "total": 2,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
     page_far_past = _call(fn, record_type="HKQuantityTypeIdentifierHeartRate", limit=1, offset=20)
-    assert page_far_past == {"items": [], "total": 2, "next_offset": None}
+    assert page_far_past == {
+        "items": [],
+        "total": 2,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
 
 
 def test_get_workout_route_envelope_offset_past_end_keeps_total(

@@ -2,49 +2,29 @@
 
 from __future__ import annotations
 
-import json
-import logging
 from threading import Lock
 from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.data_state import (
-    DataState,
-    build_state_error_payload,
-    check_data_state,
-)
 from apple_health_mcp.server.query import (
     OFFSET_DESCRIPTION,
     normalise_pagination,
-    query_to_json,
-    run_query_payload,
+    run_query_envelope,
 )
 
 if TYPE_CHECKING:
     import duckdb
     from mcp.server.fastmcp import FastMCP
 
-_logger = logging.getLogger(__name__)
 
-
-# v0.4.1 (issue #160): the previous _DEFAULT_LIMIT of 5000 paired with
-# the wire-side ~175 bytes/point projection regularly tripped the host
-# 1 MB transport ceiling (Claude truncates server responses larger than
-# 1 MB to a generic "Tool result is too large" string, so the server
-# never sees the failure and the caller cannot recover). 2000 points x
-# the trimmed ~180 bytes/point projection lands well under the cap and
-# the size-budget clamp below catches any oversize result the caller's
-# own LIMIT forced.
+# v0.5 (issue #171): the size-budget clamp + ``truncated_by_size`` /
+# ``size_budget_bytes`` envelope fields are now part of every
+# ``run_query_envelope`` response, so this tool inherits the same
+# protection automatically. The previously-inline ``_clip_to_size_budget``
+# helper moved to :func:`server.query.clip_items_to_size_budget`.
 _DEFAULT_LIMIT = 2000
 _MAX_LIMIT = 50_000
-
-# Host transport ceiling for tool results. Anthropic's MCP runtime
-# refuses payloads larger than ~1 MB; the budget below keeps a 50 KB
-# headroom so the envelope wrapper (``truncated_by_size``,
-# ``size_budget_bytes``, JSON indentation overhead) stays under the
-# wire limit even when the items list is at the maximum.
-_SIZE_BUDGET_BYTES = 950_000
 
 
 DESCRIPTION = (
@@ -89,50 +69,18 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             )
         except ValueError as exc:
             return f"Error: {exc}"
-        state = check_data_state(conn, lock=lock)
-        if state != DataState.READY:
-            return build_state_error_payload(state)
         sql = (
             "SELECT latitude, longitude, elevation, timestamp, speed, course, "
             "COUNT(*) OVER () AS _total FROM route_points WHERE workout_hash = ? "
             f"ORDER BY timestamp LIMIT {effective_limit} OFFSET {effective_offset}"
         )
-        try:
-            rows = query_to_json(conn, sql, [workout_hash], lock=lock)
-            if rows:
-                total = int(rows[0]["_total"])
-            elif effective_offset > 0:
-                # ``COUNT(*) OVER ()`` rides on the page rows; paginating
-                # past the dataset returns zero rows, so we recover the
-                # true total with a targeted COUNT(*) — same fallback
-                # ``run_query_envelope`` uses (issue #108 / PR-E F1).
-                count_rows = query_to_json(
-                    conn,
-                    "SELECT COUNT(*) AS _total FROM route_points WHERE workout_hash = ?",
-                    [workout_hash],
-                    lock=lock,
-                )
-                total = int(count_rows[0]["_total"]) if count_rows else 0
-            else:
-                total = 0
-        except Exception as exc:
-            _logger.debug("query failed: %s", exc)
-            return f"Error: {exc}"
-        items = [_round_route_point(row) for row in rows]
-        kept, truncated_by_size = _clip_to_size_budget(items, _SIZE_BUDGET_BYTES)
-        next_offset: int | None
-        if truncated_by_size or effective_offset + len(kept) < total:
-            next_offset = effective_offset + len(kept)
-        else:
-            next_offset = None
-        return run_query_payload(
-            {
-                "items": kept,
-                "total": total,
-                "next_offset": next_offset,
-                "truncated_by_size": truncated_by_size,
-                "size_budget_bytes": _SIZE_BUDGET_BYTES,
-            }
+        return run_query_envelope(
+            conn,
+            sql,
+            [workout_hash],
+            offset=effective_offset,
+            lock=lock,
+            row_transform=_round_route_point,
         )
 
 
@@ -141,12 +89,10 @@ def _round_route_point(row: dict[str, Any]) -> dict[str, Any]:
 
     Rounding levels are below the underlying sensor precision so the
     information loss is zero in practice while the JSON byte cost drops
-    by ~30-40 %. The ``_total`` column is stripped before the row
-    leaves the function so the envelope's ``items`` view never carries
-    the window-aggregate by-product. ``timestamp`` is preserved
-    verbatim -- ``query_to_json`` already serialised it.
+    by ~30-40 %. ``run_query_envelope`` pops ``_total`` after this
+    transform runs, so we leave it untouched here.
     """
-    item = {k: v for k, v in row.items() if k != "_total"}
+    item = dict(row)
     # latitude / longitude are NOT NULL in the canonical schema, so the
     # round() call is unguarded. elevation / speed / course can be NULL
     # (Apple Health does not always populate them), so each guard
@@ -160,39 +106,3 @@ def _round_route_point(row: dict[str, Any]) -> dict[str, Any]:
     if isinstance(item.get("course"), float):
         item["course"] = round(item["course"], 1)
     return item
-
-
-def _clip_to_size_budget(
-    items: list[dict[str, Any]],
-    budget_bytes: int,
-) -> tuple[list[dict[str, Any]], bool]:
-    """Greedily prefix ``items`` to stay under ``budget_bytes`` of JSON.
-
-    Returns ``(kept, truncated)``. ``truncated`` is ``True`` when at
-    least one item was dropped because adding it would overflow the
-    budget. The per-item byte estimate MUST match the serialization
-    options ``run_query_payload`` actually uses (``indent=2``,
-    ``ensure_ascii=False``) -- a compact estimate under-counts by
-    roughly 50% on a 6-field route point, which is enough to let
-    payloads breach the 1 MB host transport ceiling even when this
-    clamp reported ``truncated_by_size=False``. The check runs BEFORE
-    the envelope wrapper is built because the envelope adds a fixed
-    ~200 bytes that we treat as headroom inside ``_SIZE_BUDGET_BYTES``.
-    """
-    kept: list[dict[str, Any]] = []
-    used = 0
-    truncated = False
-    for item in items:
-        # indent=2 mirrors run_query_payload's actual serialization;
-        # the +2 covers the ",\n" separator between array elements
-        # under indent=2 (compact would only add ", " — 2 bytes —
-        # but indent=2 emits "," + newline + indent and the rolling
-        # tally already approximates the extra indent inside the
-        # per-item dump).
-        approx = len(json.dumps(item, ensure_ascii=False, indent=2)) + 2
-        if used + approx > budget_bytes:
-            truncated = True
-            break
-        kept.append(item)
-        used += approx
-    return kept, truncated

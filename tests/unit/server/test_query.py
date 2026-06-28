@@ -297,7 +297,13 @@ def test_run_query_envelope_recovers_total_when_offset_past_end() -> None:
     _seed_envelope_table(conn)
     out = run_query_envelope(conn, _envelope_sql("t"), [], offset=5, require_data=False)
     payload = json.loads(out)
-    assert payload == {"items": [], "total": 3, "next_offset": None}
+    assert payload == {
+        "items": [],
+        "total": 3,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
 
 
 def test_run_query_envelope_returns_zero_total_on_empty_table_no_offset() -> None:
@@ -306,7 +312,13 @@ def test_run_query_envelope_returns_zero_total_on_empty_table_no_offset() -> Non
     conn.execute("CREATE TABLE t (x INTEGER)")
     sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 1 OFFSET 0"
     out = run_query_envelope(conn, sql, [], offset=0, require_data=False)
-    assert json.loads(out) == {"items": [], "total": 0, "next_offset": None}
+    assert json.loads(out) == {
+        "items": [],
+        "total": 0,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
 
 
 def test_run_query_envelope_first_page_uses_window_total() -> None:
@@ -365,3 +377,16 @@ def test_run_query_envelope_gate_short_circuits_on_empty_db() -> None:
     conn = duckdb.connect(":memory:")
     out = run_query_envelope(conn, "SELECT 1 AS x", [], offset=0)
     assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
+
+
+def test_run_query_envelope_accepts_explicit_size_budget() -> None:
+    """v0.5 (issue #171): an explicit ``size_budget_bytes`` overrides the default."""
+    conn = duckdb.connect(":memory:")
+    _seed_envelope_table(conn)
+    sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 10 OFFSET 0"
+    out = run_query_envelope(conn, sql, [], offset=0, require_data=False, size_budget_bytes=10)
+    payload = json.loads(out)
+    # Budget of 10 bytes cannot fit any item -- the clamp drops everything.
+    assert payload["truncated_by_size"] is True
+    assert payload["size_budget_bytes"] == 10
+    assert payload["items"] == []
