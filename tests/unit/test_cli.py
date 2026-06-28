@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -22,37 +23,132 @@ def test_help_lists_subcommands() -> None:
 _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 
-def _materialise_export(tmp_path: Path) -> Path:
-    """Lay out the synthetic fixtures into the directory shape run_import expects."""
-    export_dir = tmp_path / "apple_health_export"
-    export_dir.mkdir()
-    (export_dir / "export.xml").write_bytes((_FIXTURES / "sample_export.xml").read_bytes())
-    electro = export_dir / "electrocardiograms"
-    electro.mkdir()
-    (electro / "sample_ecg.csv").write_bytes((_FIXTURES / "sample_ecg.csv").read_bytes())
-    routes = export_dir / "workout-routes"
-    routes.mkdir()
-    (routes / "sample_workout_route.gpx").write_bytes(
-        (_FIXTURES / "sample_workout_route.gpx").read_bytes()
-    )
-    return export_dir
+def _materialise_export_zip(tmp_path: Path, *, nested: bool = True) -> Path:
+    """Build a ZIP at tmp_path/export.zip carrying the synthetic fixtures.
+
+    v0.5 (issue #170): the CLI ``import`` subcommand accepts a ZIP path
+    only -- the previously-used directory fixture is no longer wired
+    into the entry point. ``nested=True`` mirrors Apple's
+    ``apple_health_export/`` top-level shape; ``nested=False`` flattens
+    the contents at the ZIP root so the importer's "either shape is
+    accepted" code path stays covered.
+    """
+    zip_path = tmp_path / "export.zip"
+    prefix = "apple_health_export/" if nested else ""
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(_FIXTURES / "sample_export.xml", arcname=f"{prefix}export.xml")
+        zf.write(
+            _FIXTURES / "sample_ecg.csv",
+            arcname=f"{prefix}electrocardiograms/sample_ecg.csv",
+        )
+        zf.write(
+            _FIXTURES / "sample_workout_route.gpx",
+            arcname=f"{prefix}workout-routes/sample_workout_route.gpx",
+        )
+    return zip_path
 
 
 def test_import_happy_path(tmp_path: Path) -> None:
-    export_dir = _materialise_export(tmp_path)
+    zip_path = _materialise_export_zip(tmp_path)
     db = tmp_path / "health.duckdb"
-    result = runner.invoke(cli.app, ["--db", str(db), "import", str(export_dir)])
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
     assert result.exit_code == 0, result.output
     assert db.exists()
 
 
-def test_import_surfaces_health_error_as_typer_exit(tmp_path: Path) -> None:
-    """A missing export.xml must surface as a clean exit-1, not a traceback."""
-    empty_export = tmp_path / "apple_health_export"
-    empty_export.mkdir()
+def test_import_accepts_flattened_zip_shape(tmp_path: Path) -> None:
+    """A ZIP whose contents are at the root (no apple_health_export/ prefix) is accepted."""
+    zip_path = _materialise_export_zip(tmp_path, nested=False)
     db = tmp_path / "health.duckdb"
-    result = runner.invoke(cli.app, ["--db", str(db), "import", str(empty_export)])
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
+    assert result.exit_code == 0, result.output
+
+
+def test_import_rejects_directory_argument(tmp_path: Path) -> None:
+    """v0.5 (issue #170): the CLI no longer accepts a directory argument.
+
+    A user upgrading from v0.4 who runs ``import <dir>`` gets a typed
+    exit with a CHANGELOG pointer rather than the old behaviour of
+    silently proceeding (and stamping a NULL ``source_zip_*`` triple).
+    """
+    a_dir = tmp_path / "apple_health_export"
+    a_dir.mkdir()
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(a_dir)])
     assert result.exit_code == 1
+    assert "directory" in result.output.lower()
+
+
+def test_import_rejects_missing_path(tmp_path: Path) -> None:
+    """A missing ZIP file surfaces as a clean exit-1 with a 'does not exist' note."""
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(tmp_path / "nope.zip")])
+    assert result.exit_code == 1
+    assert "does not exist" in result.output.lower()
+
+
+def test_import_rejects_invalid_zip(tmp_path: Path) -> None:
+    """A file that is not a valid ZIP (e.g. HTML renamed) surfaces as exit-1."""
+    fake = tmp_path / "fake.zip"
+    fake.write_bytes(b"<html><body>404</body></html>")
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(fake)])
+    assert result.exit_code == 1
+    assert "not a valid zip" in result.output.lower()
+
+
+def test_import_surfaces_extract_race_as_typer_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.5 (issue #170): a TOCTOU race that leaves extract failing on a
+    previously-valid ZIP still surfaces as a clean exit-1 with a
+    ConfigError wrapping the underlying ``OSError`` / ``BadZipFile``.
+    """
+
+    def fake_extract(*args: object, **kwargs: object) -> object:
+        raise OSError("simulated TOCTOU: file vanished between inspect and extract")
+
+    monkeypatch.setattr(
+        "apple_health_mcp.importers.zip_extract.extract_zip_and_import",
+        fake_extract,
+        raising=True,
+    )
+    zip_path = _materialise_export_zip(tmp_path)
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
+    assert result.exit_code == 1
+    assert "failed to extract" in result.output.lower()
+
+
+def test_import_surfaces_health_error_as_typer_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pipeline-level ``AppleHealthMCPError`` surfaces as a clean exit-1."""
+    from apple_health_mcp.exceptions import DatabaseError
+
+    def fake_extract(*args: object, **kwargs: object) -> object:
+        raise DatabaseError("simulated DB write failure")
+
+    monkeypatch.setattr(
+        "apple_health_mcp.importers.zip_extract.extract_zip_and_import",
+        fake_extract,
+        raising=True,
+    )
+    zip_path = _materialise_export_zip(tmp_path)
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
+    assert result.exit_code == 1
+
+
+def test_import_rejects_valid_zip_without_apple_health_marker(tmp_path: Path) -> None:
+    """A parseable ZIP that lacks export.xml at the top level surfaces as exit-1."""
+    zip_path = tmp_path / "alien.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("readme.txt", "not an apple health export")
+    db = tmp_path / "health.duckdb"
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
+    assert result.exit_code == 1
+    assert "does not contain" in result.output.lower()
 
 
 def test_serve_defaults_to_stdio(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,11 +237,11 @@ def test_tz_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyP
     import os as _os
 
     monkeypatch.delenv("APPLE_HEALTH_TZ", raising=False)
-    export_dir = _materialise_export(tmp_path)
+    zip_path = _materialise_export_zip(tmp_path)
     db = tmp_path / "health.duckdb"
     result = runner.invoke(
         cli.app,
-        ["--db", str(db), "--tz", "Asia/Tokyo", "import", str(export_dir)],
+        ["--db", str(db), "--tz", "Asia/Tokyo", "import", str(zip_path)],
     )
     assert result.exit_code == 0, result.output
     assert _os.environ.get("APPLE_HEALTH_TZ") == "Asia/Tokyo"
@@ -166,9 +262,9 @@ def test_db_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.delenv("APPLE_HEALTH_DB", raising=False)
     monkeypatch.delenv("APPLE_HEALTH_DATA_DIR", raising=False)
-    export_dir = _materialise_export(tmp_path)
+    zip_path = _materialise_export_zip(tmp_path)
     db = tmp_path / "health.duckdb"
-    result = runner.invoke(cli.app, ["--db", str(db), "import", str(export_dir)])
+    result = runner.invoke(cli.app, ["--db", str(db), "import", str(zip_path)])
     assert result.exit_code == 0, result.output
     # The promotion stores an absolute path so resolve_db_path() does
     # not later reject it as "relative" — the CWD-stable invariant the
