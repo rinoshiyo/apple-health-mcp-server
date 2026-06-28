@@ -791,17 +791,18 @@ def test_progress_emitter_fires_for_large_import(
 ) -> None:
     """Beyond the minimum-size gate, at least one progress line lands.
 
-    Construct an XML file > 1 MB so the gate trips, pin the cadence to
-    1 second (the clamped minimum) and stub ``time.monotonic`` so the
-    first event-loop iteration already exceeds the interval. One INFO
-    line of the documented shape must appear in caplog.
+    Construct an XML file > 1 MB (decimal) so the gate trips, pin the
+    cadence to 1 second (the clamped minimum) and stub
+    ``time.monotonic`` so the first event-loop iteration already
+    exceeds the interval. One INFO line of the documented shape must
+    appear in caplog.
     """
     from apple_health_mcp.importers import xml as xml_module
 
     monkeypatch.setenv("APPLE_HEALTH_IMPORT_PROGRESS_SECS", "1")
 
     # Stretch the body with filler Record elements until the file goes
-    # past the 1 MB gate.
+    # past the 1 MB (decimal, ``_PROGRESS_MIN_BYTES = 1_000_000``) gate.
     filler_record = (
         '<Record type="HKQuantityTypeIdentifierHeartRate" '
         'sourceName="Apple Watch" unit="count/min" value="72" '
@@ -827,10 +828,10 @@ def test_progress_emitter_fires_for_large_import(
     import_xml(conn, xml_path, "imp_progress")
     progress_lines = [r.message for r in caplog.records if r.message.startswith("progress: xml")]
     assert progress_lines
-    # Shape contract: percent, MB consumed/total, ETA fragment.
+    # Shape contract: percent, MiB consumed/total, ETA fragment.
     sample = progress_lines[0]
     assert "%" in sample
-    assert "MB" in sample
+    assert "MiB" in sample
     assert "min remaining" in sample or "ETA unknown" in sample
 
 

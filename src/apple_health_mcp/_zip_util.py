@@ -24,10 +24,13 @@ from typing import Final
 _logger = logging.getLogger(__name__)
 
 
-# 1 MB chunk for streaming sha256 — matches the constant family the
-# importer uses (``importers.xml._READ_CHUNK_BYTES``) so a future
-# tuning change lands in one place.
-SHA256_READ_CHUNK_BYTES: Final[int] = 1024 * 1024
+# 1 MiB (1,048,576 bytes — binary) chunk for streaming sha256, matching
+# the constant family the importer uses (``importers.xml._READ_CHUNK_BYTES``)
+# so a future tuning change lands in one place. Per the xml.py
+# §"Units convention" docstring (issue #120), buffer sizes use the
+# binary scale; the literal is spelled ``1 << 20`` to make the binary
+# intent obvious at the value site.
+SHA256_READ_CHUNK_BYTES: Final[int] = 1 << 20
 
 # sha256 short-prefix length used as the ``id`` field on the wire. 8
 # hex chars = 32 bits of entropy; collision probability is ~negligible
@@ -59,7 +62,7 @@ class ZipInspection(StrEnum):
 
 
 def stream_sha256(path: Path) -> str:
-    """Return the hex sha256 of ``path`` by streaming 1 MB chunks."""
+    """Return the hex sha256 of ``path`` by streaming 1 MiB chunks."""
     hasher = hashlib.sha256()
     with path.open("rb") as fp:
         for chunk in iter(lambda: fp.read(SHA256_READ_CHUNK_BYTES), b""):

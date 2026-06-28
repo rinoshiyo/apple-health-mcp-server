@@ -247,12 +247,14 @@ newer export merges the new rows into the existing database via
 the `import_id` column.
 
 Phase 1 (XML parse) emits a single-line progress entry every
-10 seconds (`INFO progress: xml NN% (X / Y MB, ~Z min remaining)`)
-so a streaming agent or human can confirm forward motion during a
-multi-minute parse. Tune the cadence via
+10 seconds (`INFO progress: xml NN% (X / Y MiB, ~Z min remaining)` —
+"MiB" because throughput tracks the 1 MiB / 1,048,576-byte read-
+chunk size) so a streaming agent or human can confirm forward motion
+during a multi-minute parse. Tune the cadence via
 `APPLE_HEALTH_IMPORT_PROGRESS_SECS` (positive integer, clamped to
 1..600); set it to `60` for quiet runs or `1` for debugging. Exports
-smaller than 1 MB skip the emitter entirely.
+smaller than 1 MB (1,000,000 bytes — decimal) skip the emitter
+entirely.
 
 ### Database location
 
@@ -410,11 +412,11 @@ process environment. The current set:
 | Name | Purpose | Default |
 |---|---|---|
 | `APPLE_HEALTH_TZ` | DuckDB session timezone used to render `TIMESTAMPTZ` columns. Overridden by `--tz` on the CLI when both are set. | OS timezone |
-| `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB skip the emitter entirely. | `10` |
+| `APPLE_HEALTH_IMPORT_PROGRESS_SECS` | Cadence of the Phase 1 progress emitter on `import`. Integer seconds; out-of-range integers are clamped to 1..600, non-integer strings fall back to the default with a warning. Exports smaller than 1 MB (1,000,000 bytes — decimal) skip the emitter entirely. Default and clamp bounds derive from `apple_health_mcp.importers.xml._PROGRESS_INTERVAL_{DEFAULT,MIN,MAX}_SECS`; a `tests/unit/test_docs_in_sync.py` doc-test fails CI if the README drifts from those constants. | `10` |
 | `APPLE_HEALTH_LOG_LEVEL` | stdlib `logging` level applied to the root logger (`DEBUG`/`INFO`/`WARNING`/`ERROR`). All logs land on stderr; stdout is reserved for the MCP stdio transport. | `INFO` |
 | `APPLE_HEALTH_LOG_FORMAT` | Log formatter shape. `human` is plain text; `json` emits one JSON object per line for log aggregators. | `human` |
 
-The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path; those are part of the platform contract, not project-specific.
+The server also honours the OS-standard `XDG_DATA_HOME` (Linux/macOS) and `LOCALAPPDATA` (Windows) when resolving the default DB path — see [Database location](#database-location) for the canonical default path string; those env vars are part of the platform contract, not project-specific.
 
 Renaming, removing, or changing the parsing rules of any of these is a major bump. Adding a new env var is a minor bump.
 
@@ -444,7 +446,7 @@ identifiers prefixed with `_` (private constants, helpers, internal
 exceptions), and module-internal constants — is **not** part of the
 public API at any tier and may change in any release. In particular:
 
-- **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
+- **Log-line format** (e.g. `progress: xml NN% (X / Y MiB, ~Z min remaining)`)
   is not part of the public API contract; the human-readable shape may
   change between releases without a SemVer bump. `APPLE_HEALTH_LOG_FORMAT=json`
   currently wraps the same human-readable string inside a JSON
@@ -536,10 +538,13 @@ The first `apple-health-mcp-server serve` against an older DB now exits
 with a `ConfigError` that names the path and shows the recovery command;
 your data on disk is left untouched.
 
-Recovery is a one-time re-import:
+Recovery is a one-time re-import — the snippet below uses the
+default DB path (see [Database location](#database-location) for
+the canonical string); add `--db /custom/path/health.duckdb` if you
+have a custom path:
 
 ```bash
-# Remove the pre-v0.3.0 DB (the default location, override with --db).
+# Remove the pre-v0.3.0 DB.
 rm ~/.local/share/apple-health-mcp/health.duckdb
 
 # Re-import from the latest Apple Health export.zip (v0.5+ takes the
