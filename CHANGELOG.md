@@ -11,6 +11,24 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
+- **`get_workout_route` server-side downsampling + heart-rate join**
+  (issues #161 + #162). New optional parameters:
+  - `every_nth=N` (issue #161): server-side equispaced downsampling.
+    Returns every N-th point ordered by timestamp; N=5 cuts row
+    count to ~20%, capped at 1000. `total` reports the downsampled
+    count, not the underlying `route_points` row count.
+  - `with_heart_rate=True` (issue #162): adds `{heart_rate,
+    heart_rate_offset_secs}` to each item via a LATERAL JOIN
+    against `records` filtered to
+    `HKQuantityTypeIdentifierHeartRate` within ±30 s of the route
+    timestamp; `heart_rate` is null when no HR sample falls in the
+    window.
+
+  The stride filter runs BEFORE the LATERAL HR-join so the join
+  only fires for points actually returned. Both options are
+  additive — the default response shape and existing wire contract
+  are unchanged.
+
 - **`imports.dedup_skipped BOOLEAN NOT NULL DEFAULT FALSE` column +
   wire field** (issue #163). Distinguishes a clean Tier-1 fresh
   import that found zero Correlation-child duplicates
