@@ -713,6 +713,30 @@ def test_list_zips_returns_zip_status_field(
         conn.close()
 
 
+def test_import_zip_returns_not_a_directory_reason_when_env_points_at_file(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """v0.4.1 code-review #4: env var pointing at a file → typed envelope.
+
+    Pre-fix this raised NotADirectoryError uncaught through
+    asyncio.to_thread. The sibling list_zips has caught it since
+    v0.4.0; import_zip now matches the contract.
+    """
+    file_path = tmp_path / "not_a_dir.zip"
+    file_path.write_bytes(b"PK\x03\x04")
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(file_path))
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_import_zip(conn, id="deadbeef")
+        assert out["status"] == "error"
+        assert out["reason"] == "export_zips_dir_not_a_directory"
+        assert "not a directory" in str(out["message"]).lower()
+    finally:
+        conn.close()
+
+
 def test_import_zip_returns_invalid_zip_reason_for_html_file(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
