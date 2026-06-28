@@ -33,10 +33,12 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-# Re-use the XML SAX target's 1 MB read chunk size for the sha256
-# streaming hash (issue #62 Tier 1). Sharing the constant keeps the
-# 'sha256 read keeps the OS page cache warm for the immediately-
-# following XML parse' invariant alive across future tuning changes.
+# Re-use the XML SAX target's 1 MiB (1,048,576-byte — binary, per
+# the xml.py §"Units convention" docstring) read chunk size for the
+# sha256 streaming hash (issue #62 Tier 1). Sharing the constant
+# keeps the 'sha256 read keeps the OS page cache warm for the
+# immediately-following XML parse' invariant alive across future
+# tuning changes.
 _SHA256_READ_CHUNK_BYTES = _READ_CHUNK_BYTES
 
 

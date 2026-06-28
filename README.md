@@ -256,7 +256,6 @@ during a multi-minute parse. Tune the cadence via
 smaller than 1 MB (1,000,000 bytes — decimal) skip the emitter
 entirely.
 
-<a id="database-location"></a>
 ### Database location
 
 By default the database lands at the XDG-resolved data directory:
@@ -447,7 +446,7 @@ identifiers prefixed with `_` (private constants, helpers, internal
 exceptions), and module-internal constants — is **not** part of the
 public API at any tier and may change in any release. In particular:
 
-- **Log-line format** (e.g. `progress: xml NN% (X / Y MB, ~Z min remaining)`)
+- **Log-line format** (e.g. `progress: xml NN% (X / Y MiB, ~Z min remaining)`)
   is not part of the public API contract; the human-readable shape may
   change between releases without a SemVer bump. `APPLE_HEALTH_LOG_FORMAT=json`
   currently wraps the same human-readable string inside a JSON
@@ -539,11 +538,13 @@ The first `apple-health-mcp-server serve` against an older DB now exits
 with a `ConfigError` that names the path and shows the recovery command;
 your data on disk is left untouched.
 
-Recovery is a one-time re-import:
+Recovery is a one-time re-import — the snippet below uses the
+default DB path (see [Database location](#database-location) for
+the canonical string); add `--db /custom/path/health.duckdb` if you
+have a custom path:
 
 ```bash
-# Remove the pre-v0.3.0 DB (see [Database location](#database-location)
-# for the canonical default; override with --db if you have a custom path).
+# Remove the pre-v0.3.0 DB.
 rm ~/.local/share/apple-health-mcp/health.duckdb
 
 # Re-import from the latest Apple Health export.zip (v0.5+ takes the

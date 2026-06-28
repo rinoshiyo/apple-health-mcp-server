@@ -44,15 +44,18 @@ during the multi-minute parse. The cadence is non-TTY-safe (no ``\\r``,
 no ANSI cursor games) so the output survives ``tee``, CI capture, and
 LLM-agent stdout buffers.
 
-Units convention (issue #120): this module uses ``MiB = 1 << 20``
-(binary mebibyte) for memory-side buffer sizes and ``MB = 1_000_000``
+Units convention (issue #120): this module uses ``_MiB = 1 << 20``
+(binary mebibyte) for memory-side buffer sizes and ``_MB = 1_000_000``
 (decimal megabyte) for user-facing file-size thresholds. The two are
 not interchangeable — a bare "1 MB" in a comment or log line is
 ambiguous, so every reference here is named via the explicit
-constant. The Phase-1 progress emitter reports throughput in MiB to
+constant. The underscore prefix keeps them module-private (matching
+the rest of the file's ``_BATCH_SIZE`` / ``_READ_CHUNK_BYTES`` /
+``_PROGRESS_*`` naming) so they stay out of the SemVer Layer-1
+surface. The Phase-1 progress emitter reports throughput in MiB to
 stay consistent with the read-chunk granularity (``_READ_CHUNK_BYTES
-= 1 * MiB``); the skip-emitter threshold (``_PROGRESS_MIN_BYTES = 1
-* MB``) is decimal because the README quotes it to users that way.
+= 1 * _MiB``); the skip-emitter threshold (``_PROGRESS_MIN_BYTES =
+1 * _MB``) is decimal because the README quotes it to users that way.
 """
 
 from __future__ import annotations
@@ -98,18 +101,19 @@ _BATCH_SIZE_HOT = 250_000
 # consecutive errors so a corrupt-stream loop cannot spin forever.
 _MAX_CONSECUTIVE_PARSE_ERRORS = 100
 
-# Binary (1 << 20) and decimal (1_000_000) byte units, surfaced as
-# module-level constants so every "1 MB"-shaped value below names which
-# scale it lives on. Module docstring §"Units convention" has the
+# Binary (1 << 20) and decimal (1_000_000) byte units, module-private
+# (underscore-prefixed) so every "1 MB"-shaped value below names which
+# scale it lives on without exporting the constants on the SemVer
+# Layer-1 surface. Module docstring §"Units convention" has the
 # rationale and acceptance criteria for issue #120.
-MiB = 1 << 20  # 1,048,576 bytes
-MB = 1_000_000  # 1,000,000 bytes
+_MiB = 1 << 20  # 1,048,576 bytes
+_MB = 1_000_000  # 1,000,000 bytes
 
 # SAX target chunk size. 1 MiB (1,048,576 bytes) strikes the balance
 # between syscall cost (smaller chunks → more reads, more
 # time.monotonic calls) and parser pause latency (larger chunks →
 # fewer chances to emit progress).
-_READ_CHUNK_BYTES = 1 * MiB
+_READ_CHUNK_BYTES = 1 * _MiB
 
 # Default cadence and bounds for the Phase-1 progress emitter (issue #51).
 # Overridable per-run via ``APPLE_HEALTH_IMPORT_PROGRESS_SECS``; values
@@ -123,7 +127,7 @@ _PROGRESS_INTERVAL_MAX_SECS = 600
 # CI smoke fixtures are sub-second so an emitted line would be noise.
 # Decimal MB (1,000,000 bytes) because the README quotes the threshold
 # to users that way.
-_PROGRESS_MIN_BYTES = 1 * MB
+_PROGRESS_MIN_BYTES = 1 * _MB
 
 
 def _resolve_progress_interval() -> int:
@@ -469,8 +473,8 @@ class _XmlImporter:
             eta_text = f"~{eta_min:.1f} min remaining"
         else:  # pragma: no cover - the first emission lands well after 0%
             eta_text = "ETA unknown"
-        consumed_mib = consumed / MiB
-        total_mib = total_bytes / MiB
+        consumed_mib = consumed / _MiB
+        total_mib = total_bytes / _MiB
         _logger.info(
             "progress: xml %d%% (%.0f / %.0f MiB, %s)",
             pct,
