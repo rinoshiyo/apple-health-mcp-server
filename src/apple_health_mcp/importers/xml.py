@@ -37,12 +37,22 @@ Future contributors adding a per-import singleton row should follow
 the same direct-INSERT pattern.
 
 Phase 1 progress (issue #51): the iterparse loop emits a single-line
-``progress: xml NN% (X / Y MB, ~Z min remaining)`` log entry every
+``progress: xml NN% (X / Y MiB, ~Z min remaining)`` log entry every
 ``APPLE_HEALTH_IMPORT_PROGRESS_SECS`` seconds (default 10, clamped to
 1..600) so a streaming agent or human can confirm forward motion
 during the multi-minute parse. The cadence is non-TTY-safe (no ``\\r``,
 no ANSI cursor games) so the output survives ``tee``, CI capture, and
 LLM-agent stdout buffers.
+
+Units convention (issue #120): this module uses ``MiB = 1 << 20``
+(binary mebibyte) for memory-side buffer sizes and ``MB = 1_000_000``
+(decimal megabyte) for user-facing file-size thresholds. The two are
+not interchangeable — a bare "1 MB" in a comment or log line is
+ambiguous, so every reference here is named via the explicit
+constant. The Phase-1 progress emitter reports throughput in MiB to
+stay consistent with the read-chunk granularity (``_READ_CHUNK_BYTES
+= 1 * MiB``); the skip-emitter threshold (``_PROGRESS_MIN_BYTES = 1
+* MB``) is decimal because the README quotes it to users that way.
 """
 
 from __future__ import annotations
@@ -88,10 +98,18 @@ _BATCH_SIZE_HOT = 250_000
 # consecutive errors so a corrupt-stream loop cannot spin forever.
 _MAX_CONSECUTIVE_PARSE_ERRORS = 100
 
-# SAX target chunk size. 1 MB strikes the balance between syscall cost
-# (smaller chunks → more reads, more time.monotonic calls) and parser
-# pause latency (larger chunks → fewer chances to emit progress).
-_READ_CHUNK_BYTES = 1 << 20
+# Binary (1 << 20) and decimal (1_000_000) byte units, surfaced as
+# module-level constants so every "1 MB"-shaped value below names which
+# scale it lives on. Module docstring §"Units convention" has the
+# rationale and acceptance criteria for issue #120.
+MiB = 1 << 20  # 1,048,576 bytes
+MB = 1_000_000  # 1,000,000 bytes
+
+# SAX target chunk size. 1 MiB (1,048,576 bytes) strikes the balance
+# between syscall cost (smaller chunks → more reads, more
+# time.monotonic calls) and parser pause latency (larger chunks →
+# fewer chances to emit progress).
+_READ_CHUNK_BYTES = 1 * MiB
 
 # Default cadence and bounds for the Phase-1 progress emitter (issue #51).
 # Overridable per-run via ``APPLE_HEALTH_IMPORT_PROGRESS_SECS``; values
@@ -103,7 +121,9 @@ _PROGRESS_INTERVAL_MAX_SECS = 600
 # Imports smaller than this skip the progress emitter entirely: the
 # enclosing phase markers already announce start + completion, and the
 # CI smoke fixtures are sub-second so an emitted line would be noise.
-_PROGRESS_MIN_BYTES = 1_000_000
+# Decimal MB (1,000,000 bytes) because the README quotes the threshold
+# to users that way.
+_PROGRESS_MIN_BYTES = 1 * MB
 
 
 def _resolve_progress_interval() -> int:
@@ -342,10 +362,10 @@ class _XmlImporter:
         # Open the file ourselves so the progress emitter can ask
         # ``.tell()`` for the byte position; ``rb`` matches the XML
         # transport (lxml parses bytes, not decoded text). The SAX
-        # target reads the file in 1 MB chunks so progress lands on
-        # chunk boundaries -- roughly every 1 MB rather than every
-        # element event, which kept ``time.monotonic`` out of the
-        # ~8 M-call hot path.
+        # target reads the file in 1 MiB (1,048,576-byte) chunks so
+        # progress lands on chunk boundaries -- roughly every 1 MiB
+        # rather than every element event, which kept ``time.monotonic``
+        # out of the ~8 M-call hot path.
         try:
             fp = xml_path.open("rb")
         except OSError as exc:
@@ -449,13 +469,13 @@ class _XmlImporter:
             eta_text = f"~{eta_min:.1f} min remaining"
         else:  # pragma: no cover - the first emission lands well after 0%
             eta_text = "ETA unknown"
-        consumed_mb = consumed / (1024 * 1024)
-        total_mb = total_bytes / (1024 * 1024)
+        consumed_mib = consumed / MiB
+        total_mib = total_bytes / MiB
         _logger.info(
-            "progress: xml %d%% (%.0f / %.0f MB, %s)",
+            "progress: xml %d%% (%.0f / %.0f MiB, %s)",
             pct,
-            consumed_mb,
-            total_mb,
+            consumed_mib,
+            total_mib,
             eta_text,
         )
 

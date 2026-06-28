@@ -11,6 +11,15 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
+- **Doc-tests pinning README to runtime constants** (issues #121 +
+  #122). `tests/unit/test_docs_in_sync.py` fails CI if the env-vars
+  table drifts from `xml._PROGRESS_INTERVAL_{DEFAULT,MIN,MAX}_SECS`
+  or if the README forgets the canonical Linux/macOS default DB
+  path (`~/.local/share/apple-health-mcp/health.duckdb`). README
+  cross-references now route every secondary mention of the path
+  back to the § Database location anchor instead of restating the
+  string.
+
 - **CI `metadata-checks` job — version parity and LP version-literal
   guards** (issues #115 + #119). Two PR-time gates land in
   `ci.yml`. (1) `scripts/check_version_parity.py` fails if
@@ -23,6 +32,20 @@ v0.x.y disclaimer and the public-API scope.
   grill decision (everywhere else uses `/releases/latest`). The
   convention is also written into `CLAUDE.md` §8 (release ops) and
   §9 (new LP Copy Conventions section).
+
+### Changed
+
+- **Progress emitter log label switched from `MB` to `MiB`** (issue
+  #120, behavioural). The Phase-1 progress line previously labelled
+  `(X / Y MB, ~Z min remaining)` while computing the values via
+  `consumed / (1024 * 1024)` (binary). The label now matches the
+  underlying math (`MiB`); the values themselves are unchanged.
+  `apple_health_mcp.importers.xml` exposes module-level `MiB` and
+  `MB` constants so every "1 MB"-shaped reference now names the
+  scale it lives on, and the module docstring carries the convention
+  paragraph (binary for memory buffer sizes, decimal for user-facing
+  file-size thresholds). README entries that mention the 1 MB skip
+  threshold now clarify "1 MB (1,000,000 bytes — decimal)".
 
 ### Fixed
 
