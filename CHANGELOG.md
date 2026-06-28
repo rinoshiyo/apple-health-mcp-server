@@ -9,6 +9,19 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Changed
+
+- **`get_workout_route` payload trimmed and size-clamped** (issue #160).
+  Default `limit` lowered from 5000 to 2000 so the typical wire
+  payload stays under the host's 1 MB transport ceiling, where the
+  previous default could trip a generic "Tool result is too large"
+  truncation. Latitude / longitude rounded to 6 decimals (~0.1 m,
+  below GPS precision); elevation rounded to 0.1 m; speed to 0.001
+  m/s; course to 0.1°. The envelope adds `truncated_by_size` and
+  `size_budget_bytes` fields; when the server has to clip the items
+  list to stay under the ceiling, `truncated_by_size: true` is set
+  and `next_offset` points at the resume location for paging.
+
 ### Breaking
 
 - **`run_custom_query` returns an envelope** (issue #159). Previous
