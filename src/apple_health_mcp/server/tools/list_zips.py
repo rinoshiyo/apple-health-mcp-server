@@ -23,7 +23,8 @@ from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.query import run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
-    is_apple_health_zip,
+    ZipInspection,
+    inspect_zip,
     load_sha_cache,
     stream_sha256,
 )
@@ -42,9 +43,11 @@ DESCRIPTION = (
     "(ISO 8601), size (bytes), sha256 (full hex), imported (bool — true "
     "when this exact ZIP has already been imported into the local DB), "
     "is_apple_health (bool — true when the ZIP contains "
-    "apple_health_export/export.xml or export.xml at the top level). "
-    "Use this BEFORE import_zip: pick an entry, then call "
-    "import_zip(id=…)."
+    "apple_health_export/export.xml or export.xml at the top level), "
+    "zip_status (one of 'valid_apple_health', 'valid_non_apple_health', "
+    "'invalid_zip' — v0.4.1 / issue #158, lets the agent skip a corrupt "
+    "or HTML-renamed file without paying the import cost). Use this "
+    "BEFORE import_zip: pick an entry, then call import_zip(id=…)."
 )
 
 
@@ -160,6 +163,7 @@ def _describe_zip(
     except (FileNotFoundError, PermissionError) as exc:  # pragma: no cover - rare
         _logger.debug("skipping %s while hashing during list_zips (%s)", path, exc)
         return None
+    inspection = inspect_zip(path)
     return {
         "id": sha[:ID_PREFIX_LEN],
         "file_name": path.name,
@@ -167,5 +171,8 @@ def _describe_zip(
         "size": stat.st_size,
         "sha256": sha,
         "imported": sha in imported_set,
-        "is_apple_health": is_apple_health_zip(path),
+        # Backward-compatible boolean for v0.4.0 consumers. New callers
+        # should branch on ``zip_status`` for the three-state view.
+        "is_apple_health": inspection == ZipInspection.VALID_APPLE_HEALTH,
+        "zip_status": inspection.value,
     }

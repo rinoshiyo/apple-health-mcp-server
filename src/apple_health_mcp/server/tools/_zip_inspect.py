@@ -16,6 +16,7 @@ import hashlib
 import logging
 import zipfile
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
@@ -57,21 +58,59 @@ def stream_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def is_apple_health_zip(path: Path) -> bool:
-    """Detect whether ``path`` looks like an Apple Health export ZIP.
+class ZipInspection(StrEnum):
+    """Three-state classification of a candidate ``*.zip`` path (v0.4.1, issue #158).
 
-    Returns ``False`` (not an exception) on a corrupted / unreadable
-    archive so the discovery surface stays uniform; ``list_zips``
-    flags ``is_apple_health: false`` and ``import_zip`` returns its
-    typed error envelope.
+    Replaces the prior binary ``is_apple_health_zip`` view that conflated
+    "the file is not a valid ZIP archive at all" with "the file is a
+    valid ZIP archive that just doesn't contain Apple Health data". The
+    two failure modes need different recovery actions: an INVALID_ZIP
+    means the user should re-download the file (corruption, partial
+    transfer, an HTML page renamed to ``.zip``), while a
+    VALID_NON_APPLE_HEALTH means the user picked the wrong file. The
+    legacy helper still returns a single bool for backward compatibility
+    with the rest of the v0.4 import pipeline.
+    """
+
+    VALID_APPLE_HEALTH = "valid_apple_health"
+    VALID_NON_APPLE_HEALTH = "valid_non_apple_health"
+    INVALID_ZIP = "invalid_zip"
+
+
+def inspect_zip(path: Path) -> ZipInspection:
+    """Classify ``path`` into one of the :class:`ZipInspection` states.
+
+    Returns ``INVALID_ZIP`` (not an exception) when the file is not a
+    valid ZIP archive at all (corruption, partial transfer, an HTML
+    error page renamed to ``.zip``, etc.). Returns
+    ``VALID_NON_APPLE_HEALTH`` for a parseable ZIP that lacks the
+    expected top-level marker file, and ``VALID_APPLE_HEALTH`` when
+    the marker is present. The single-pass parse keeps the discovery
+    surface uniform; downstream callers branch on the enum.
     """
     try:
         with zipfile.ZipFile(path) as zf:
             names = zf.namelist()
-    except (zipfile.BadZipFile, OSError) as exc:  # pragma: no cover - defensive
-        _logger.debug("is_apple_health probe failed for %s (%s)", path, exc)
-        return False
-    return any(name in APPLE_HEALTH_TOP_LEVEL_MARKERS for name in names)
+    except (zipfile.BadZipFile, OSError) as exc:
+        _logger.debug("zip inspect: %s is not a valid ZIP (%s)", path, exc)
+        return ZipInspection.INVALID_ZIP
+    if any(name in APPLE_HEALTH_TOP_LEVEL_MARKERS for name in names):
+        return ZipInspection.VALID_APPLE_HEALTH
+    return ZipInspection.VALID_NON_APPLE_HEALTH
+
+
+def is_apple_health_zip(path: Path) -> bool:
+    """Backward-compatible thin wrapper over :func:`inspect_zip`.
+
+    Returns ``True`` only when the file is a valid ZIP archive that
+    contains the expected Apple Health top-level marker; every other
+    state (invalid ZIP, valid ZIP without the marker) reads as
+    ``False``. The richer :class:`ZipInspection` enum is the
+    preferred entry point for new callers, but ``list_zips`` keeps
+    emitting the boolean alongside the new ``zip_status`` field for
+    wire compatibility with v0.4.0 consumers.
+    """
+    return inspect_zip(path) == ZipInspection.VALID_APPLE_HEALTH
 
 
 def load_sha_cache(
