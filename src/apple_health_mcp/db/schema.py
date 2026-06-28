@@ -250,19 +250,23 @@ CREATE TABLE IF NOT EXISTS imports (
     export_xml_sha256  VARCHAR,
     -- NULL on rows from pre-#129 imports and on Tier-2 incremental
     -- re-imports (Phase 4 dedup skipped); see ``record_count`` block.
-    -- The ``dedup_skipped`` flag below disambiguates the two NULL
-    -- cases: dedup_skipped=true means "Tier-2 incremental, measurement
-    -- skipped on purpose", dedup_skipped=false means "Tier-1 full
-    -- import, records_after_dedup is a real value", dedup_skipped
-    -- NULL means "pre-#163 row, unknown which case".
+    -- Paired with ``dedup_skipped`` below: when ``dedup_skipped=true``
+    -- the NULL is by design (Tier-2 incremental, no measurement);
+    -- when ``dedup_skipped=false`` and this column is NULL the row
+    -- is a pre-#129 legacy import.
     records_after_dedup BIGINT,
-    -- v0.5 (issue #163): distinguishes "measurement skipped" (true) vs
-    -- "measurement available, zero or N collapses" (false). Without
-    -- this, history readers could not tell a clean Tier-1 import with
-    -- zero duplicates apart from a Tier-2 incremental that never
-    -- measured. NULL on pre-#163 rows so the existing NULL semantics
-    -- of records_after_dedup are not retroactively overwritten.
-    dedup_skipped      BOOLEAN,
+    -- v0.5 (issue #163): true on Tier-2 incremental re-imports (Phase
+    -- 4 dedup skipped on purpose; ``records_after_dedup IS NULL`` by
+    -- design), false on Tier-1 fresh imports (including the
+    -- zero-collapse case where ``records_after_dedup == record_count``).
+    -- NOT NULL is sound under the fresh-reset contract: ``CURRENT_
+    -- SCHEMA_VERSION`` was bumped 5→6 in the same PR, so any v=5 DB
+    -- triggers ``schema_version_is_stale`` → fresh-reset path → no
+    -- v=6 row was ever written by pre-#163 code. ``DEFAULT FALSE``
+    -- keeps test fixtures that don't care about the flag readable
+    -- (they would otherwise have to spell the column on every INSERT);
+    -- the production orchestrator always writes an explicit value.
+    dedup_skipped      BOOLEAN NOT NULL DEFAULT FALSE,
     -- v0.4 (issue #148): the source ZIP triple. ``source_zip_sha256`` is
     -- the hex sha256 of the whole ZIP file; ``source_zip_mtime`` /
     -- ``source_zip_size`` form the cheap (mtime, size) cache key that
@@ -622,6 +626,11 @@ ALTER TABLE correlation_members ALTER COLUMN import_id SET NOT NULL;
 ALTER TABLE imports ALTER COLUMN export_dir SET NOT NULL;
 ALTER TABLE imports ALTER COLUMN imported_at SET DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE imports ALTER COLUMN imported_at SET NOT NULL;
+-- v0.5 (issue #163): dedup_skipped DEFAULT FALSE + NOT NULL pairing
+-- so test fixtures that don't specify the column still get the safe
+-- false-on-Tier-1-baseline value.
+ALTER TABLE imports ALTER COLUMN dedup_skipped SET DEFAULT FALSE;
+ALTER TABLE imports ALTER COLUMN dedup_skipped SET NOT NULL;
 
 -- export_metadata
 ALTER TABLE export_metadata ALTER COLUMN import_id SET NOT NULL;

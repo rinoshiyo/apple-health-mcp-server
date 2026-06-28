@@ -109,6 +109,28 @@ def test_imports_has_source_zip_columns(conn: duckdb.DuckDBPyConnection) -> None
     ]
 
 
+def test_imports_has_dedup_skipped_column(conn: duckdb.DuckDBPyConnection) -> None:
+    """v0.5 (issue #163): ``imports.dedup_skipped`` distinguishes Tier-2
+    incremental re-imports (true; records_after_dedup IS NULL by design)
+    from Tier-1 fresh imports (false; records_after_dedup carries a real
+    value, including the zero-collapse case). Pin column name + type +
+    NOT NULL so a future drift fires the test rather than ghosting
+    through to runtime — the BOOLEAN type carries semantics no other
+    type would, and NOT NULL is the contract the fresh-reset bump
+    (CURRENT_SCHEMA_VERSION 5→6) was designed to guarantee.
+    """
+    row = conn.execute(
+        "SELECT data_type, is_nullable, column_default "
+        "FROM information_schema.columns "
+        "WHERE table_schema='main' AND table_name='imports' "
+        "AND column_name='dedup_skipped'"
+    ).fetchone()
+    # DuckDB normalises `DEFAULT FALSE` to `CAST('f' AS BOOLEAN)` when round-tripping
+    # through information_schema; pin the normalised form so a future DuckDB
+    # change to the canonicalisation surfaces here rather than at runtime.
+    assert row == ("BOOLEAN", "NO", "CAST('f' AS BOOLEAN)")
+
+
 def test_deduplicate_records(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute(
         """
@@ -206,9 +228,14 @@ def test_deduplicate_extra_tables(conn: duckdb.DuckDBPyConnection) -> None:
            '2024-01-01 06:00:00','2024-01-01 06:00:00','2024-01-01 06:01:00','imp1');
         INSERT INTO correlation_members VALUES
           ('c1','h1','imp1'),('c1','h1','imp1');
-        INSERT INTO imports VALUES
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1,FALSE,NULL,NULL,NULL),
-          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,NULL,1,FALSE,NULL,NULL,NULL);
+        -- Named-column form (churn-resistant against future ADD COLUMN bumps).
+        INSERT INTO imports (
+            import_id, export_dir, imported_at,
+            record_count, workout_count, duration_secs,
+            records_after_dedup, dedup_skipped
+        ) VALUES
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,1,FALSE),
+          ('imp1','/tmp/exp','2024-01-01 06:00:00',1,1,1.0,1,FALSE);
         INSERT INTO export_metadata VALUES
           ('imp1','2024-01-01 06:00:00','ja_JP'),
           ('imp1','2024-01-01 06:00:00','ja_JP');
@@ -440,7 +467,7 @@ _EXPECTED_NOT_NULL: dict[str, frozenset[str]] = {
         {"correlation_hash", "correlation_type", "start_date", "end_date", "import_id"}
     ),
     "correlation_members": frozenset({"correlation_hash", "record_hash", "import_id"}),
-    "imports": frozenset({"export_dir", "imported_at"}),
+    "imports": frozenset({"export_dir", "imported_at", "dedup_skipped"}),
     "export_metadata": frozenset({"import_id"}),
     "me_attributes": frozenset({"import_id"}),
     "state_of_mind": frozenset({"record_hash", "import_id"}),

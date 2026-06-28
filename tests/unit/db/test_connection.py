@@ -426,10 +426,18 @@ def test_get_connection_read_only_materialises_empty_db_when_missing(
         # failure could be mistaken for read-only enforcement and the test
         # would keep passing if RO was silently regressed.
         with pytest.raises(duckdb.Error):
+            # Named-column form is churn-resistant against future ADD COLUMN
+            # bumps; positional form had to be churned in PRs #62, #129, #148, #163.
             conn.execute(
-                "INSERT INTO imports VALUES "
-                "('x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', 0, 0, 0, "
-                "NULL, 0, FALSE, NULL, NULL, NULL)"
+                "INSERT INTO imports ("
+                "  import_id, export_dir, imported_at, "
+                "  record_count, workout_count, duration_secs, "
+                "  records_after_dedup, dedup_skipped"
+                ") VALUES ("
+                "  'x', '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00', "
+                "  0, 0, 0, "
+                "  0, FALSE"
+                ")"
             )
     finally:
         conn.close()

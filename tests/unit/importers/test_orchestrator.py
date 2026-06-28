@@ -107,26 +107,31 @@ def test_run_import_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             "SELECT record_count, workout_count FROM imports WHERE import_id = 'imp_e2e'"
         ).fetchone()
         assert row == (1, 1)
-        # v0.4 (issue #148): pin the positional order of every column the
-        # orchestrator's INSERT writes after ``workout_count``. A future
-        # hand-edit that transposes ``export_xml_sha256`` <->
-        # ``records_after_dedup`` (or shuffles the source_zip triple)
-        # would otherwise survive both ``test_imports_has_source_zip_columns``
-        # (schema metadata) and the assertion above (early columns only).
-        # CLI ``import <dir>`` leaves the source_zip triple NULL; the sha256
-        # is populated by ``_compute_file_sha256`` so we assert non-NULL
-        # without binding to the actual hex value.
+        # v0.4 (issue #148) + v0.5 (issue #163): pin the positional order
+        # of every column the orchestrator's INSERT writes after
+        # ``workout_count``. A future hand-edit that transposes
+        # ``dedup_skipped`` <-> ``source_zip_sha256`` (BOOLEAN <-> VARCHAR;
+        # DuckDB would coerce 'sha-hex' to true silently) or
+        # ``export_xml_sha256`` <-> ``records_after_dedup`` would otherwise
+        # survive both ``test_imports_has_source_zip_columns`` /
+        # ``test_imports_has_dedup_skipped_column`` (schema metadata) and
+        # the early-column assertion above. CLI ``import <dir>`` leaves
+        # the source_zip triple NULL; the sha256 is populated by
+        # ``_compute_file_sha256`` so we assert non-NULL without binding
+        # to the actual hex value. dedup_skipped is False on this Tier-1
+        # fresh import path.
         row = conn.execute(
-            "SELECT export_xml_sha256, records_after_dedup, "
+            "SELECT export_xml_sha256, records_after_dedup, dedup_skipped, "
             "source_zip_sha256, source_zip_mtime, source_zip_size "
             "FROM imports WHERE import_id = 'imp_e2e'"
         ).fetchone()
         assert row is not None
         assert row[0] is not None and len(row[0]) == 64
         assert row[1] == 1
-        assert row[2] is None
+        assert row[2] is False
         assert row[3] is None
         assert row[4] is None
+        assert row[5] is None
     finally:
         conn.close()
 

@@ -11,16 +11,22 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
-- **`imports.dedup_skipped` BOOLEAN column + wire field** (issue
-  #163). Distinguishes a clean Tier-1 fresh import that found zero
-  Correlation-child duplicates (`records_after_dedup ==
-  record_count`, `dedup_skipped=false`) from a Tier-2 incremental
-  re-import that never measured (`records_after_dedup IS NULL`,
-  `dedup_skipped=true`). Pre-#163 rows stay `dedup_skipped=NULL` so
-  the existing NULL semantics of `records_after_dedup` are not
-  retroactively overwritten. `get_import_history` projection and
-  DESCRIPTION extended; `CURRENT_SCHEMA_VERSION` bumped 5→6 (any
-  v=5 DB triggers the v0.4.1 fresh-reset path).
+- **`imports.dedup_skipped BOOLEAN NOT NULL DEFAULT FALSE` column +
+  wire field** (issue #163). Distinguishes a clean Tier-1 fresh
+  import that found zero Correlation-child duplicates
+  (`records_after_dedup == record_count`, `dedup_skipped=false`)
+  from a Tier-2 incremental re-import that never measured
+  (`records_after_dedup IS NULL`, `dedup_skipped=true`). The NOT
+  NULL contract is sound under the fresh-reset rule:
+  `CURRENT_SCHEMA_VERSION` bumped 5→6 in the same change, so every
+  v=5 DB triggers `schema_version_is_stale` → fresh-reset path,
+  and every v=6 row was written by post-#163 orchestrator code.
+  `get_import_history` projection and DESCRIPTION extended.
+  `tests/unit/db/test_schema.py` pins the column type / NOT NULL /
+  DEFAULT shape, and three test sites switched from positional to
+  named `INSERT INTO imports` so a future ADD COLUMN bump no longer
+  forces a positional placeholder churn (the PR #62 / PR-D #129 /
+  #148 pattern that hit the same sites repeatedly).
 
 - **Doc-tests pinning README to runtime constants** (issues #121 +
   #122). `tests/unit/test_docs_in_sync.py` fails CI if the env-vars

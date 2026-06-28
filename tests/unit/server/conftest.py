@@ -90,9 +90,18 @@ INSERT INTO correlations VALUES
      TIMESTAMP '2024-01-02 07:00:00', TIMESTAMP '2024-01-02 07:00:00', 'imp1');
 INSERT INTO correlation_members VALUES ('cor_bp', 'rbp_s', 'imp1');
 INSERT INTO correlation_members VALUES ('cor_bp', 'rbp_d', 'imp1');
-INSERT INTO imports VALUES
-    ('imp1', '/tmp/export', TIMESTAMP '2024-01-01 00:00:00', 3, 1, 5.0,
-     NULL, 3, FALSE, NULL, NULL, NULL);
+-- Named-column form (rather than positional) so a future ALTER TABLE
+-- imports ADD COLUMN bump does not require touching this seed; positional
+-- form had to be churned in PRs #62, #129, #148, #163.
+INSERT INTO imports (
+    import_id, export_dir, imported_at,
+    record_count, workout_count, duration_secs,
+    records_after_dedup, dedup_skipped
+) VALUES (
+    'imp1', '/tmp/export', TIMESTAMP '2024-01-01 00:00:00',
+    3, 1, 5.0,
+    3, FALSE
+);
 -- StateOfMind seed (record + dedicated row) so list_state_of_mind has data
 INSERT INTO records VALUES
     ('som1', 'HKCategoryTypeIdentifierStateOfMind', 0.5, NULL, NULL,
