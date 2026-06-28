@@ -171,11 +171,14 @@ def import_cmd(
 
     try:
         stats = extract_zip_and_import(zip_path, source_zip, db_path=db, force=force)
-    except (zipfile.BadZipFile, OSError) as exc:
-        # Defensive: inspect_zip already validated the ZIP shape, but
-        # the filesystem can change between inspect and extract
-        # (concurrent process replacing the file). Convert to a clean
-        # exit instead of letting the traceback escape.
+    except zipfile.BadZipFile as exc:
+        # Extraction-phase failure: ``zip_extract`` re-raises any OSError
+        # from ``extractall`` as BadZipFile so the two corruption / IO
+        # failure modes share one recovery path. Importer-phase OSError
+        # (DuckDB writes, ECG / GPX file IO) bypasses this branch and
+        # falls through to the AppleHealthMCPError handler below — or
+        # propagates uncaught when it isn't a typed AppleHealthMCPError
+        # (rare; would indicate an importer bug worth surfacing).
         _logger.error("import failed: failed to extract %s: %s", zip_path, exc)
         raise typer.Exit(code=1) from exc
     except AppleHealthMCPError as exc:

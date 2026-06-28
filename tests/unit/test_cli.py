@@ -100,13 +100,18 @@ def test_import_rejects_invalid_zip(tmp_path: Path) -> None:
 def test_import_surfaces_extract_race_as_typer_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """v0.5 (issue #170): a TOCTOU race that leaves extract failing on a
-    previously-valid ZIP still surfaces as a clean exit-1 with a
-    ConfigError wrapping the underlying ``OSError`` / ``BadZipFile``.
+    """v0.5 (PR #172 code-review #2): an extraction-phase failure
+    surfaces as a clean exit-1 with a "failed to extract" message.
+
+    ``zip_extract`` re-raises any OSError from ``extractall`` as
+    BadZipFile so the two extraction-time failure modes share one
+    recovery path. Importer-phase OSError bypasses this branch and
+    falls through to the AppleHealthMCPError handler.
     """
+    import zipfile as _zipfile
 
     def fake_extract(*args: object, **kwargs: object) -> object:
-        raise OSError("simulated TOCTOU: file vanished between inspect and extract")
+        raise _zipfile.BadZipFile("simulated extraction failure: file vanished mid-extract")
 
     monkeypatch.setattr(
         "apple_health_mcp.importers.zip_extract.extract_zip_and_import",
@@ -270,3 +275,33 @@ def test_db_flag_promotes_to_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # not later reject it as "relative" — the CWD-stable invariant the
     # env-resolver enforces must match what the CLI promotes.
     assert _os.environ.get("APPLE_HEALTH_DB") == str(db.expanduser().resolve())
+
+
+def test_zip_extract_translates_oserror_to_badzipfile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.5 (PR #172 code-review #1): ``zip_extract`` re-raises any OSError
+    from ``extractall`` as ``BadZipFile`` so the caller's narrow
+    extract-phase handler treats it uniformly with corruption failures.
+    Importer-phase OSError stays unwrapped (covered by other tests).
+    """
+    import zipfile
+
+    from apple_health_mcp.importers.zip_extract import extract_zip_and_import
+
+    zip_path = _materialise_export_zip(tmp_path)
+
+    def fake_extractall(self: zipfile.ZipFile, path: object) -> None:
+        raise OSError("simulated ENOSPC during extraction")
+
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", fake_extractall)
+    from datetime import UTC, datetime
+
+    stat = zip_path.stat()
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    with pytest.raises(zipfile.BadZipFile, match="extraction failed"):
+        extract_zip_and_import(
+            zip_path,
+            ("00" * 32, mtime, stat.st_size),
+            db_path=tmp_path / "h.duckdb",
+        )

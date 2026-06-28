@@ -60,8 +60,30 @@ def extract_zip_and_import(
     """
     with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
         extracted_root = Path(tmpdir)
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(extracted_root)
+        # v0.5 (PR #172 code-review #1/#2): scope the extraction-phase
+        # try block tightly around ``extractall``. The caller's broad
+        # ``except (BadZipFile, OSError)`` used to wrap the full
+        # run_import body too, so a DuckDB OSError (disk full, EIO,
+        # permission denied) would dress up as "zip_extract_failed"
+        # and the agent / CLI would tell the user to re-download the
+        # ZIP. Narrowing the wrap here keeps the misclassification
+        # contained: extraction-time errors stay BadZipFile / OSError,
+        # importer-time errors raise as AppleHealthMCPError /
+        # database-flavored exceptions for the caller to surface
+        # under their own envelope.
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                zf.extractall(extracted_root)
+        except OSError as exc:
+            # OS-level IO from ``extractall`` (ENOSPC mid-write, EACCES,
+            # truncated archive surfaced through a read error, etc.).
+            # Re-raise as ``BadZipFile`` so the caller's narrow
+            # extract-phase handler treats it uniformly with corruption
+            # failures -- both cases share the "this ZIP cannot be
+            # unpacked; re-download or pick another file" recovery
+            # action. Keeps OSError flavors from inside ``run_import``
+            # (DuckDB writes, ECG/GPX file IO) separable at the caller.
+            raise zipfile.BadZipFile(f"extraction failed before run_import: {exc}") from exc
         # Apple Health ships the export as ``apple_health_export/`` at
         # the top level; some repackagers flatten it. Resolve whichever
         # shape we got into the path the importer expects.

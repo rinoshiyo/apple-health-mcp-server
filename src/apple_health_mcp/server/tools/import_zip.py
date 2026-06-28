@@ -272,7 +272,14 @@ def _import_zip_sync(
                 source_zip=(selected_sha, mtime, size),
                 conn=conn,
             )
-    except (zipfile.BadZipFile, OSError) as exc:
+    except zipfile.BadZipFile as exc:
+        # Extraction-phase failure only: ``zip_extract`` re-raises any
+        # OSError from ``extractall`` as BadZipFile so the two
+        # extraction-time failure modes (corruption / IO) share one
+        # envelope. Importer-phase OSError (DuckDB writes, ECG / GPX
+        # file IO) bypasses this branch so it does not get misclassified
+        # as "zip_extract_failed" — it surfaces as the importer's own
+        # typed exception or an upstream AppleHealthMCPError instead.
         _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
         return run_query_payload(
             {
