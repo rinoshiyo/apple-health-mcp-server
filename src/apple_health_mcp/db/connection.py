@@ -298,62 +298,52 @@ def _migrate_if_needed_on_handle(
     conn: duckdb.DuckDBPyConnection,
     db_path: Path,
 ) -> None:
-    """Shared schema_version validation for any caller-owned handle.
+    """Log when ``db_path``'s ``schema_version`` trails CURRENT but never raise.
 
-    v0.3.0 dropped automatic in-place schema upgrades from pre-v0.3.0
-    DBs (:issue:`124`). Two outcomes only:
+    v0.4.1 (issue #156) behaviour change: the helper used to raise
+    :class:`ConfigError` so ``serve`` startup refused a pre-v0.5 DB and
+    asked the user to ``rm`` the file + re-run the CLI. That contract
+    broke the v0.4 terminal-zero install pitch -- Claude Desktop on
+    Windows hides the default DB path inside the MSIX AppContainer
+    sandbox, so the user could not even find the file to delete. We
+    now keep the connection open at startup and let the read path
+    surface ``NEEDS_REIMPORT`` (handled by
+    :func:`server.data_state.check_data_state`); the next
+    ``import_zip`` call lands in
+    :func:`importers.orchestrator.run_import` and triggers
+    :func:`db.schema.reset_db_for_fresh_import` before rebuilding the
+    canonical schema.
 
-    * Current DB (``schema_version == CURRENT_SCHEMA_VERSION``) -> return
-      silently. The serve path proceeds to its real open.
-    * Pre-v0.3.0 / pre-v0.4 DB (``0 < schema_version <
-      CURRENT_SCHEMA_VERSION`` AND no in-place migration can close
-      the gap) -> raise :class:`ConfigError` carrying the canonical
-      re-import guidance, with ``db_path`` interpolated so the user
-      can copy-paste the ``rm`` / ``import`` commands verbatim.
-
-    Skip case: very-pre-v0.1.4 DBs that lack the ``imports`` table
-    fall through to the existing tool-level error handling rather
-    than crash here.
-
-    Imported lazily to avoid a top-level circular import between
-    ``db.connection`` and ``db.migrations``.
+    The probe still exists so a stale DB is *visible* in the logs at
+    debug level -- callers grepping for the legacy ConfigError
+    fingerprint will find a single DEBUG line pointing at the new
+    state-machine recovery path.
 
     v0.4 (issue #148): the helper accepts the caller's handle so the
     writable serve path can re-use the just-opened writable connection
     (DuckDB rejects same-process concurrent opens of one file when
     either side is writable, so a second probe handle would fail).
     """
-    from apple_health_mcp.db.migrations import (
-        CURRENT_SCHEMA_VERSION,
-        _reimport_required_message,
-    )
-    from apple_health_mcp.exceptions import ConfigError
+    from apple_health_mcp.db.migrations import CURRENT_SCHEMA_VERSION
 
     # Defer to the tool-level error path when the DB pre-dates the
-    # ``imports`` table; a probe-time crash here would hide the
-    # better "run import first" guidance the tool layer would give.
+    # ``imports`` table; the friendly read-path guidance lands on the
+    # ``check_data_state`` empty-DB branch, not here.
     if not _table_exists_in_main_conn(conn, "imports"):
         return
-    # ``get_current_version`` cannot be called on a read-only
-    # handle because it idempotently CREATE TABLE IF NOT EXISTS
-    # the sentinel; that helper is for the writable
-    # apply_pending_migrations path. We probe the sentinel
-    # ourselves: very-pre-v0.1.4 DBs lack the table and are
-    # treated as version 0 (the tool-level error path picks them
-    # up); newer DBs read the persisted integer.
     if not _table_exists_in_main_conn(conn, "schema_version"):
         return
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     current = int(row[0]) if row is not None and row[0] is not None else 0
-    if current >= CURRENT_SCHEMA_VERSION:
-        return
-    # v0.3.0 (#124): the DB is behind and the registry cannot bring
-    # it forward in place (apply_pending_migrations would raise the
-    # exact same ConfigError, but we can't call it on the read-only
-    # probe because future migrations would need ALTER). Re-raise
-    # the canonical message directly so behaviour stays bit-identical
-    # to the writable path.
-    raise ConfigError(_reimport_required_message(current, db_path))
+    if 0 < current < CURRENT_SCHEMA_VERSION:
+        _logger.debug(
+            "DB %s carries schema_version=%d (CURRENT=%d); deferring to "
+            "the NEEDS_REIMPORT state-machine envelope and the orchestrator's "
+            "fresh-reset path",
+            db_path,
+            current,
+            CURRENT_SCHEMA_VERSION,
+        )
 
 
 def _table_exists_in_main_conn(conn: duckdb.DuckDBPyConnection, name: str) -> bool:

@@ -297,3 +297,62 @@ def test_run_import_stamps_import_id_and_imported_at_at_same_utc_moment(
         )
     finally:
         conn.close()
+
+
+# --- v0.4.1 (issue #156): stale-schema fresh-reset ----------------------
+
+
+def test_run_import_resets_stale_schema_before_importing(tmp_path: Path) -> None:
+    """v0.4.1 (issue #156): a pre-CURRENT DB is fresh-reset before re-import.
+
+    Mirrors the recovery path the new ``NEEDS_REIMPORT`` state-machine
+    envelope steers the agent into: ``list_zips`` reports a stale DB,
+    ``import_zip`` calls ``run_import``, and the orchestrator wipes
+    every package-owned table before rebuilding the canonical shape
+    and re-ingesting. The legacy contract refused to open such DBs;
+    the new contract recovers in place.
+    """
+    from apple_health_mcp.db import CURRENT_SCHEMA_VERSION, set_current_version
+    from apple_health_mcp.db.schema import ensure_schema
+
+    export_dir = tmp_path / "apple_health_export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(_EXPORT_XML, encoding="utf-8")
+    (export_dir / "electrocardiograms").mkdir()
+    (export_dir / "workout-routes").mkdir()
+
+    db_path = tmp_path / "stale.duckdb"
+    # Build a stale-shaped DB stamped at CURRENT-1 with a sentinel
+    # row that proves the reset wiped the old state.
+    seeder = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(seeder)
+        seeder.execute(
+            "INSERT INTO imports (import_id, export_dir, imported_at) "
+            "VALUES ('legacy', '/old', TIMESTAMPTZ '2020-01-01 00:00:00+00')"
+        )
+        set_current_version(seeder, CURRENT_SCHEMA_VERSION - 1)
+        seeder.execute("CHECKPOINT;")
+    finally:
+        seeder.close()
+
+    stats = run_import(export_dir, db_path)
+    # The legacy ``imports`` row was wiped by the fresh-reset; the
+    # only row left is the one this call wrote.
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT import_id, export_dir FROM imports ORDER BY imported_at"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] != "legacy"
+        # schema_version was re-stamped to CURRENT.
+        version_row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        assert version_row is not None and version_row[0] == CURRENT_SCHEMA_VERSION
+    finally:
+        conn.close()
+
+    # The pipeline still produced real stats; the fresh-reset did not
+    # short-circuit the import itself.
+    assert stats.records == 1
+    assert stats.workouts == 1

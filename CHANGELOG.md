@@ -9,6 +9,20 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Fixed
+
+- **v0.4 upgrade path no longer wedges the server** (issue #156). A
+  database imported under v0.3.x (or any pre-current `schema_version`)
+  used to raise `ConfigError` at server boot, telling the user to
+  `rm` the file and re-run the CLI. Claude Desktop on Windows hides
+  the canonical DB path inside the MSIX AppContainer sandbox, so that
+  recovery path was effectively impossible. The server now opens the
+  stale DB cleanly and the read tools surface a new `NEEDS_REIMPORT`
+  envelope (`{state: "NEEDS_REIMPORT", suggested_action:
+  "call_list_zips", ...}`). The next `import_zip` call drops every
+  package-owned table and rebuilds the canonical schema before
+  re-ingesting — the user never has to touch a terminal.
+
 ## [0.4.0] - 2026-06-26
 
 ### Headline

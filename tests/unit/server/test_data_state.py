@@ -174,3 +174,70 @@ def test_require_ready_or_state_error_returns_payload_when_not_ready(
         assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
     finally:
         conn.close()
+
+
+# --- v0.4.1 (issue #156): NEEDS_REIMPORT --------------------------
+
+
+def test_check_data_state_returns_needs_reimport_when_schema_stale() -> None:
+    """v0.4.1 (issue #156): a DB whose schema_version trails CURRENT
+    surfaces ``NEEDS_REIMPORT`` so the agent triggers the re-import
+    recovery flow.
+
+    Takes precedence over the READY tier: an existing ``imports`` row
+    is meaningless when the schema is stale because the row's column
+    set may not match the package's current expectations.
+    """
+    from apple_health_mcp.db.migrations import CURRENT_SCHEMA_VERSION, set_current_version
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        # Seed an imports row to confirm the schema-staleness check
+        # short-circuits BEFORE the READY tier.
+        seed_one_import(conn)
+        set_current_version(conn, CURRENT_SCHEMA_VERSION - 1)
+        assert check_data_state(conn) == DataState.NEEDS_REIMPORT
+    finally:
+        conn.close()
+
+
+def test_build_state_error_payload_for_needs_reimport_has_documented_shape() -> None:
+    """``NEEDS_REIMPORT`` envelope steers the agent at ``list_zips``."""
+    raw = build_state_error_payload(DataState.NEEDS_REIMPORT)
+    payload = json.loads(raw)
+    assert payload["state"] == "NEEDS_REIMPORT"
+    assert payload["suggested_action"] == "call_list_zips"
+    assert "human_message" in payload
+    assert "list_zips" in payload["human_message"]
+    assert "schema_version" in payload["reason"]
+
+
+def test_check_data_state_falls_through_when_stale_probe_fails(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A surprise from the stale-schema probe is logged + treated as fresh.
+
+    Defensive mirror of the ``_imports_table_has_rows`` catch-all: a
+    SQL exception from the probe must not crash the tool layer; it
+    falls through to the friendlier NEEDS_CONFIG / NEEDS_IMPORT
+    tiers so the user still gets actionable guidance.
+    """
+    from apple_health_mcp.db import migrations as migrations_module
+
+    def _boom(_conn: object) -> bool:
+        raise RuntimeError("probe boom")
+
+    # ``_safe_schema_stale_probe`` re-reads
+    # ``migrations_module.schema_version_is_stale`` per call (lazy
+    # import), so patching the source name there is enough to make
+    # the helper observe the failure.
+    monkeypatch.setattr(migrations_module, "schema_version_is_stale", _boom)
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        # The probe raises → fall-through → NEEDS_CONFIG (env unset).
+        assert check_data_state(conn) == DataState.NEEDS_CONFIG
+    finally:
+        conn.close()

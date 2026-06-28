@@ -550,3 +550,83 @@ def test_rebuild_daily_stats(conn: duckdb.DuckDBPyConnection) -> None:
     ).fetchone()
     assert avg is not None
     assert avg[0] == pytest.approx(76.0)
+
+
+# --- v0.4.1 (issue #156): reset_db_for_fresh_import ----------------------
+
+
+def test_reset_db_for_fresh_import_drops_every_package_table() -> None:
+    """All canonical tables + daily stats + schema_version sentinel disappear.
+
+    The reset must wipe everything the package owns so that the
+    follow-up ``ensure_schema`` lands a pristine canonical shape -- a
+    leftover table that legacy code stamped under the old shape would
+    poison every subsequent read.
+    """
+    from apple_health_mcp.db import set_current_version
+    from apple_health_mcp.db.schema import reset_db_for_fresh_import
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        rebuild_daily_stats(conn)
+        set_current_version(conn, 4)
+        # Sanity: tables are present before the reset.
+        assert _table_count(conn) > 0
+        reset_db_for_fresh_import(conn)
+        # All canonical + auxiliary tables are gone.
+        assert _table_count(conn) == 0
+    finally:
+        conn.close()
+
+
+def test_reset_db_for_fresh_import_is_idempotent_on_fresh_db() -> None:
+    """A no-table DB tolerates the reset call without raising.
+
+    ``DROP TABLE IF EXISTS`` makes the individual statements safe; the
+    helper-level smoke test ensures a future refactor that swaps to a
+    non-idempotent DROP does not silently break the bootstrap path
+    (the orchestrator may call reset before ``ensure_schema`` has ever
+    run against this handle).
+    """
+    from apple_health_mcp.db.schema import reset_db_for_fresh_import
+
+    conn = get_in_memory_connection()
+    try:
+        reset_db_for_fresh_import(conn)
+        assert _table_count(conn) == 0
+    finally:
+        conn.close()
+
+
+def test_reset_db_for_fresh_import_rolls_back_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-reset crash rolls back the transaction.
+
+    The wrapper opens a transaction explicitly; a failure inside the
+    DROP loop must leave the DB in its pre-reset shape so the user can
+    retry without ending up with a half-stripped catalogue.
+    """
+    from apple_health_mcp.db import schema as schema_module
+    from apple_health_mcp.db.schema import reset_db_for_fresh_import
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        # A table identifier that opens a quoted region but never
+        # closes it parses as a SQL syntax error -- DROP TABLE IF
+        # EXISTS "unterminated; cannot be tokenised, so DuckDB
+        # raises before any real DROP runs. That hits the
+        # BaseException branch + ROLLBACK in the reset wrapper.
+        monkeypatch.setattr(
+            schema_module,
+            "_CANONICAL_TABLE_NAMES",
+            ('"unterminated',),
+        )
+        with pytest.raises(duckdb.Error):
+            reset_db_for_fresh_import(conn)
+        # The schema is intact (rollback fired).
+        assert _table_count(conn) >= TABLE_COUNT
+    finally:
+        conn.close()

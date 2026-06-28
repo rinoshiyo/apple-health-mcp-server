@@ -20,6 +20,7 @@ from apple_health_mcp.db.migrations import (
     _reimport_required_message,
     apply_pending_migrations,
     get_current_version,
+    schema_version_is_stale,
     set_current_version,
 )
 from apple_health_mcp.exceptions import ConfigError, DatabaseError
@@ -422,5 +423,54 @@ def test_apply_pending_migrations_friendly_error_keeps_placeholder_when_db_path_
         message = str(excinfo.value)
         assert "rm <db>" in message
         assert "--db <db> import" in message
+    finally:
+        conn.close()
+
+
+# --- v0.4.1 (issue #156): schema_version_is_stale --------------------------
+
+
+def test_schema_version_is_stale_returns_false_for_fresh_db() -> None:
+    """A brand-new in-memory DB has no ``schema_version`` table: not stale."""
+    conn = get_in_memory_connection()
+    try:
+        assert schema_version_is_stale(conn) is False
+    finally:
+        conn.close()
+
+
+def test_schema_version_is_stale_returns_false_when_current_is_zero() -> None:
+    """An empty ``schema_version`` table reads as fresh (version 0).
+
+    The probe treats version=0 the same as a missing table: a brand-new
+    DB that has not yet been stamped by ``apply_pending_migrations``.
+    Returning True here would tell the orchestrator to drop an empty
+    table set before re-running ``ensure_schema``; harmless but wasteful.
+    """
+    conn = get_in_memory_connection()
+    try:
+        # Create the table with no row, exactly like the helper does.
+        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL);")
+        assert schema_version_is_stale(conn) is False
+    finally:
+        conn.close()
+
+
+def test_schema_version_is_stale_returns_true_for_pre_current_db() -> None:
+    """A persisted version between 1 and CURRENT-1 reports stale."""
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, CURRENT_SCHEMA_VERSION - 1)
+        assert schema_version_is_stale(conn) is True
+    finally:
+        conn.close()
+
+
+def test_schema_version_is_stale_returns_false_when_current() -> None:
+    """A DB already at CURRENT_SCHEMA_VERSION reports fresh."""
+    conn = get_in_memory_connection()
+    try:
+        set_current_version(conn, CURRENT_SCHEMA_VERSION)
+        assert schema_version_is_stale(conn) is False
     finally:
         conn.close()

@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from apple_health_mcp.db.connection import get_connection
-from apple_health_mcp.db.migrations import apply_pending_migrations
-from apple_health_mcp.db.schema import ensure_schema
+from apple_health_mcp.db.migrations import apply_pending_migrations, schema_version_is_stale
+from apple_health_mcp.db.schema import ensure_schema, reset_db_for_fresh_import
 from apple_health_mcp.importers._existing_hashes import (
     ExistingHashes,
     load_existing_hashes,
@@ -155,6 +155,25 @@ def run_import(
     if conn is None:
         conn = _open_db(db_path)
     try:
+        # v0.4.1 (issue #156): when the DB carries a stale
+        # ``schema_version`` (imported under an older package release),
+        # drop every package-owned table so ``ensure_schema`` below
+        # rebuilds the canonical shape and ``apply_pending_migrations``
+        # stamps the current sentinel. The legacy contract refused to
+        # open such DBs and asked the user to ``rm`` the file +
+        # re-run the CLI; that broke the v0.4 terminal-zero install
+        # pitch because the default DB path on Windows lives behind
+        # the MSIX AppContainer sandbox redirect and is invisible to
+        # Explorer / PowerShell. The reset lands inside the same
+        # transaction as the importer's writes via DuckDB's autocommit,
+        # so a mid-import crash leaves the previously-stale DB intact
+        # for the next attempt to retry.
+        if schema_version_is_stale(conn):
+            _logger.warning(
+                "Detected stale schema in %s; performing fresh-reset before re-import.",
+                db_path if db_path is not None else "<externally-owned connection>",
+            )
+            reset_db_for_fresh_import(conn)
         ensure_schema(conn)
         # Tier 1 requires the ``imports.export_xml_sha256`` column. The
         # migration is idempotent on a fresh DB (``ADD COLUMN IF NOT
