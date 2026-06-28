@@ -691,9 +691,13 @@ def test_get_ecg_data_db_error(empty_conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def test_run_custom_query_basic(seeded_conn: duckdb.DuckDBPyConnection) -> None:
+    """v0.4.1 (issue #159): user-supplied LIMIT lands in the envelope shape."""
     fn = _bind(run_custom_query, seeded_conn)
-    rows = _call(fn, query="SELECT record_hash FROM records LIMIT 1")
-    assert len(rows) == 1
+    payload = _call(fn, query="SELECT record_hash FROM records LIMIT 1")
+    assert payload["row_count"] == 1
+    assert len(payload["rows"]) == 1
+    assert payload["truncated"] is False
+    assert payload["user_supplied_limit"] is True
 
 
 def test_run_custom_query_validation_error(
@@ -707,10 +711,70 @@ def test_run_custom_query_validation_error(
 def test_run_custom_query_enforces_limit(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
+    """v0.4.1 (issue #159): no user LIMIT → envelope reports user_supplied_limit=False."""
     fn = _bind(run_custom_query, seeded_conn)
-    # Without an explicit LIMIT we should get at most MAX_CUSTOM_QUERY_ROWS rows.
-    rows = _call(fn, query="SELECT 1 AS x")
-    assert rows
+    payload = _call(fn, query="SELECT 1 AS x")
+    assert payload["rows"]
+    assert payload["user_supplied_limit"] is False
+    assert payload["truncated"] is False
+    assert payload["max_rows"] >= 1
+
+
+def test_run_custom_query_marks_truncated_when_at_max_rows(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """v0.4.1 (issue #159): a result that overflows the cap signals truncation.
+
+    Use a DuckDB ``range`` generator to produce more rows than the
+    server cap; the envelope reports ``truncated: true`` AND clips the
+    returned ``rows`` list to ``max_rows`` so the caller can resume
+    via LIMIT/OFFSET.
+    """
+    from apple_health_mcp.server.safety import MAX_CUSTOM_QUERY_ROWS
+
+    fn = _bind(run_custom_query, seeded_conn)
+    payload = _call(fn, query=f"SELECT * FROM range({MAX_CUSTOM_QUERY_ROWS + 25})")
+    assert payload["truncated"] is True
+    assert payload["row_count"] == MAX_CUSTOM_QUERY_ROWS
+    assert len(payload["rows"]) == MAX_CUSTOM_QUERY_ROWS
+    assert payload["max_rows"] == MAX_CUSTOM_QUERY_ROWS
+    assert payload["user_supplied_limit"] is False
+
+
+def test_run_custom_query_not_truncated_when_under_max(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A result that fits under the cap reports ``truncated: false``."""
+    fn = _bind(run_custom_query, seeded_conn)
+    payload = _call(fn, query="SELECT * FROM range(5)")
+    assert payload["truncated"] is False
+    assert payload["row_count"] == 5
+    assert payload["user_supplied_limit"] is False
+
+
+def test_run_custom_query_user_limit_skips_truncation_probe(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A user-supplied LIMIT means truncation is the caller's concern.
+
+    The server does NOT probe for truncation here; ``truncated`` is
+    pinned to ``false`` and ``user_supplied_limit`` to ``true`` so the
+    caller can tell the result is exactly what their LIMIT requested.
+    """
+    fn = _bind(run_custom_query, seeded_conn)
+    payload = _call(fn, query="SELECT * FROM range(50) LIMIT 10")
+    assert payload["truncated"] is False
+    assert payload["row_count"] == 10
+    assert payload["user_supplied_limit"] is True
+
+
+def test_run_custom_query_returns_sql_error_string(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """An execution-time SQL error surfaces as an ``Error: ...`` string."""
+    fn = _bind(run_custom_query, seeded_conn)
+    out = asyncio.run(fn(query="SELECT * FROM nonexistent_table_xyz"))
+    assert out.startswith("Error:")
 
 
 # --- list_data_sources -------------------------------------------------------
@@ -957,8 +1021,10 @@ def test_run_custom_query_runs_on_empty_db(empty_conn: duckdb.DuckDBPyConnection
     introspection of the freshly-bootstrapped scaffold.
     """
     fn = _bind(run_custom_query, empty_conn)
-    rows = _call(fn, query="SELECT COUNT(*) AS n FROM imports")
-    assert rows == [{"n": 0}]
+    payload = _call(fn, query="SELECT COUNT(*) AS n FROM imports")
+    assert payload["rows"] == [{"n": 0}]
+    assert payload["row_count"] == 1
+    assert payload["truncated"] is False
 
 
 # --- get_server_info ---------------------------------------------------------

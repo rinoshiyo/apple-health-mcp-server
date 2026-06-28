@@ -9,6 +9,19 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`run_custom_query` returns an envelope** (issue #159). Previous
+  versions returned a bare JSON array; v0.4.1 wraps the result in
+  `{rows, row_count, truncated, max_rows, user_supplied_limit}` so
+  the caller can detect silent truncation at the server-enforced cap.
+  Callers that parsed the result as `list[dict]` need to read
+  `.rows`. The server now probes for overflow with `LIMIT MAX+1`, so
+  a result that fits exactly at the cap is correctly marked
+  `truncated: false`. A caller-supplied `LIMIT` clause turns the
+  envelope's `user_supplied_limit` to `true` and `truncated` is
+  always `false` (truncation is the caller's concern in that case).
+
 ### Added
 
 - **3-state ZIP inspection** (issue #158). `list_zips` now emits a
