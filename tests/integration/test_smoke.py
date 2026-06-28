@@ -239,12 +239,13 @@ def test_all_mcp_tools_smoke(
         assert payload["reading"]["ecg_hash"] == ecg_hash
         assert payload["stats"]["sample_count"] == 10
 
-        # 13. run_custom_query
-        rows = call_tool(
+        # 13. run_custom_query — v0.4.1 envelope shape (issue #159).
+        payload = call_tool(
             bind_tool(run_custom_query, conn),
             query="SELECT COUNT(*) AS n FROM records",
         )
-        assert int(rows[0]["n"]) == 6
+        assert int(payload["rows"][0]["n"]) == 6
+        assert payload["truncated"] is False
 
         # 14. list_data_sources
         rows = call_tool(bind_tool(list_data_sources, conn))
