@@ -125,12 +125,15 @@ Done once before the first release tag is pushed.
 
 ### Cutting a release
 
-0. **Bump both `[project] version` in `pyproject.toml` AND `version`
-   in `manifest.json`** to the version you are about to ship, and
-   merge that change to `main` via a PR. The release workflow refuses
-   to publish if the tag and pyproject versions disagree, AND refuses
-   to pack the MCPB bundle if the tag and manifest.json versions
-   disagree, so both bumps are load-bearing.
+0. **Bump `[project] version` in `pyproject.toml` AND `version` in
+   `manifest.json`, then run `uv lock` so `uv.lock` picks up the new
+   project version.** Merge that change to `main` via a PR. The CI
+   `metadata-checks` job in `.github/workflows/ci.yml` runs
+   `scripts/check_version_parity.py` and fails the PR if the three
+   files disagree, so the drift surfaces at PR time rather than at
+   `v*` tag push. The release workflow then re-verifies the tag
+   against pyproject (build job) and manifest.json (build_bundle job)
+   as a defence-in-depth gate.
 
 1. Pre-flight (run locally before tagging):
 
@@ -151,3 +154,30 @@ Done once before the first release tag is pushed.
 GitHub Actions then verifies the tag matches the pyproject version,
 builds the sdist + wheel, runs `twine check --strict`, and uploads
 via `pypa/gh-action-pypi-publish@release/v1`.
+
+## 9. LP Copy Conventions
+
+The landing page copy lives in `docs/i18n/ja.json` and
+`docs/i18n/en.json`. These files MUST NOT embed an explicit version
+literal (`v0.4.1`, `apple-health-mcp-server-v0.4.1.mcpb`, etc.) in
+any field except `footer.version`.
+
+- Bundle download URLs and Claude Desktop install steps point to
+  GitHub's [`/releases/latest`](https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest)
+  redirector. GitHub resolves it to whichever tag is marked
+  *Latest*, so the LP never goes stale between releases.
+- `footer.version` is the one sanctioned slot. The
+  `sync_docs_version` job in `.github/workflows/release.yml`
+  rewrites it on every stable tag push (it skips pre-releases,
+  matching `if: !contains(github.ref_name, '-')`).
+- CI enforces the rule via
+  `scripts/check_lp_no_version_literal.py`, invoked from the
+  `metadata-checks` job in `ci.yml`. A future contributor who
+  pastes a literal back into the JSON gets a PR-time failure
+  instead of shipping it to the LP.
+
+The convention was chosen in the 2026-06-25 grill (option c) over
+two alternatives: (a) extend the release workflow to rewrite every
+mention, and (b) introduce a `{{VERSION}}` placeholder pattern.
+Option (c) won because GitHub's redirector already does the work
+the LP needs.
