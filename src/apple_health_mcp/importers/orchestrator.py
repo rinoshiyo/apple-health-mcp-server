@@ -160,13 +160,13 @@ def run_import(
         # v0.4.1 (issue #156): when the DB carries a stale
         # ``schema_version`` (imported under an older package release),
         # drop every package-owned table so ``ensure_schema`` below
-        # rebuilds the canonical shape and ``apply_pending_migrations``
-        # stamps the current sentinel. The legacy contract refused to
-        # open such DBs and asked the user to ``rm`` the file +
-        # re-run the CLI; that broke the v0.4 terminal-zero install
-        # pitch because the default DB path on Windows lives behind
-        # the MSIX AppContainer sandbox redirect and is invisible to
-        # Explorer / PowerShell.
+        # rebuilds the canonical shape and ``stamp_current_version``
+        # (called further down) records the current sentinel. The
+        # legacy contract refused to open such DBs and asked the user
+        # to ``rm`` the file + re-run the CLI; that broke the v0.4
+        # terminal-zero install pitch because the default DB path on
+        # Windows lives behind the MSIX AppContainer sandbox redirect
+        # and is invisible to Explorer / PowerShell.
         #
         # Atomicity caveat (v0.4.1 code-review #5): reset_db_for_fresh_import
         # opens its own ``BEGIN TRANSACTION ... COMMIT`` and closes it

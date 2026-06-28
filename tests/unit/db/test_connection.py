@@ -527,10 +527,12 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
     recreates it with the legacy VARCHAR ``sample_time`` column so the
     file plausibly represents what a user who imported under v0.2.x and
     then upgraded the package to v0.3.0 would have on disk. Stamps
-    ``schema_version=2`` so :func:`apply_pending_migrations` -- and
-    therefore :func:`_migrate_if_needed` -- raises the canonical
-    re-import :class:`ConfigError` instead of silently bumping the
-    sentinel.
+    ``schema_version=2`` so :func:`_migrate_if_needed_on_handle` sees a
+    stale sentinel and the data-state machine surfaces
+    ``NEEDS_REIMPORT`` on the next read tool call (v0.4.1, issue #156).
+    Pre-v0.4.1 the same sentinel would have triggered the
+    ``apply_pending_migrations`` ConfigError refusal that v0.5 (#178)
+    retired.
 
     Each phase runs on its own DuckDB connection + CHECKPOINT so the
     next read-only open does not inherit a stale catalog snapshot from
