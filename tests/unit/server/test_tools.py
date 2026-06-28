@@ -330,6 +330,107 @@ def test_get_workout_route_unknown_hash_returns_empty_envelope(
     }
 
 
+def _seed_route_with_hr(
+    conn: duckdb.DuckDBPyConnection, workout_hash: str, point_count: int
+) -> None:
+    """Insert ``point_count`` route points on a 5-second cadence plus one HR
+    sample per point ±0 s offset (issue #161 / #162 fixtures).
+
+    Each point is wh + (rp_idx) at the same lat/lon for simplicity — the
+    tests assert ordering and stride behaviour, not geographic accuracy.
+    The HR samples sit at the same timestamp as the route point so the
+    LATERAL nearest-join always picks them with offset 0.
+    """
+    for i in range(point_count):
+        conn.execute(
+            "INSERT INTO route_points VALUES (?, ?, 35.0, 139.0, 10.0, "
+            "TIMESTAMP '2024-01-01 11:00:00' + INTERVAL (?) SECOND, "
+            "3.0, 90.0, 5.0, 5.0, 'imp1')",
+            [f"rp_n{i}", workout_hash, i * 5],
+        )
+        # One HR sample co-located with each route point.
+        conn.execute(
+            "INSERT INTO records VALUES "
+            "(?, 'HKQuantityTypeIdentifierHeartRate', ?, NULL, 'count/min', "
+            "'Apple Watch', '1.0', NULL, NULL, "
+            "TIMESTAMP '2024-01-01 11:00:00' + INTERVAL (?) SECOND, "
+            "TIMESTAMP '2024-01-01 11:00:00' + INTERVAL (?) SECOND, 'imp1')",
+            [f"rec_n{i}", 120.0 + float(i), i * 5, i * 5],
+        )
+
+
+def test_get_workout_route_every_nth_downsamples_server_side(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Issue #161: ``every_nth=N`` returns 1 point in N ordered by timestamp."""
+    _seed_route_with_hr(seeded_conn, "wh_n", point_count=10)
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh_n", every_nth=5)
+    # 10 points downsampled by 5 → indices 0 and 5 = 2 surviving rows.
+    assert payload["total"] == 2
+    assert len(payload["items"]) == 2
+    assert payload["next_offset"] is None
+
+
+def test_get_workout_route_every_nth_one_is_noop(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """every_nth=1 is a no-op (matches default behaviour)."""
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh1", every_nth=1)
+    assert payload["total"] == 2
+
+
+def test_get_workout_route_every_nth_out_of_range_rejected(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """every_nth must be between 1 and 1000."""
+    fn = _bind(get_workout_route, seeded_conn)
+    err_low = asyncio.run(fn(workout_hash="wh1", every_nth=0))
+    assert err_low.startswith("Error: every_nth must be between 1 and 1000")
+    err_high = asyncio.run(fn(workout_hash="wh1", every_nth=10_000))
+    assert err_high.startswith("Error: every_nth must be between 1 and 1000")
+
+
+def test_get_workout_route_with_heart_rate_attaches_nearest(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Issue #162: ``with_heart_rate=True`` joins the nearest HR sample."""
+    _seed_route_with_hr(seeded_conn, "wh_hr", point_count=3)
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh_hr", with_heart_rate=True)
+    assert payload["total"] == 3
+    first = payload["items"][0]
+    assert first["heart_rate"] == 120.0  # co-located sample for rp_n0
+    assert first["heart_rate_offset_secs"] == 0.0
+
+
+def test_get_workout_route_with_heart_rate_null_when_no_sample(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """No HR sample within ±30s → heart_rate is null."""
+    # wh1 has route points at 10:00:00 and 10:00:05; seeded HR samples
+    # for the wh1 row are at 10:01:30 (>60s away) so the LATERAL join
+    # returns NULL.
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh1", with_heart_rate=True)
+    assert all(item["heart_rate"] is None for item in payload["items"])
+    assert all(item["heart_rate_offset_secs"] is None for item in payload["items"])
+
+
+def test_get_workout_route_every_nth_and_with_heart_rate_compose(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Stride filter runs BEFORE the LATERAL join (only kept points get joined)."""
+    _seed_route_with_hr(seeded_conn, "wh_combo", point_count=6)
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh_combo", every_nth=3, with_heart_rate=True)
+    # 6 points / 3 stride = indices 0 and 3 → 2 surviving rows.
+    assert payload["total"] == 2
+    assert payload["items"][0]["heart_rate"] == 120.0
+    assert payload["items"][1]["heart_rate"] == 123.0
+
+
 def test_get_workout_route_db_error_path(empty_conn: duckdb.DuckDBPyConnection) -> None:
     """Downstream binder errors propagate as ``Error: ...`` strings."""
     seed_one_import(empty_conn)
