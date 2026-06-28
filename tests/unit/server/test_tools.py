@@ -277,12 +277,14 @@ def test_get_activity_summaries_with_filters(
 
 
 def test_get_workout_route_default(seeded_conn: duckdb.DuckDBPyConnection) -> None:
-    """Issue #108 (PR-E): unified ``{items, total, next_offset}`` envelope."""
+    """Issue #108 (PR-E) + v0.4.1 #160: envelope adds size-budget fields."""
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="wh1")
     assert payload["total"] == 2
     assert len(payload["items"]) == 2
     assert payload["next_offset"] is None
+    assert payload["truncated_by_size"] is False
+    assert payload["size_budget_bytes"] == 950_000
     assert "has_more" not in payload
 
 
@@ -313,7 +315,13 @@ def test_get_workout_route_unknown_hash_returns_empty_envelope(
     """A missing workout still returns a valid envelope (total=0)."""
     fn = _bind(get_workout_route, seeded_conn)
     payload = _call(fn, workout_hash="nope")
-    assert payload == {"items": [], "total": 0, "next_offset": None}
+    assert payload == {
+        "items": [],
+        "total": 0,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
 
 
 def test_get_workout_route_db_error_path(empty_conn: duckdb.DuckDBPyConnection) -> None:
@@ -361,6 +369,87 @@ def test_get_workout_route_negative_limit_errors(
     fn = _bind(get_workout_route, seeded_conn)
     out = asyncio.run(fn(workout_hash="wh1", limit=-5))
     assert out == "Error: limit must be >= 1"
+
+
+def test_get_workout_route_rounds_numeric_fields(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """v0.4.1 (issue #160): per-field rounding pins the wire payload size.
+
+    Insert a row whose raw values exceed the documented precision and
+    confirm the envelope's items list rounds them down to the
+    documented (sensor-equivalent) precision: lat/lon to 6 decimals,
+    elevation to 1, speed to 3, course to 1. Pre-fix the raw float
+    values reached the wire verbatim, so a long-form workout could
+    blow the host transport's 1 MB ceiling.
+    """
+    seeded_conn.execute(
+        "INSERT INTO route_points "
+        "(point_hash, workout_hash, latitude, longitude, elevation, "
+        "timestamp, speed, course, h_accuracy, v_accuracy, import_id) "
+        "VALUES ('pH9', 'whR9', 35.1234567899, 139.0123456789, 12.34567, "
+        "TIMESTAMPTZ '2024-06-17 04:58:39+00', 4.567891, 123.4567, "
+        "NULL, NULL, 'imp1')"
+    )
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="whR9")
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["latitude"] == 35.123457
+    assert item["longitude"] == 139.012346
+    assert item["elevation"] == 12.3
+    assert item["speed"] == 4.568
+    assert item["course"] == 123.5
+
+
+def test_get_workout_route_handles_null_numeric_fields(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A row with NULL elevation / speed / course keeps the NULLs intact.
+
+    ``_round_route_point`` guards every ``round`` call with an
+    ``isinstance(..., float)`` check; pinning the NULL-passthrough
+    behaviour confirms the guards never coerce ``None`` to ``0.0``.
+    """
+    seeded_conn.execute(
+        "INSERT INTO route_points "
+        "(point_hash, workout_hash, latitude, longitude, elevation, "
+        "timestamp, speed, course, h_accuracy, v_accuracy, import_id) "
+        "VALUES ('pH_n', 'whN', 35.0, 139.0, NULL, "
+        "TIMESTAMPTZ '2024-06-17 04:58:39+00', NULL, NULL, NULL, NULL, 'imp1')"
+    )
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="whN")
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["elevation"] is None
+    assert item["speed"] is None
+    assert item["course"] is None
+    assert item["latitude"] == 35.0
+    assert item["longitude"] == 139.0
+
+
+def test_get_workout_route_truncates_by_size_when_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """v0.4.1 (issue #160): the size-budget clamp clips items and flags it.
+
+    Lower the budget to a value that fits one of the seeded rows but
+    not both, then assert the envelope reports ``truncated_by_size:
+    true`` and exposes a usable ``next_offset`` so the caller can
+    page the rest.
+    """
+    from apple_health_mcp.server.tools import get_workout_route as module
+
+    monkeypatch.setattr(module, "_SIZE_BUDGET_BYTES", 130)
+    fn = _bind(get_workout_route, seeded_conn)
+    payload = _call(fn, workout_hash="wh1")
+    assert payload["truncated_by_size"] is True
+    assert payload["total"] == 2
+    assert len(payload["items"]) < 2
+    assert payload["next_offset"] is not None
+    assert payload["size_budget_bytes"] == 130
 
 
 # --- envelope helper: review F3 (limit < 1 rejected uniformly) --------------
@@ -448,7 +537,13 @@ def test_get_workout_route_envelope_offset_past_end_keeps_total(
     """F1 applies to ``get_workout_route`` as well."""
     fn = _bind(get_workout_route, seeded_conn)
     page = _call(fn, workout_hash="wh1", limit=5, offset=99)
-    assert page == {"items": [], "total": 2, "next_offset": None}
+    assert page == {
+        "items": [],
+        "total": 2,
+        "next_offset": None,
+        "truncated_by_size": False,
+        "size_budget_bytes": 950_000,
+    }
 
 
 # --- get_heart_rate_samples --------------------------------------------------
