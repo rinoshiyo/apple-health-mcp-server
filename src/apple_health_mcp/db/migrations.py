@@ -152,6 +152,28 @@ def _ensure_version_table(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def schema_version_is_stale(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Return True when the DB's ``schema_version`` trails CURRENT but is non-zero.
+
+    Mirrors the guard inside :func:`apply_pending_migrations`: a freshly
+    created DB (no ``schema_version`` row, or 0) is *not* stale -- it has
+    simply not been stamped yet. An existing DB whose persisted version
+    is between 1 and ``CURRENT_SCHEMA_VERSION - 1`` (i.e. it was imported
+    under an older package release) is stale; downstream callers in
+    v0.4.1+ react by either surfacing the ``NEEDS_REIMPORT`` data-state
+    envelope (read path) or auto-resetting the DB before the next import
+    (write path).
+
+    The probe runs purely as a SELECT and is safe on read-only handles.
+    A missing ``schema_version`` table reads as "fresh" (returns False).
+    """
+    if not _table_exists_in_main(conn, "schema_version"):
+        return False
+    row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+    current = int(row[0]) if row is not None and row[0] is not None else 0
+    return 0 < current < CURRENT_SCHEMA_VERSION
+
+
 def get_current_version(conn: duckdb.DuckDBPyConnection) -> int:
     """Return the persisted schema version, defaulting to 0 on a fresh DB."""
     _ensure_version_table(conn)

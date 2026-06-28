@@ -575,60 +575,45 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
         seeder.close()
 
 
-def test_get_connection_read_only_rejects_legacy_v2_db_with_reimport_guidance(
+def test_get_connection_read_only_opens_legacy_v2_db_without_raising(
     tmp_path: Path,
 ) -> None:
-    """Issue #124 (v0.3.0): a v0.2.x DB opened by ``serve`` raises
-    :class:`ConfigError` carrying the re-import guidance instead of
-    attempting an in-place upgrade.
+    """v0.4.1 (issue #156): a v0.2.x DB opened by ``serve`` is allowed through.
 
-    v0.3.0 dropped the automatic v0.2.x -> v0.3.0 migration because the
-    ``ALTER COLUMN ... TYPE`` step collided with the importer-created
-    ``idx_heart_rate_samples_parent`` index. The new contract: the
-    server refuses to start against a pre-v0.3.0 DB and points the
-    operator at the re-import recovery flow.
-
-    Post-/code-review fix: the error message must contain the resolved
-    ``db_path`` verbatim so the user can copy-paste the recovery
-    commands without manually substituting ``<db>`` placeholders. This
-    closes the README-vs-runtime drift the original implementation
-    surfaced.
+    The pre-v0.4.1 contract raised :class:`ConfigError` so the server
+    refused to boot against a stale DB, but that broke the v0.4
+    terminal-zero install pitch on Claude Desktop (Windows) where the
+    canonical DB path lives behind the MSIX AppContainer sandbox
+    redirect and is invisible to Explorer / PowerShell. The new
+    contract: open the DB anyway and rely on
+    :func:`server.data_state.check_data_state` to surface
+    ``NEEDS_REIMPORT`` so the agent triggers the
+    ``list_zips`` + ``import_zip`` recovery path.
     """
-    from apple_health_mcp.db.migrations import _reimport_required_message
-
     db_path = tmp_path / "legacy_v2.duckdb"
     _seed_legacy_v2_db(db_path)
 
-    with pytest.raises(ConfigError) as excinfo:
-        get_connection(db_path, read_only=True)
-    # Anchor on the canonical message rather than substring fragments
-    # so a future drift in the wording (extra prefix, reordered
-    # phrases, accidental duplicate URL) breaks the test.
-    assert str(excinfo.value) == _reimport_required_message(2, db_path)
-    # And spot-check that the literal path made it through (defends
-    # against a future refactor that accidentally re-introduces the
-    # ``<db>`` placeholder by dropping the path argument somewhere
-    # along the call chain).
-    assert str(db_path) in str(excinfo.value)
-    assert "<db>" not in str(excinfo.value)
+    conn = get_connection(db_path, read_only=True)
+    try:
+        # The legacy DB still opens cleanly; the read path now relies
+        # on ``check_data_state`` to surface NEEDS_REIMPORT.
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        assert row is not None and row[0] == 2
+    finally:
+        conn.close()
 
 
-def test_get_connection_read_only_rejects_legacy_v4_db_with_reimport_guidance(
+def test_get_connection_read_only_opens_legacy_v4_db_without_raising(
     tmp_path: Path,
 ) -> None:
-    """v0.4 (issue #148): a v=4 DB (the v0.3.0 stable baseline) opened by
-    ``serve`` after the v0.4 / schema_version=5 bump raises
-    :class:`ConfigError` with the canonical re-import guidance.
+    """v0.4.1 (issue #156): a v=4 DB no longer makes ``serve`` startup raise.
 
-    Covers the read-only probe path (``_migrate_if_needed``) for the v=4
-    case explicitly, in addition to the writable-path coverage
-    ``test_apply_pending_migrations_rejects_v4_db_after_v0_4_zip_source_bump``
-    already pins. Both paths share their re-import message, so a future
-    regression that special-cases v=2 in either path would surface here
-    instead of as a runtime crash for the first v0.3.x user who upgraded.
+    Mirrors the v0.4 test that asserted the legacy ConfigError path; the
+    refusal is gone so the data-state machine can surface
+    ``NEEDS_REIMPORT`` on the next tool call. ``import_zip`` then drives
+    the orchestrator's fresh-reset path.
     """
     from apple_health_mcp.db.migrations import (
-        _reimport_required_message,
         set_current_version,
     )
     from apple_health_mcp.db.schema import ensure_schema
@@ -636,40 +621,32 @@ def test_get_connection_read_only_rejects_legacy_v4_db_with_reimport_guidance(
     db_path = tmp_path / "legacy_v4.duckdb"
     seeder = duckdb.connect(str(db_path), read_only=False)
     try:
-        # The v=4 baseline is the v0.3.0 stable schema. Build it via
-        # ensure_schema (which lays down the current canonical shape
-        # including the v0.4 source_zip_* columns -- that's fine; the
-        # rejection path looks at schema_version, not at column
-        # presence) and stamp the version sentinel at 4.
         ensure_schema(seeder)
         set_current_version(seeder, 4)
         seeder.execute("CHECKPOINT;")
     finally:
         seeder.close()
 
-    with pytest.raises(ConfigError) as excinfo:
-        get_connection(db_path, read_only=True)
-    assert str(excinfo.value) == _reimport_required_message(4, db_path)
-    assert str(db_path) in str(excinfo.value)
-    assert "<db>" not in str(excinfo.value)
+    conn = get_connection(db_path, read_only=True)
+    try:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        assert row is not None and row[0] == 4
+    finally:
+        conn.close()
 
 
-def test_get_connection_writable_rejects_legacy_v4_db_with_reimport_guidance(
+def test_get_connection_writable_opens_legacy_v4_db_without_raising(
     tmp_path: Path,
 ) -> None:
-    """v0.4 (issue #148): the writable serve path also rejects pre-v0.5 DBs.
+    """v0.4.1 (issue #156): the writable serve path also accepts stale DBs.
 
     The v0.4 server opens the connection ``read_only=False`` so the new
-    ``import_zip`` MCP tool can drive the importer inline. The legacy-DB
-    probe must fire on this path too -- a pre-v0.5 DB whose
-    schema_version trails CURRENT raises :class:`ConfigError` carrying
-    the re-import command, and the writable handle is closed before the
-    exception propagates so the DuckDB file lock does not survive a
-    failed startup. Otherwise an aborted server would leave the file
-    locked and the next attempt could not even open it to retry.
+    ``import_zip`` MCP tool can drive the importer inline. The new
+    contract: a stale DB opens cleanly; the next ``import_zip`` call
+    lands in the orchestrator's fresh-reset path and rebuilds the
+    schema before re-ingesting.
     """
     from apple_health_mcp.db.migrations import (
-        _reimport_required_message,
         set_current_version,
     )
     from apple_health_mcp.db.schema import ensure_schema
@@ -683,12 +660,12 @@ def test_get_connection_writable_rejects_legacy_v4_db_with_reimport_guidance(
     finally:
         seeder.close()
 
-    with pytest.raises(ConfigError) as excinfo:
-        get_connection(db_path, read_only=False)
-    assert str(excinfo.value) == _reimport_required_message(4, db_path)
-    # The file lock must be released so the file is openable again.
-    reopen = duckdb.connect(str(db_path), read_only=True)
-    reopen.close()
+    conn = get_connection(db_path, read_only=False)
+    try:
+        row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        assert row is not None and row[0] == 4
+    finally:
+        conn.close()
 
 
 def test_get_connection_writable_skips_probe_for_missing_file(

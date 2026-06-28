@@ -24,6 +24,7 @@ The audit memory ``project_data_audit_2026_06_21`` and the TZ memo
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -808,6 +809,65 @@ def populate_workout_vestigial_columns(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
     _logger.info("Vestigial column population complete")
+
+
+# Names of every table this package owns. Derived from the canonical
+# CREATE TABLE block at module-import time so adding a new table only
+# requires editing ``_CREATE_TABLES_SQL`` -- the fresh-reset helper and
+# the smoke-check ``TABLE_COUNT`` constant pick the change up
+# automatically. ``daily_record_stats`` is dropped by ``rebuild_daily_stats``
+# (CREATE OR REPLACE TABLE) rather than ensure_schema, so it appears on
+# the reset list below but not in the canonical table count.
+_CANONICAL_TABLE_NAMES: tuple[str, ...] = tuple(
+    re.findall(r"\bCREATE TABLE IF NOT EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\b", _CREATE_TABLES_SQL)
+)
+
+# Extra tables to drop during ``reset_db_for_fresh_import`` that are NOT
+# declared by ``_CREATE_TABLES_SQL`` but live in the same database:
+# ``daily_record_stats`` is materialised by ``rebuild_daily_stats``, and
+# ``schema_version`` is the sentinel ``apply_pending_migrations`` owns.
+_AUXILIARY_RESET_TABLES: tuple[str, ...] = ("daily_record_stats", "schema_version")
+
+
+def reset_db_for_fresh_import(conn: duckdb.DuckDBPyConnection) -> None:
+    """Drop every package-owned table so the next ``ensure_schema`` rebuilds fresh.
+
+    v0.4.1 (issue #156) recovery hook. Before this helper the package
+    refused to open a database whose persisted ``schema_version``
+    trailed ``CURRENT_SCHEMA_VERSION``; the user was told to ``rm`` the
+    file and re-run the CLI. That contract broke the v0.4
+    terminal-zero install pitch for Claude Desktop users on Windows
+    (the canonical default path lives behind the MSIX AppContainer
+    sandbox redirect and is invisible to Explorer / PowerShell). The
+    new contract: open the DB anyway, surface ``NEEDS_REIMPORT`` to
+    the agent, and let the next ``import_zip`` call land here to
+    drop+rebuild the schema in place.
+
+    Every table the package declares (``_CREATE_TABLES_SQL``) plus the
+    materialised ``daily_record_stats`` and the migration sentinel
+    ``schema_version`` table is dropped under a single transaction so
+    a crash mid-reset cannot leave a partial schema behind. The
+    follow-up ``ensure_schema`` + ``apply_pending_migrations`` call
+    pair rebuilds the canonical shape and stamps the current sentinel.
+
+    The caller MUST hold a writable connection; the function does not
+    take a lock argument because the v0.4 importer entry point
+    (`orchestrator.run_import`) already acquires the server lock for
+    its whole body.
+    """
+    _logger.info(
+        "Resetting database for fresh import: dropping %d tables",
+        len(_CANONICAL_TABLE_NAMES) + len(_AUXILIARY_RESET_TABLES),
+    )
+    conn.execute("BEGIN TRANSACTION;")
+    try:
+        for name in (*_CANONICAL_TABLE_NAMES, *_AUXILIARY_RESET_TABLES):
+            conn.execute(f"DROP TABLE IF EXISTS {name};")
+        conn.execute("COMMIT;")
+    except BaseException:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK;")
+        raise
 
 
 def rebuild_daily_stats(conn: duckdb.DuckDBPyConnection) -> None:

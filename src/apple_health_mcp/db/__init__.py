@@ -12,6 +12,7 @@ from apple_health_mcp.db.migrations import (
     CURRENT_SCHEMA_VERSION,
     apply_pending_migrations,
     get_current_version,
+    schema_version_is_stale,
     set_current_version,
 )
 from apple_health_mcp.db.schema import (
@@ -20,6 +21,7 @@ from apple_health_mcp.db.schema import (
     ensure_schema,
     populate_workout_vestigial_columns,
     rebuild_daily_stats,
+    reset_db_for_fresh_import,
 )
 
 __all__ = [
@@ -34,6 +36,8 @@ __all__ = [
     "get_in_memory_connection",
     "populate_workout_vestigial_columns",
     "rebuild_daily_stats",
+    "reset_db_for_fresh_import",
     "resolve_db_path",
+    "schema_version_is_stale",
     "set_current_version",
 ]

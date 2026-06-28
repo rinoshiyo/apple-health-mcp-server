@@ -1,7 +1,7 @@
 """DataState helper for the v0.4 ZIP-flow read-tool gate (issue #148).
 
 Every read-oriented MCP tool short-circuits before its own SQL runs to
-report one of three states:
+report one of four states:
 
 * ``READY`` — the ``imports`` table holds at least one row, so a successful
   Apple Health import has happened and the tool's query will return real
@@ -15,6 +15,13 @@ report one of three states:
   configured. The agent is asked to call ``list_zips`` to discover the
   ZIPs already in the drop-zone and trigger ``import_zip`` on the chosen
   one.
+* ``NEEDS_REIMPORT`` — the persisted ``schema_version`` trails the
+  package's ``CURRENT_SCHEMA_VERSION`` (v0.4.1 / issue #156). The DB was
+  imported under an older package release; the agent is asked to call
+  ``list_zips`` and re-trigger ``import_zip`` on the chosen ZIP. The
+  importer's fresh-reset path then drops every package-owned table and
+  rebuilds the canonical schema before re-ingesting -- the user never
+  has to touch a terminal or hunt down the MSIX sandbox path.
 
 The structured error payload (``{state, reason, suggested_action,
 human_message}``) gives the agent enough information to branch on
@@ -47,11 +54,12 @@ EXPORT_ZIPS_DIR_ENV_VAR = "APPLE_HEALTH_EXPORT_ZIPS_DIR"
 
 
 class DataState(StrEnum):
-    """Three-state machine for whether a read tool can proceed."""
+    """Four-state machine for whether a read tool can proceed."""
 
     READY = "READY"
     NEEDS_CONFIG = "NEEDS_CONFIG"
     NEEDS_IMPORT = "NEEDS_IMPORT"
+    NEEDS_REIMPORT = "NEEDS_REIMPORT"
 
 
 # Static envelope payloads. The two error states carry only constant
@@ -98,6 +106,25 @@ _STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
         indent=2,
         ensure_ascii=False,
     ),
+    DataState.NEEDS_REIMPORT: json.dumps(
+        {
+            "state": DataState.NEEDS_REIMPORT.value,
+            "reason": (
+                "database was imported under an older package release; "
+                "schema_version trails the current package."
+            ),
+            "suggested_action": "call_list_zips",
+            "human_message": (
+                "The database was imported under an older version of "
+                "apple-health-mcp-server and is no longer compatible. "
+                "Call list_zips to find your Apple Health ZIP, then "
+                "import_zip(id) to re-import -- the old data will be "
+                "replaced automatically (no terminal commands needed)."
+            ),
+        },
+        indent=2,
+        ensure_ascii=False,
+    ),
 }
 
 
@@ -110,20 +137,33 @@ def check_data_state(
 
     Order of evaluation (most → least specific):
 
-    1. The ``imports`` table has at least one row → ``READY``. By
+    1. ``schema_version`` is set but trails ``CURRENT_SCHEMA_VERSION`` →
+       ``NEEDS_REIMPORT`` (v0.4.1 / issue #156). The DB carries usable
+       rows under an older package release; the agent triggers
+       ``list_zips`` + ``import_zip`` and the importer's fresh-reset
+       path replaces the schema before re-ingesting.
+    2. The ``imports`` table has at least one row → ``READY``. By
        construction the orchestrator only INSERTs after the pipeline
        succeeds, so a present row is treated as a successful import
        without an explicit ``status='success'`` column. Tier-2
        incremental re-imports also write a row, so a serve process
        opened against a partially-replicated DB still reports READY
        once any historical import landed.
-    2. ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` env unset / blank-after-strip →
+    3. ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` env unset / blank-after-strip →
        ``NEEDS_CONFIG``. The MCPB user_config injects this env at server
        launch; absence means the operator never picked a drop-zone
        directory.
-    3. Env set but no successful import yet → ``NEEDS_IMPORT``. The
+    4. Env set but no successful import yet → ``NEEDS_IMPORT``. The
        ``list_zips`` tool can now discover ZIPs in that directory and
        walk the user through ``import_zip``.
+
+    The schema-staleness probe is intentionally ordered above the
+    READY check: an old-shape DB may still have ``imports`` rows that
+    a downstream read tool would happily try to query, but the row
+    bodies were stamped under columns the package no longer
+    recognises. Surfacing ``NEEDS_REIMPORT`` first keeps the user out
+    of a maze of partial-shape errors and lands them on the recovery
+    path immediately.
 
     The probe is intentionally defensive: a missing ``imports`` table
     (alien DB, cold install, the bootstrap-empty path
@@ -139,15 +179,37 @@ def check_data_state(
     single-thread test callers.
     """
     if lock is None:
+        stale = _safe_schema_stale_probe(conn)
         has_rows = _imports_table_has_rows(conn)
     else:
         with lock:
+            stale = _safe_schema_stale_probe(conn)
             has_rows = _imports_table_has_rows(conn)
+    if stale:
+        return DataState.NEEDS_REIMPORT
     if has_rows:
         return DataState.READY
     if (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip():
         return DataState.NEEDS_IMPORT
     return DataState.NEEDS_CONFIG
+
+
+def _safe_schema_stale_probe(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Run :func:`schema_version_is_stale` defensively, returning False on error.
+
+    Mirrors :func:`_imports_table_has_rows`'s catch-all: any DuckDB
+    surprise (catalog miss on an alien DB, transient file-lock error,
+    etc.) reads as "fresh" so the function falls through to the
+    friendlier NEEDS_CONFIG / NEEDS_IMPORT tiers instead of surfacing
+    a raw SQL exception to whichever tool happened to be called first.
+    """
+    from apple_health_mcp.db.migrations import schema_version_is_stale
+
+    try:
+        return schema_version_is_stale(conn)
+    except Exception as exc:
+        _logger.debug("schema_version_is_stale probe failed (%s); treating as fresh", exc)
+        return False
 
 
 def _imports_table_has_rows(conn: duckdb.DuckDBPyConnection) -> bool:
