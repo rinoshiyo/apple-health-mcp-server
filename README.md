@@ -79,8 +79,10 @@ each [GitHub Release](https://github.com/rinoshiyo/apple-health-mcp-server/relea
 
 Then:
 
-1. Download the latest `apple-health-mcp-server-vX.Y.Z.mcpb` from the
-   release assets
+1. Download the latest `apple-health-mcp-server-vX.Y.Z.mcpb` bundle
+   from the [latest release](https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest)
+   (the page resolves to the current `vX.Y.Z` automatically so the
+   link does not rot when a new version ships)
 2. Open Claude Desktop's **Settings → Connectors** panel
 3. Drag-and-drop the `.mcpb` file onto the panel — Claude Desktop will
    install it and prompt to enable the server

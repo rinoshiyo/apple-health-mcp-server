@@ -9,6 +9,16 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-28
+
+### Documentation
+
+- **README install step links to `/releases/latest`** (issue #114).
+  Both `README.md` and `README.ja.md` Claude Desktop install snippets
+  now link to the latest-release page that auto-resolves to the
+  current `vX.Y.Z`, so the docs and the LP install path stay in sync
+  with no copy churn on every release.
+
 ### Changed
 
 - **`get_workout_route` payload trimmed and size-clamped** (issue #160).

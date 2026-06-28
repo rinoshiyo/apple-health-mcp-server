@@ -76,8 +76,10 @@ Claude Desktop で最も簡単な手順は、 各
 
 その後:
 
-1. リリースアセットから最新の `apple-health-mcp-server-vX.Y.Z.mcpb`
-   をダウンロード
+1. [最新リリースページ](https://github.com/rinoshiyo/apple-health-mcp-server/releases/latest)
+   から最新の `apple-health-mcp-server-vX.Y.Z.mcpb` バンドルを
+   ダウンロード（リンクは現行 `vX.Y.Z` に自動解決されるため、
+   新バージョンが出ても URL は腐りません）
 2. Claude Desktop の **Settings → Connectors** パネルを開く
 3. `.mcpb` ファイルをパネルにドラッグ&ドロップ — Claude Desktop が
    インストールしてサーバ有効化を確認するプロンプトを出します
