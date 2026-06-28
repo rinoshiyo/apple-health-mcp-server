@@ -11,10 +11,12 @@ resolution instead of paying for a second multi-GB sha pass.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import tempfile
 import zipfile
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING
 
 from apple_health_mcp.importers.orchestrator import run_import
@@ -36,6 +38,7 @@ def extract_zip_and_import(
     conn: duckdb.DuckDBPyConnection | None = None,
     import_id: str | None = None,
     force: bool = False,
+    lock: Lock | None = None,
 ) -> ImportStats:
     """Extract ``zip_path`` into a tempdir and run the full import pipeline.
 
@@ -57,6 +60,15 @@ def extract_zip_and_import(
     ``run_import`` (it raises ``ValueError`` when both are passed).
     Tempdir cleanup is automatic via ``TemporaryDirectory``; the
     extracted files do NOT survive beyond the ``run_import`` call.
+
+    ``lock`` (v0.5, issue #173) is held ONLY around the ``run_import``
+    call, NOT during the multi-second ZIP extraction. Pre-v0.5 the
+    MCP ``import_zip`` tool wrapped the whole call in ``with lock:``,
+    so concurrent read tools were blocked for the full extract +
+    import window. The helper now acquires the lock at the importer
+    boundary so concurrent reads only wait for the run_import phase.
+    ``None`` is fine for single-thread callers (CLI: no shared
+    connection, so no lock needed).
     """
     with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
         extracted_root = Path(tmpdir)
@@ -91,14 +103,19 @@ def extract_zip_and_import(
             import_root = extracted_root / "apple_health_export"
         else:
             import_root = extracted_root
-        return run_import(
-            import_root,
-            db_path=db_path,
-            conn=conn,
-            import_id=import_id,
-            force=force,
-            source_zip=source_zip,
-        )
+        # v0.5 (issue #173): hold the lock only around the importer
+        # call so concurrent read tools do not pay the multi-second
+        # extract phase.
+        lock_ctx = lock if lock is not None else contextlib.nullcontext()
+        with lock_ctx:
+            return run_import(
+                import_root,
+                db_path=db_path,
+                conn=conn,
+                import_id=import_id,
+                force=force,
+                source_zip=source_zip,
+            )
 
 
 __all__ = ["extract_zip_and_import"]

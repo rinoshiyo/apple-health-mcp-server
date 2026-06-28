@@ -67,6 +67,43 @@ def stream_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def inspect_and_hash_zip(path: Path) -> tuple[ZipInspection, str]:
+    """One-pass: stream sha256 over ``path`` AND classify the ZIP shape.
+
+    v0.5 (issue #174): the CLI's import flow previously made three
+    separate ``open()`` calls per ZIP — ``inspect_zip`` (central
+    directory), ``stream_sha256`` (full read for hash), and the
+    extraction's own ZipFile open. On a multi-GB ZIP the second
+    read added ~5-10 s of wall-clock even with the page cache warm.
+    Folding inspect + hash into a single file open removes that
+    extra pass; the inspection still needs the central directory
+    (which lives at the end of the file), so we hash sequentially
+    first, then seek(0) back for ZipFile's random-access reads.
+
+    Returns ``(ZipInspection.INVALID_ZIP, sha)`` when the file's
+    bytes hash cleanly but ``ZipFile`` rejects the archive — the
+    sha is still meaningful for caching the "this file's bytes
+    were already rejected" outcome. Returns
+    ``(VALID_APPLE_HEALTH | VALID_NON_APPLE_HEALTH, sha)`` for
+    well-formed ZIPs.
+    """
+    hasher = hashlib.sha256()
+    with path.open("rb") as fp:
+        for chunk in iter(lambda: fp.read(SHA256_READ_CHUNK_BYTES), b""):
+            hasher.update(chunk)
+        sha = hasher.hexdigest()
+        fp.seek(0)
+        try:
+            with zipfile.ZipFile(fp) as zf:
+                names = zf.namelist()
+        except (zipfile.BadZipFile, OSError) as exc:
+            _logger.debug("zip inspect: %s is not a valid ZIP (%s)", path, exc)
+            return (ZipInspection.INVALID_ZIP, sha)
+    if any(name in APPLE_HEALTH_TOP_LEVEL_MARKERS for name in names):
+        return (ZipInspection.VALID_APPLE_HEALTH, sha)
+    return (ZipInspection.VALID_NON_APPLE_HEALTH, sha)
+
+
 def inspect_zip(path: Path) -> ZipInspection:
     """Classify ``path`` into one of the :class:`ZipInspection` states.
 
@@ -97,6 +134,7 @@ __all__ = [
     "ID_PREFIX_LEN",
     "SHA256_READ_CHUNK_BYTES",
     "ZipInspection",
+    "inspect_and_hash_zip",
     "inspect_zip",
     "is_apple_health_zip",
     "stream_sha256",

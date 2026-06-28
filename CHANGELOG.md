@@ -9,6 +9,24 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Performance
+
+- **`import_zip` releases the server lock during ZIP extraction**
+  (issue #173). Pre-v0.5 the MCP tool wrapped the full
+  `extract_zip_and_import` call in `with lock:`, so concurrent
+  read tools (`get_workouts`, `list_workouts`, etc.) were blocked
+  for the multi-second extraction phase on top of the importer's
+  own duration. v0.5 passes the lock INTO the helper and acquires
+  it only around the `run_import` call. Read tools now wait only
+  for the importer phase.
+- **CLI folds inspect + sha256 into a single file open** (issue #174).
+  `_zip_util.inspect_and_hash_zip` performs both classification and
+  sha256 streaming in one `open()` pass, replacing the previous
+  three-pass pattern (`inspect_zip` + `stream_sha256` + extractall).
+  Saves ~5-10 seconds of cold-cache I/O per CLI import on multi-GB
+  ZIPs. The MCP tool was unaffected — it already had the sha from
+  id resolution.
+
 ### Changed
 
 - **Size-budget clamp shared across every envelope-shaped read tool**

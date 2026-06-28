@@ -124,8 +124,7 @@ def import_cmd(
 
     from apple_health_mcp._zip_util import (
         ZipInspection,
-        inspect_zip,
-        stream_sha256,
+        inspect_and_hash_zip,
     )
     from apple_health_mcp.exceptions import AppleHealthMCPError
     from apple_health_mcp.importers.zip_extract import extract_zip_and_import
@@ -146,7 +145,10 @@ def import_cmd(
         )
         raise typer.Exit(code=1)
 
-    inspection = inspect_zip(zip_path)
+    # v0.5 (issue #174): inspect + hash in one file open. Pre-v0.5 the
+    # CLI made three separate file opens (inspect, stream sha256,
+    # extract); the combined helper folds inspect + hash into one.
+    inspection, sha = inspect_and_hash_zip(zip_path)
     if inspection == ZipInspection.INVALID_ZIP:
         _logger.error(
             "import failed: %s is not a valid ZIP archive. The file may be "
@@ -165,7 +167,6 @@ def import_cmd(
         raise typer.Exit(code=1)
 
     stat = zip_path.stat()
-    sha = stream_sha256(zip_path)
     mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
     source_zip = (sha, mtime, stat.st_size)
 

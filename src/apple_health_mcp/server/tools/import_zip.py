@@ -264,14 +264,18 @@ def _import_zip_sync(
     # import completes; the ``asyncio.to_thread`` wrap in the
     # handler keeps the event loop responsive to the MCP
     # transport's keepalives meanwhile.
+    # v0.5 (issue #173): the lock is now passed INTO
+    # ``extract_zip_and_import`` and acquired only around the
+    # ``run_import`` call. The multi-second ZIP extraction phase runs
+    # lock-free so concurrent read tools can keep serving queries.
     started = time.monotonic()
     try:
-        with lock:
-            stats = extract_zip_and_import(
-                selected,
-                source_zip=(selected_sha, mtime, size),
-                conn=conn,
-            )
+        stats = extract_zip_and_import(
+            selected,
+            source_zip=(selected_sha, mtime, size),
+            conn=conn,
+            lock=lock,
+        )
     except zipfile.BadZipFile as exc:
         # Extraction-phase failure only: ``zip_extract`` re-raises any
         # OSError from ``extractall`` as BadZipFile so the two
