@@ -1098,6 +1098,35 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
     assert list(rows[0].keys()) == expected_fields
 
 
+def test_get_import_history_short_circuits_on_schema_outdated() -> None:
+    """v0.5.1 #195 code-review (Angle C): gate fires before SELECT runs.
+
+    The SELECT references ``dedup_skipped`` (added in v=6), which is
+    absent from v=5-or-earlier imports shapes. Without the gate
+    ``get_import_history`` would surface a raw DuckDB
+    ``Catalog Error: Referenced column "dedup_skipped" not found`` on
+    a pre-v0.5 DB; the gate returns the typed envelope instead.
+    """
+    from apple_health_mcp.db import ensure_schema, get_in_memory_connection
+    from apple_health_mcp.db.migrations import set_current_version
+    from tests._helpers import seed_one_import
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        seed_one_import(conn)
+        set_current_version(conn, 5)
+        fn = _bind(get_import_history, conn)
+        raw = _call(fn)
+        # The Layer 1 wire shape on this path is the data_state envelope
+        # (a dict), not the regular rows list. ``_call`` already
+        # json.loads it; assert the envelope keys directly.
+        assert raw["state"] == "NEEDS_REIMPORT"
+        assert raw["reason"] == "schema_outdated"
+    finally:
+        conn.close()
+
+
 # --- list_state_of_mind ------------------------------------------------------
 
 

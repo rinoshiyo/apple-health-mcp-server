@@ -109,23 +109,68 @@ _STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
     DataState.NEEDS_REIMPORT: json.dumps(
         {
             "state": DataState.NEEDS_REIMPORT.value,
-            "reason": (
-                "database was imported under an older package release; "
-                "schema_version trails the current package."
-            ),
-            "suggested_action": "call_list_zips",
+            "reason": "schema_outdated",
+            "suggested_action": "call_import_zip",
             "human_message": (
                 "The database was imported under an older version of "
-                "apple-health-mcp-server and is no longer compatible. "
-                "Call list_zips to find your Apple Health ZIP, then "
-                "import_zip(id) to re-import -- the old data will be "
-                "replaced automatically (no terminal commands needed)."
+                "apple-health-mcp-server (schema_version trails the "
+                "current package, or expected package-owned tables "
+                "such as import_jobs are missing). pre-v1.0 alpha "
+                "does not ship in-place migrations. Recovery: call "
+                "import_zip(id=...) on your current Apple Health ZIP "
+                "(use list_zips first only if you also need to "
+                "discover the id) -- the importer detects the stale "
+                "schema, drops every package-owned table, rebuilds "
+                "from scratch, and re-ingests the ZIP in one shot. "
+                "No terminal commands needed. If "
+                f"{EXPORT_ZIPS_DIR_ENV_VAR} is unset, configure it "
+                "first (Claude Desktop: Settings → MCP → "
+                "apple-health-mcp-server → Export ZIPs directory; "
+                "other MCP clients: set the env var directly)."
             ),
         },
         indent=2,
         ensure_ascii=False,
     ),
 }
+
+
+def _import_jobs_table_missing(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Return True when the v0.5 ``import_jobs`` table is provably absent.
+
+    A v=6-stamped DB (the current package schema) always carries this
+    table because :func:`db.schema.ensure_schema` creates it under
+    ``CREATE TABLE IF NOT EXISTS``. Its absence on an otherwise-populated
+    DB means the file was stamped before v0.5 (issue #157 / v=5 or
+    earlier) but the ``schema_version`` sentinel did not survive a
+    fresh-reset attempt, so :func:`schema_version_is_stale` cannot detect
+    the lag through the version sentinel alone. Probing the table
+    directly closes the gap.
+
+    On a probe exception (alien DB, transient catalog hiccup, etc.)
+    return ``False`` and let the result fall through to the healthier
+    state-machine tiers (the next ``import_zip`` will eventually
+    surface the underlying error). This matches the defensive
+    semantic of :func:`_safe_schema_stale_probe` / :func:`_imports_table_has_rows`,
+    which both return the less-restrictive value on exception. Inverting
+    the default to True ("missing") would mis-route a healthy v=6 DB
+    into NEEDS_REIMPORT on a transient catalog blip and tell the user
+    to re-import legitimate data — a destructive recommendation that
+    outweighs the cost of letting a real corruption surface one tool
+    call later via the regular DuckDB error path.
+    """
+    # Reuse the existing parameterised probe in db.migrations rather
+    # than hand-rolling a third copy of the duckdb_tables() lookup (a
+    # twin already lives in db.connection._table_exists_in_main_conn).
+    # Lazy import matches the rest of this module's pattern and keeps
+    # the parse-time graph clean.
+    from apple_health_mcp.db.migrations import _table_exists_in_main
+
+    try:
+        return not _table_exists_in_main(conn, "import_jobs")
+    except Exception as exc:
+        _logger.debug("import_jobs presence probe failed (%s); treating as present", exc)
+        return False
 
 
 def check_data_state(
@@ -178,20 +223,37 @@ def check_data_state(
     SELECT does not race the tool's own query. ``None`` is fine for
     single-thread test callers.
     """
+
+    # Short-circuit ladder (probes only run when their result can still
+    # change the outcome): stale first, then has_rows, then -- on
+    # has_rows=True only -- the jobs_missing probe. This drops the
+    # per-tool-call DuckDB probe count from 3 → 1-2 on most paths
+    # (post-#195 code-review Angle Simplification / Efficiency).
+    def _probe() -> DataState:
+        if _safe_schema_stale_probe(conn):
+            return DataState.NEEDS_REIMPORT
+        if _imports_table_has_rows(conn):
+            # v0.5.1 #188: a populated DB whose ``import_jobs`` table
+            # is absent is structurally outdated -- a v=5-or-earlier
+            # DB whose ``schema_version`` row was lost before
+            # ``schema_version_is_stale`` could observe the lag. We
+            # treat it as schema_outdated rather than falling through
+            # to READY (which would let the next import_zip surface a
+            # raw ``Catalog Error: Table import_jobs does not exist``).
+            # Fresh installs are safe: ``_materialise_empty_db`` runs
+            # ``ensure_schema`` (which creates ``import_jobs``) before
+            # this probe ever fires.
+            if _import_jobs_table_missing(conn):
+                return DataState.NEEDS_REIMPORT
+            return DataState.READY
+        if (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip():
+            return DataState.NEEDS_IMPORT
+        return DataState.NEEDS_CONFIG
+
     if lock is None:
-        stale = _safe_schema_stale_probe(conn)
-        has_rows = _imports_table_has_rows(conn)
-    else:
-        with lock:
-            stale = _safe_schema_stale_probe(conn)
-            has_rows = _imports_table_has_rows(conn)
-    if stale:
-        return DataState.NEEDS_REIMPORT
-    if has_rows:
-        return DataState.READY
-    if (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip():
-        return DataState.NEEDS_IMPORT
-    return DataState.NEEDS_CONFIG
+        return _probe()
+    with lock:
+        return _probe()
 
 
 def _safe_schema_stale_probe(conn: duckdb.DuckDBPyConnection) -> bool:
@@ -250,6 +312,33 @@ def build_state_error_payload(state: DataState) -> str:
         raise ValueError(
             f"build_state_error_payload called with non-error state {state!r}"
         ) from None
+
+
+def block_if_schema_outdated(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    lock: Lock | None = None,
+) -> str | None:
+    """Return the ``schema_outdated`` envelope when the DB is outdated, else ``None``.
+
+    Used by the v0.4+ ZIP-flow write tools (``list_zips``, ``import_zip``,
+    ``get_import_status``) that must tolerate ``NEEDS_CONFIG`` /
+    ``NEEDS_IMPORT`` -- those states are exactly what these tools exist
+    to recover from -- but must NOT proceed against a stale schema, since
+    the wire path would otherwise surface a raw ``Catalog Error: Table
+    import_jobs does not exist`` from DuckDB (v0.5.0 dogfood observation:
+    a v=5-or-earlier DB opened against a v0.5.0 server hit exactly that
+    error before the tool's own error handling could fire).
+
+    Read tools route through :func:`require_ready_or_state_error` and get
+    the full four-state coverage; this helper exists for the
+    write-side surface where the NEEDS_CONFIG / NEEDS_IMPORT states are
+    *not* errors.
+    """
+    state = check_data_state(conn, lock=lock)
+    if state == DataState.NEEDS_REIMPORT:
+        return build_state_error_payload(state)
+    return None
 
 
 def require_ready_or_state_error(
