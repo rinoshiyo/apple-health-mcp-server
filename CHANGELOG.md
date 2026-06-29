@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-29
+
 ### Added
 
 - **`import_zip` is now job-based async; new `get_import_status` MCP
