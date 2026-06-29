@@ -123,9 +123,14 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         else:
             hint = (
                 "Pick an entry by ``id`` and call import_zip(id=…). The "
-                "import takes 1-2 minutes for a typical multi-GB export; "
-                "Claude will wait synchronously. Already-imported ZIPs "
-                "(imported=true) no-op in milliseconds."
+                "call returns immediately with a ``job_id``; poll "
+                "get_import_status(job_id=…) every 10-30 seconds to "
+                "track progress and retrieve the final result. Total "
+                "import time depends on the user's machine (~45s on a "
+                "fast NVMe + recent CPU, several minutes on slower "
+                "hardware). Already-imported ZIPs (imported=true) "
+                "short-circuit synchronously in milliseconds without "
+                "spawning a worker."
             )
 
         return run_query_payload(

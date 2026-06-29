@@ -156,7 +156,14 @@ def test_list_zips_lists_apple_health_zip(
         assert entry["size"] == zip_path.stat().st_size
         assert entry["imported"] is False
         assert entry["is_apple_health"] is True
-        assert "import_zip" in str(out["hint"])
+        hint = str(out["hint"])
+        assert "import_zip" in hint
+        # v0.5.1 #187: the populated-list hint must steer the agent at
+        # the async polling flow (job_id + get_import_status), not the
+        # v0.4 synchronous wording that survived through 0.5.0.
+        assert "get_import_status" in hint
+        assert "job_id" in hint
+        assert "Claude will wait synchronously" not in hint
     finally:
         conn.close()
 
@@ -327,6 +334,35 @@ def test_import_zip_accepts_uppercase_hex_id(
         assert queued["id"] == sha[:8]
         assert job["status"] == "done"
         assert job["source_id"] == sha[:8]
+    finally:
+        conn.close()
+
+
+def test_import_zip_accepts_id_with_surrounding_whitespace(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Leading/trailing whitespace is trimmed before prefix matching.
+
+    v0.5.1 #191: the docstring previously demanded "verbatim" but the
+    implementation has always called ``.strip()``. Pin the tolerant
+    behaviour so any future tightening (re-adding a verbatim check)
+    is a deliberate breaking change rather than silent.
+    """
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    import hashlib
+
+    sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    db_path = tmp_path / "h.duckdb"
+    conn = duckdb.connect(str(db_path), read_only=False)
+    try:
+        ensure_schema(conn)
+        stamp_current_version(conn)
+        queued, job = _await_queued(conn, id=f"  {sha[:8]}  ")
+        assert queued["id"] == sha[:8]
+        assert job["status"] == "done"
     finally:
         conn.close()
 
