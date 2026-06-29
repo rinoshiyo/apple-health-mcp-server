@@ -102,6 +102,14 @@ v0.x.y disclaimer and the public-API scope.
   seconds on large ZIPs. The DB column name is unchanged, so
   `run_custom_query` against `imports.duration_secs` continues to
   work — only the MCP tool wire shape changes (issue #189).
+- `run_custom_query` now rejects `parquet_scan` / `parquet_metadata` /
+  `parquet_schema` / `sniff_csv` (validator denylist) and refuses
+  *every* fs / network function plus ATTACH / COPY / INSTALL / LOAD
+  at the engine level (`SET enable_external_access = false`). Saved
+  queries from v0.5.0 or earlier that pulled in a local parquet file
+  via `parquet_scan('/path/to/x.parquet')` now hit
+  `Function 'parquet_scan' is not allowed`. See the Security section
+  below for the rationale (issue #190).
 
 ## [0.5.0] - 2026-06-29
 

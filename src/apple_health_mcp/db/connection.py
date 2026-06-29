@@ -320,6 +320,14 @@ def _migrate_if_needed_via_separate_probe(db_path: Path) -> None:
     """
     probe = duckdb.connect(str(db_path), read_only=True)
     try:
+        # v0.5.1 #190 (post-#200 code-review Angle C): the probe runs
+        # only two hardcoded SELECTs today (table existence + MAX
+        # version), so the lockdown is defence-in-depth rather than a
+        # live exploit fix. Extending the probe later to read an
+        # attacker-controllable column would otherwise inherit a
+        # carve-out that is invisible by name from the production
+        # serve path.
+        _set_engine_safety_pragmas(probe)
         _migrate_if_needed_on_handle(probe, db_path)
     finally:
         probe.close()
@@ -445,6 +453,18 @@ def _materialise_empty_db(db_path: Path) -> None:
     try:
         bootstrap = duckdb.connect(str(tmp_path), read_only=False)
         try:
+            # v0.5.1 #190 (post-#200 code-review Angle C): apply the
+            # same engine-level lockdown the public ``get_connection``
+            # entry points apply. The bootstrap handle currently runs
+            # only package-controlled DDL (``ensure_schema`` +
+            # ``stamp_current_version``), so the lockdown is defence-
+            # in-depth rather than a live exploit fix today. The carve-
+            # out matters when a future contributor adds a step that
+            # touches an attacker-controlled value (e.g. a settings
+            # row seeded from env, or a migration that reads a sidecar
+            # file) -- inheriting the lockdown by default keeps the
+            # contract uniform.
+            _set_engine_safety_pragmas(bootstrap)
             bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
             ensure_schema(bootstrap)
             # v0.5 (issue #178): stamp the version sentinel. The pre-#178
