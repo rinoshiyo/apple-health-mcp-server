@@ -58,7 +58,10 @@ from typing import TYPE_CHECKING, Annotated
 from pydantic import Field
 
 from apple_health_mcp.db import import_jobs as job_registry
-from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
+from apple_health_mcp.server.data_state import (
+    EXPORT_ZIPS_DIR_ENV_VAR,
+    block_if_schema_outdated,
+)
 from apple_health_mcp.server.query import query_to_json, run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
@@ -155,6 +158,15 @@ def _import_zip_dispatch(
     a ``job_id``, INSERTs the queued row, and spawns the worker thread
     that drives :func:`apple_health_mcp.importers.zip_extract.extract_zip_and_import`.
     """
+    # v0.5.1 #188: short-circuit on a v=5-or-earlier DB before the
+    # writer hits ``INSERT INTO import_jobs`` (the table did not exist
+    # before v=6). The schema_outdated envelope routes the agent at
+    # the fresh-reset recovery path instead of surfacing a raw DuckDB
+    # ``Catalog Error``.
+    outdated = block_if_schema_outdated(conn, lock=lock)
+    if outdated is not None:
+        return outdated
+
     cleaned = target_id.strip().lower()
     if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):
         return run_query_payload(

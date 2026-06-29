@@ -9,6 +9,35 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- The v0.4 ZIP-flow write tools (`list_zips`, `import_zip`,
+  `get_import_status`) now short-circuit on a pre-v0.5 DB with a typed
+  `schema_outdated` envelope (`state: 'NEEDS_REIMPORT'`,
+  `reason: 'schema_outdated'`). v0.5.0 dogfood found that opening a
+  v=5-or-earlier DB against a v0.5.0 server let `import_zip` advance
+  to the `INSERT INTO import_jobs` step and surfaced a raw DuckDB
+  `Catalog Error: Table import_jobs does not exist!` before the
+  tool's own error handling could fire. The new gate routes the agent
+  at the fresh-reset recovery path documented under
+  `[Unreleased]/Changed` (issue #188).
+- `check_data_state` additionally detects a populated DB whose
+  `import_jobs` table is missing (a v=5-or-earlier shape whose
+  `schema_version` row was lost / never observed by
+  `schema_version_is_stale`), so the schema_outdated envelope fires
+  on both legitimate version-trail DBs and corrupted-stamp variants.
+
+### Changed
+
+- `NEEDS_REIMPORT` envelope's `reason` field tightened from the v0.4
+  free-form sentence ("database was imported under an older package
+  release; schema_version trails the current package.") to the stable
+  enum-style identifier `"schema_outdated"`. The descriptive prose
+  moved into `human_message` (which still names both failure modes:
+  schema_version trail + missing `import_jobs`). Agents can now
+  branch on `payload["reason"] == "schema_outdated"` without a
+  fragile substring match.
+
 ### Fixed
 
 - `list_zips` no longer returns a v0.4 synchronous-flow `hint` string

@@ -467,3 +467,20 @@ def test_get_import_status_returns_recovered_error_for_orphan_job() -> None:
         assert out["message"] == job_registry.ORPHAN_MESSAGE
     finally:
         conn.close()
+
+
+def test_get_import_status_short_circuits_on_schema_outdated() -> None:
+    """v0.5.1 #188: a pre-v=6 DB lacks ``import_jobs``; gate fires first."""
+    from apple_health_mcp.db.migrations import set_current_version
+    from tests._helpers import seed_one_import
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        seed_one_import(conn)
+        set_current_version(conn, 5)
+        out = _call_get_import_status(conn, job_id="ij_anything")
+        assert out["state"] == "NEEDS_REIMPORT"
+        assert out["reason"] == "schema_outdated"
+    finally:
+        conn.close()

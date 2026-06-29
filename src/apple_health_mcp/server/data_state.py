@@ -109,23 +109,48 @@ _STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
     DataState.NEEDS_REIMPORT: json.dumps(
         {
             "state": DataState.NEEDS_REIMPORT.value,
-            "reason": (
-                "database was imported under an older package release; "
-                "schema_version trails the current package."
-            ),
+            "reason": "schema_outdated",
             "suggested_action": "call_list_zips",
             "human_message": (
                 "The database was imported under an older version of "
-                "apple-health-mcp-server and is no longer compatible. "
-                "Call list_zips to find your Apple Health ZIP, then "
-                "import_zip(id) to re-import -- the old data will be "
-                "replaced automatically (no terminal commands needed)."
+                "apple-health-mcp-server (schema_version trails the "
+                "current package, or expected package-owned tables "
+                "such as import_jobs are missing). pre-v1.0 alpha "
+                "does not ship in-place migrations -- call list_zips "
+                "to find your Apple Health ZIP, then import_zip(id) "
+                "to re-import. The old data is replaced automatically "
+                "(no terminal commands needed)."
             ),
         },
         indent=2,
         ensure_ascii=False,
     ),
 }
+
+
+def _import_jobs_table_missing(conn: duckdb.DuckDBPyConnection) -> bool:
+    """Return True when the v0.5 ``import_jobs`` table is absent.
+
+    A v=6-stamped DB (the current package schema) always carries this
+    table because :func:`db.schema.ensure_schema` creates it under
+    ``CREATE TABLE IF NOT EXISTS``. Its absence on an otherwise-populated
+    DB means the file was stamped before v0.5 (issue #157 / v=5 or
+    earlier) but the ``schema_version`` sentinel did not survive a
+    fresh-reset attempt, so :func:`schema_version_is_stale` cannot detect
+    the lag through the version sentinel alone. Probing the table
+    directly closes the gap.
+
+    Catches broadly so an alien DB / catalog miss reads as "missing".
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM duckdb_tables() "
+            "WHERE table_name = 'import_jobs' AND schema_name = 'main' LIMIT 1"
+        ).fetchone()
+    except Exception as exc:
+        _logger.debug("import_jobs presence probe failed (%s); treating as missing", exc)
+        return True
+    return row is None
 
 
 def check_data_state(
@@ -181,11 +206,27 @@ def check_data_state(
     if lock is None:
         stale = _safe_schema_stale_probe(conn)
         has_rows = _imports_table_has_rows(conn)
+        jobs_missing = _import_jobs_table_missing(conn)
     else:
         with lock:
             stale = _safe_schema_stale_probe(conn)
             has_rows = _imports_table_has_rows(conn)
+            jobs_missing = _import_jobs_table_missing(conn)
     if stale:
+        return DataState.NEEDS_REIMPORT
+    # v0.5.1 #188: a populated DB whose ``import_jobs`` table is absent
+    # is structurally an outdated alpha shape -- the only path that
+    # could land such a file is a v=5-or-earlier DB whose stale
+    # ``schema_version`` row was lost / overwritten before the
+    # ``schema_version_is_stale`` probe could observe the lag. We treat
+    # it as schema_outdated rather than silently falling through to
+    # READY (which would let the next import_zip / get_import_status
+    # surface a raw DuckDB ``Catalog Error: Table import_jobs does not
+    # exist``). Fresh installs are safe: ``_materialise_empty_db``
+    # creates ``import_jobs`` via ``ensure_schema`` before the probe
+    # ever runs, so a brand-new DB carries the table even with zero
+    # ``imports`` rows.
+    if has_rows and jobs_missing:
         return DataState.NEEDS_REIMPORT
     if has_rows:
         return DataState.READY
@@ -250,6 +291,33 @@ def build_state_error_payload(state: DataState) -> str:
         raise ValueError(
             f"build_state_error_payload called with non-error state {state!r}"
         ) from None
+
+
+def block_if_schema_outdated(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    lock: Lock | None = None,
+) -> str | None:
+    """Return the ``schema_outdated`` envelope when the DB is outdated, else ``None``.
+
+    Used by the v0.4+ ZIP-flow write tools (``list_zips``, ``import_zip``,
+    ``get_import_status``) that must tolerate ``NEEDS_CONFIG`` /
+    ``NEEDS_IMPORT`` -- those states are exactly what these tools exist
+    to recover from -- but must NOT proceed against a stale schema, since
+    the wire path would otherwise surface a raw ``Catalog Error: Table
+    import_jobs does not exist`` from DuckDB (v0.5.0 dogfood observation:
+    a v=5-or-earlier DB opened against a v0.5.0 server hit exactly that
+    error before the tool's own error handling could fire).
+
+    Read tools route through :func:`require_ready_or_state_error` and get
+    the full four-state coverage; this helper exists for the
+    write-side surface where the NEEDS_CONFIG / NEEDS_IMPORT states are
+    *not* errors.
+    """
+    state = check_data_state(conn, lock=lock)
+    if state == DataState.NEEDS_REIMPORT:
+        return build_state_error_payload(state)
+    return None
 
 
 def require_ready_or_state_error(
