@@ -9,6 +9,47 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Security
+
+- **Lock down all external resource access at the DuckDB engine level
+  via `SET enable_external_access = false`** (issue #190, v0.5.0
+  adversarial test stop-ship). v0.5.0 dogfood (`tmp/v0-5-0-adversarial-results_1.md`)
+  found that the SQL safety validator's function-name denylist had
+  alias / near-relative blind spots — `parquet_scan`, `parquet_metadata`,
+  `parquet_schema`, and `sniff_csv` all bypassed the denylist and let
+  `run_custom_query` read arbitrary host files (`sniff_csv` returned
+  the file contents directly), while `parquet_scan('https://...')`
+  fetched remote URLs and exfiltrated their content — breaking the
+  project's "all data stays local, no external send" privacy contract
+  at the implementation level. The fix is a single engine setting that
+  forbids the entire family of file / network / extension functions
+  (including future aliases the team has not enumerated), ATTACH /
+  COPY / INSTALL / LOAD, and httpfs / S3 / GCS / Azure FileSystem
+  egress. The setting is applied in both writable and read-only
+  serve paths and on the in-memory test connection so adversarial
+  tests run against the production contract. The importer pipeline
+  is unaffected: bulk ingestion routes through PyArrow `conn.register
+  → INSERT ... SELECT * FROM __bulk_arrow` and never touches the
+  engine's external-fs surface.
+- **Defense-in-depth: extend the function denylist with the missing
+  aliases** (`parquet_scan`, `parquet_metadata`, `parquet_schema`,
+  `sniff_csv`). The engine-level lockdown is the root-cause fix; the
+  denylist now produces a friendlier parse-time `Function 'X' is not
+  allowed` error than DuckDB's downstream `IO Error` on the same
+  call. Future deliberate re-enables of `enable_external_access`
+  still hit the denylist first.
+- **New `tests/integration/test_security.py` adversarial suite**
+  exercises both layers end-to-end: parametrised engine-level
+  rejections for every fs table function (including the post-#190
+  aliases), HTTPS / S3 / loopback URL fetches, file-backed
+  ATTACH / INSTALL / LOAD, and a `current_setting('enable_external_access')`
+  invariant probe so a future regression of the connection-open
+  helper that silently drops the SET statement surfaces at CI rather
+  than at the next dogfood. The denylist still does its parse-time
+  job through the existing `tests/unit/server/test_safety.py`
+  parametrised pin (the new aliases are picked up automatically by
+  `pytest.mark.parametrize("fn", sorted(DENIED_FUNCTIONS))`).
+
 ### Added
 
 - The v0.4 ZIP-flow write tools (`list_zips`, `import_zip`,
