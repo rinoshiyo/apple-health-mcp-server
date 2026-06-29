@@ -122,15 +122,22 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             )
         else:
             hint = (
-                "Pick an entry by ``id`` and call import_zip(id=…). The "
-                "call returns immediately with a ``job_id``; poll "
-                "get_import_status(job_id=…) every 10-30 seconds to "
-                "track progress and retrieve the final result. Total "
-                "import time depends on the user's machine (~45s on a "
-                "fast NVMe + recent CPU, several minutes on slower "
-                "hardware). Already-imported ZIPs (imported=true) "
-                "short-circuit synchronously in milliseconds without "
-                "spawning a worker."
+                "Pick an entry by ``id`` and call import_zip(id=…). "
+                "Branch on the returned envelope: an entry with "
+                "``imported: true`` short-circuits synchronously and "
+                "returns ``{status: 'ok', records_added: 0, "
+                "already_imported_at, ...}`` in milliseconds without a "
+                "``job_id`` -- do NOT poll get_import_status on this "
+                "branch; just read the synchronous payload. A fresh "
+                "import returns ``{status: 'queued', job_id, ...}``; "
+                "in that case poll ``get_import_status(job_id=…)`` "
+                "every 10-30 seconds to track progress and retrieve "
+                "the final result. Typical fresh-import wall-clock is "
+                "~45s on a fast NVMe + recent CPU and several minutes "
+                "on slower hardware; if elapsed_secs grows past ~10 "
+                "minutes without the ``phase`` field advancing, treat "
+                "the worker as stalled and surface that to the user "
+                "instead of polling forever."
             )
 
         return run_query_payload(

@@ -363,6 +363,11 @@ def test_import_zip_accepts_id_with_surrounding_whitespace(
         queued, job = _await_queued(conn, id=f"  {sha[:8]}  ")
         assert queued["id"] == sha[:8]
         assert job["status"] == "done"
+        # Mirror the uppercase-id test depth: pin that the persisted
+        # ``source_id`` is also canonicalised. Otherwise a future
+        # refactor that splits .strip() across two code paths could
+        # leave one path un-stripped without this test catching it.
+        assert job["source_id"] == sha[:8]
     finally:
         conn.close()
 
