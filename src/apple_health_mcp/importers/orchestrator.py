@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -61,6 +62,7 @@ def run_import(
     import_id: str | None = None,
     force: bool = False,
     source_zip: tuple[str, datetime, int] | None = None,
+    phase_callback: Callable[[str], None] | None = None,
 ) -> ImportStats:
     """Run the full XML -> ECG -> GPX -> finalize pipeline on ``export_dir``.
 
@@ -235,14 +237,28 @@ def run_import(
         # from open; CLI-owned conns get it via the same ``_open_db`` /
         # ``get_connection`` chain.
 
+        # v0.5 (issue #157): emit phase markers ahead of each Phase log
+        # so the new ``import_zip`` async worker can update its
+        # ``import_jobs`` row for ``get_import_status`` polling. The
+        # callback runs INSIDE the writer-lock context the MCP caller
+        # already holds around ``run_import`` (see
+        # ``importers.zip_extract``); the worker's implementation issues
+        # the UPDATE directly without re-acquiring the lock to avoid
+        # deadlocking on a ``threading.Lock``.
+        if phase_callback is not None:
+            phase_callback("xml_parsing")
         _logger.info("Phase 1: Parsing export.xml")
         stats = import_xml(conn, xml_path, actual_import_id, existing=existing)
 
+        if phase_callback is not None:
+            phase_callback("ecg")
         _logger.info("Phase 2: Parsing ECG files")
         stats.ecg_readings = import_ecg_files(
             conn, export_dir / "electrocardiograms", actual_import_id, existing=existing
         )
 
+        if phase_callback is not None:
+            phase_callback("gpx")
         _logger.info("Phase 3: Parsing GPX route files")
         stats.route_points = import_gpx_files(
             conn,
@@ -252,6 +268,8 @@ def run_import(
             existing=existing,
         )
 
+        if phase_callback is not None:
+            phase_callback("finalize")
         _logger.info("Phase 4: Finalize (dedupe, backfill, daily stats)")
         finalize_import(conn, skip_dedup=existing is not None)
 

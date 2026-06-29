@@ -314,6 +314,35 @@ CREATE TABLE IF NOT EXISTS state_of_mind (
     associations  VARCHAR,
     import_id     VARCHAR NOT NULL
 );
+
+-- v0.5 (issue #157): job-based async import tracking. ``import_zip``
+-- returns a ``job_id`` immediately and spawns a worker thread; clients
+-- poll ``get_import_status(job_id)`` instead of blocking on the
+-- multi-minute synchronous import (which broke on slower machines as
+-- soon as the implicit MCP tool-call timeout fired). Persisting to
+-- DuckDB instead of an in-process dict means a server restart mid-
+-- import is recoverable: the orphan sweep at boot rewrites stuck
+-- ``queued`` / ``running`` rows to ``error`` so the multi-launch guard
+-- does not deadlock the next attempt.
+CREATE TABLE IF NOT EXISTS import_jobs (
+    job_id              VARCHAR NOT NULL,
+    source_id           VARCHAR NOT NULL,
+    source_sha256       VARCHAR NOT NULL,
+    status              VARCHAR NOT NULL,
+    queued_at           TIMESTAMPTZ NOT NULL,
+    started_at          TIMESTAMPTZ,
+    completed_at        TIMESTAMPTZ,
+    failed_at           TIMESTAMPTZ,
+    phase               VARCHAR,
+    records_added       BIGINT,
+    workouts_added      BIGINT,
+    ecg_readings_added  BIGINT,
+    route_points_added  BIGINT,
+    duration_secs       DOUBLE,
+    already_imported_at TIMESTAMPTZ,
+    error_reason        VARCHAR,
+    error_message       VARCHAR
+);
 """
 
 
@@ -675,6 +704,15 @@ CREATE INDEX IF NOT EXISTS idx_correlation_members_correlation
     ON correlation_members(correlation_hash);
 CREATE INDEX IF NOT EXISTS idx_correlation_members_record
     ON correlation_members(record_hash);
+-- v0.5 (issue #157): ``import_jobs`` indexes serve both the multi-launch
+-- guard (find an active job by full sha256 before spawning a duplicate
+-- worker) and the orphan sweep at server boot (rewrite stuck
+-- queued / running rows to ``error``). Without the sha256 index the
+-- guard degenerates to a full table scan; the status index keeps the
+-- sweep cheap as the table grows over many imports.
+CREATE INDEX IF NOT EXISTS idx_import_jobs_source_sha256
+    ON import_jobs(source_sha256);
+CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status);
 """
 
 

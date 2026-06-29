@@ -14,7 +14,7 @@
 `apple-health-mcp-server` exposes the contents of your Apple Health export
 (`export.xml` plus the ECG CSV and GPX route files Apple ships alongside it)
 to any [Model Context Protocol](https://modelcontextprotocol.io/) client —
-including Claude Desktop — through 20 MCP tools (18 read-oriented + 2 zip-flow) backed by a local
+including Claude Desktop — through 21 MCP tools (18 read-oriented + 2 zip-flow + 1 job-status) backed by a local
 [DuckDB](https://duckdb.org/) database.
 
 ## Features
@@ -326,7 +326,7 @@ faithfully.
 
 ## Tools
 
-20 tools are registered with FastMCP, grouped by family:
+21 tools are registered with FastMCP, grouped by family:
 
 | Family | Tools |
 |---|---|
@@ -338,7 +338,8 @@ faithfully.
 | ECG | `list_ecg_readings`, `get_ecg_data` |
 | State of mind | `list_state_of_mind` |
 | Me characteristics | `get_me_attributes` |
-| Metadata & ops | `list_data_sources`, `get_import_history` |
+| Metadata & ops | `list_data_sources`, `get_import_history`, `get_server_info` |
+| ZIP flow | `list_zips`, `import_zip` (async), `get_import_status` |
 | Escape hatch | `run_custom_query` (read-only validated SQL) |
 
 ## Compatibility

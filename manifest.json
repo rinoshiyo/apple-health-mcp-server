@@ -4,7 +4,7 @@
   "display_name": "Apple Health",
   "version": "0.4.1",
   "description": "Make Claude your personal health AI — locally.",
-  "long_description": "Ingests an Apple Health export (export.xml + electrocardiograms/*.csv + workout-routes/*.gpx) into a local DuckDB database and exposes 20 MCP tools over it: 18 read-oriented (records / workouts / heart rate samples / ECG readings / activity summaries / state of mind / etc., plus a validated SELECT-only escape hatch) and 2 zip-flow (list_zips discovers Apple Health export ZIPs in a configured directory; import_zip ingests one). Drop your export ZIP into the configured directory and ask Claude — no terminal commands required. All data stays local; nothing is uploaded.",
+  "long_description": "Ingests an Apple Health export (export.xml + electrocardiograms/*.csv + workout-routes/*.gpx) into a local DuckDB database and exposes 21 MCP tools over it: 18 read-oriented (records / workouts / heart rate samples / ECG readings / activity summaries / state of mind / etc., plus a validated SELECT-only escape hatch); 2 zip-flow (list_zips discovers Apple Health export ZIPs in a configured directory; import_zip starts a background import and returns a job_id in milliseconds); and 1 job-status (get_import_status polls the worker until the import lands). Drop your export ZIP into the configured directory and ask Claude — no terminal commands required. All data stays local; nothing is uploaded.",
   "author": {
     "name": "Yoshinori Ishii",
     "url": "https://github.com/rinoshiyo"

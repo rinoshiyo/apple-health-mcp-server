@@ -9,6 +9,53 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- **`import_zip` is now job-based async; new `get_import_status` MCP
+  tool polls the worker** (issue #157). The v0.4 synchronous shape
+  blocked the MCP client for the full XML → ECG → GPX → finalize
+  pipeline (44 s on a fast workstation, several minutes on slower
+  hardware), tripping the client's tool-call timeout on anything
+  but a new high-end machine. v0.5 splits the surface so the call
+  cannot deadline-out regardless of import duration:
+
+  - `import_zip(id=...)` returns `{status: 'queued', job_id, id,
+    queued_at, message}` in milliseconds after inserting an
+    `import_jobs` row and spawning a daemon worker thread. The
+    idempotent no-op branch (sha256 already in `imports`) still
+    returns the `{status: 'ok', records_added: 0,
+    already_imported_at, ...}` envelope synchronously without
+    creating a job. Validation / config / invalid-zip /
+    not-an-Apple-Health-ZIP / id-not-found errors stay synchronous
+    too — only the genuinely-long branch goes async.
+  - `get_import_status(job_id=...)` is the new companion tool. Poll
+    every 10-30 s; it returns `{status: 'queued' | 'running' (+
+    phase + elapsed_secs) | 'ok' (+ records_added / workouts_added
+    / ecg_readings_added / route_points_added / duration_secs /
+    already_imported_at) | 'error' (+ reason + message)}` from a
+    single indexed SELECT against `import_jobs`. Unknown `job_id`
+    surfaces as `{status: 'error', reason: 'job_not_found'}`.
+  - Tool count: 20 → 21. `manifest.json` long_description,
+    README.md / README.ja.md tool tables, and LP `tools.eyebrow`
+    are updated.
+
+  **Multi-launch guard.** If a second `import_zip` lands while a
+  worker is in flight for the same sha256, the second call returns
+  the *existing* `job_id` instead of spawning a duplicate worker
+  that would queue on the writer lock and no-op anyway.
+
+  **Orphan recovery.** Server boot runs a one-shot sweep that
+  rewrites every `queued` / `running` row to `error` with
+  `reason='server_restarted_while_running'`. Without the sweep, a
+  worker the OS killed mid-import would wedge the multi-launch
+  guard on a phantom job forever.
+
+  **Schema.** Adds `import_jobs` table (and 2 indexes on
+  `source_sha256` / `status`) via `CREATE TABLE IF NOT EXISTS`, so
+  existing v=5 DBs gain the table on the next server boot without a
+  schema_version bump — matching the v0.4.1 (#156) fresh-reset
+  contract.
+
 ### Changed
 
 - **Retire migration scaffolding from `db.migrations`** (issue #178,

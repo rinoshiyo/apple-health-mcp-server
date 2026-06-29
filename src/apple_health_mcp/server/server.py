@@ -27,6 +27,7 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.db.connection import get_connection
 from apple_health_mcp.exceptions import ConfigError
 from apple_health_mcp.server import tools as tools_pkg
@@ -59,6 +60,16 @@ def create_server(
 
     mcp = FastMCP(name, host=host, port=port)
     lock = Lock()
+    # v0.5 (issue #157): boot-time orphan sweep. Any ``import_jobs`` row
+    # left in ``queued`` / ``running`` from a prior process is owned by
+    # a worker thread that no longer exists; rewrite it to ``error``
+    # with ``reason='server_restarted_while_running'`` so the
+    # multi-launch guard inside ``import_zip`` does not stay wedged on
+    # a phantom job and the agent re-polling an old ``job_id`` after a
+    # restart gets a definite terminal state.
+    swept = job_registry.sweep_orphan_jobs(conn, lock)
+    if swept:
+        _logger.info("Swept %d orphan import_jobs row(s) on server boot.", swept)
     for register in tools_pkg.ALL_TOOLS:
         register(mcp, conn, lock)
     return mcp

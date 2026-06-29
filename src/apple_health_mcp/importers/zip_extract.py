@@ -15,6 +15,7 @@ import contextlib
 import logging
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -39,6 +40,7 @@ def extract_zip_and_import(
     import_id: str | None = None,
     force: bool = False,
     lock: Lock | None = None,
+    phase_callback: Callable[[str], None] | None = None,
 ) -> ImportStats:
     """Extract ``zip_path`` into a tempdir and run the full import pipeline.
 
@@ -70,6 +72,8 @@ def extract_zip_and_import(
     ``None`` is fine for single-thread callers (CLI: no shared
     connection, so no lock needed).
     """
+    if phase_callback is not None:
+        phase_callback("extracting")
     with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
         extracted_root = Path(tmpdir)
         # v0.5 (PR #172 code-review #1/#2): scope the extraction-phase
@@ -115,6 +119,7 @@ def extract_zip_and_import(
                 import_id=import_id,
                 force=force,
                 source_zip=source_zip,
+                phase_callback=phase_callback,
             )
 
 

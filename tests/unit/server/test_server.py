@@ -55,6 +55,10 @@ _EXPECTED_TOOL_NAMES = {
     # terminal. Tools 19 + 20.
     "list_zips",
     "import_zip",
+    # v0.5 (issue #157): companion to the async ``import_zip`` -- the
+    # agent polls this every 10-30 seconds after import_zip queued a
+    # job. Tool 21.
+    "get_import_status",
 }
 
 

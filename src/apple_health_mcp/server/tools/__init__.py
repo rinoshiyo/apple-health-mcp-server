@@ -19,6 +19,7 @@ from apple_health_mcp.server.tools import (
     get_ecg_data,
     get_heart_rate_samples,
     get_import_history,
+    get_import_status,
     get_me_attributes,
     get_record_statistics,
     get_server_info,
@@ -77,4 +78,9 @@ ALL_TOOLS: list[RegisterFn] = [
     # drives the importer inline on the server's writable handle.
     list_zips.register,
     import_zip.register,
+    # v0.5 (issue #157): companion to the job-based async ``import_zip``.
+    # The agent polls this after import_zip returns ``queued`` to track
+    # progress and retrieve the final result without paying for an MCP
+    # tool-call timeout on slow hardware.
+    get_import_status.register,
 ]
