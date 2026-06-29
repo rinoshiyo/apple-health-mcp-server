@@ -1074,7 +1074,13 @@ def test_get_import_history(seeded_conn: duckdb.DuckDBPyConnection) -> None:
         "imported_at",
         "record_count",
         "workout_count",
-        "duration_secs",
+        # v0.5.1 #189: aliased on the wire from the underlying
+        # ``imports.duration_secs`` column to disambiguate from
+        # ``get_import_status.duration_secs`` (which captures the worker
+        # wall-clock INCLUDING ZIP extraction). The DB column name is
+        # unchanged so ``run_custom_query`` on ``imports.duration_secs``
+        # keeps working.
+        "processing_secs",
         "export_xml_sha256",
         # Issue #129 (PR-D): post-Phase-4-dedup row count.
         "records_after_dedup",

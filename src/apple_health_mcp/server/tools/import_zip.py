@@ -78,8 +78,10 @@ _logger = logging.getLogger(__name__)
 
 DESCRIPTION = (
     "Import an Apple Health export ZIP into the local DuckDB database. "
-    "Pass the ``id`` value emitted by list_zips (an 8-char sha256 "
-    "prefix). The tool resolves the ZIP under "
+    "Pass the ``id`` value emitted by list_zips (typically an 8-char "
+    "sha256 prefix; 4-64 hex chars are accepted, leading/trailing "
+    "whitespace is trimmed and uppercase is normalised to lowercase "
+    "before lookup). The tool resolves the ZIP under "
     "APPLE_HEALTH_EXPORT_ZIPS_DIR, inspects it, and -- on success -- "
     "kicks off the importer in a background worker thread. **Returns "
     "immediately with a ``job_id``** so the call cannot trip the MCP "
@@ -88,10 +90,12 @@ DESCRIPTION = (
     "progress and retrieve the final result; total import time depends "
     "on the user's machine (~45s on a fast NVMe + recent CPU, several "
     "minutes on slower hardware). A byte-identical re-import returns "
-    "the legacy ``done`` envelope synchronously without spawning a "
-    "worker (records_added: 0, already_imported_at populated). Returns "
-    "{status: 'queued', job_id, id, queued_at, message} on a new "
-    "import; {status: 'ok', id, records_added: 0, "
+    "a synchronous ``status: 'ok'`` envelope (records_added: 0, "
+    "already_imported_at populated) without spawning a worker -- the "
+    "wire shape matches the pre-v0.5 synchronous import_zip and never "
+    "carries a job_id, so the agent must NOT poll get_import_status on "
+    "this branch. Returns {status: 'queued', job_id, id, queued_at, "
+    "message} on a new import; {status: 'ok', id, records_added: 0, "
     "already_imported_at, ...} on the idempotent no-op; or "
     "{status: 'error', reason, message} on a configuration / "
     "invalid-zip / not-an-Apple-Health-ZIP / ZIP-not-found / "
@@ -121,7 +125,9 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             Field(
                 description=(
                     "Hex sha256 prefix from list_zips (typically the "
-                    "8-char form). Validated as 4-64 lowercase hex chars."
+                    "8-char form). Validated as 4-64 hex characters; "
+                    "leading/trailing whitespace is trimmed and "
+                    "uppercase is normalised to lowercase before lookup."
                 ),
             ),
         ],
@@ -156,9 +162,10 @@ def _import_zip_dispatch(
                 "status": "error",
                 "reason": "invalid_id",
                 "message": (
-                    f"id must be {_MIN_ID_LEN}-{_MAX_ID_LEN} lowercase "
-                    f"hex characters; got {target_id!r}. Call list_zips "
-                    "and use the ``id`` field verbatim."
+                    f"id must be {_MIN_ID_LEN}-{_MAX_ID_LEN} hex "
+                    f"characters (case-insensitive, surrounding "
+                    f"whitespace ignored); got {target_id!r}. Call "
+                    "list_zips and pass the ``id`` field."
                 ),
             }
         )

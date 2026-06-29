@@ -9,6 +9,30 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Fixed
+
+- `list_zips` no longer returns a v0.4 synchronous-flow `hint` string
+  on a populated directory. The new hint steers the agent at the v0.5
+  async polling flow (`import_zip` returns `job_id` → poll
+  `get_import_status`), matching the actual import surface (issue #187).
+- `import_zip`'s `id` argument documentation now matches the
+  implementation: 4-64 hex characters, leading/trailing whitespace is
+  trimmed, uppercase is normalised to lowercase before lookup. The
+  previous "lowercase" / "verbatim" wording in the docstring and
+  `invalid_id` message contradicted the tolerant behaviour the
+  implementation had always applied (issue #191).
+
+### Changed
+
+- `get_import_history` now reports the run_import body wall-clock as
+  `processing_secs` (aliased from the underlying
+  `imports.duration_secs` column) so it no longer collides with
+  `get_import_status.duration_secs`, which captures the worker-thread
+  wall-clock *including* ZIP extraction and can differ by several
+  seconds on large ZIPs. The DB column name is unchanged, so
+  `run_custom_query` against `imports.duration_secs` continues to
+  work — only the MCP tool wire shape changes (issue #189).
+
 ## [0.5.0] - 2026-06-29
 
 ### Added

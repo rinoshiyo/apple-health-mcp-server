@@ -15,7 +15,17 @@ if TYPE_CHECKING:
 DESCRIPTION = (
     "List all data imports. Returns: import_id, export_dir, imported_at, "
     "record_count (Phase-1 parse count of Apple Health <Record> elements, "
-    "BEFORE Correlation-child dedup), workout_count, duration_secs, "
+    "BEFORE Correlation-child dedup), workout_count, processing_secs "
+    "(run_import body wall-clock: Phase-1 XML parse + Phase-2 ECG + "
+    "Phase-3 GPX + Phase-4 finalize; ZIP extraction time is NOT included. "
+    "For the running → done worker wall-clock -- including ZIP "
+    "extraction -- consult the matching ``import_jobs`` row via "
+    "``run_custom_query`` (``SELECT job_id, duration_secs FROM "
+    "import_jobs WHERE source_sha256 = (SELECT source_zip_sha256 FROM "
+    "imports WHERE import_id = ?)``); the live polling tool "
+    "``get_import_status(job_id=…)`` exposes the same number only "
+    "while a job_id from the current session is in hand. The two "
+    "values can differ by several seconds on large ZIPs.), "
     "export_xml_sha256 (hex sha256 of the source export.xml; NULL on rows "
     "finalized before the column was introduced), records_after_dedup "
     "(rows surviving in the records table after Phase 4 Correlation "
@@ -41,10 +51,20 @@ DESCRIPTION = (
 # COLUMN`` work cannot leak into the wire shape without a deliberate
 # description / schema bump. The column order matches the description
 # above so the LLM-facing prose and SQL projection stay in sync.
+#
+# ``duration_secs AS processing_secs`` (v0.5.1 #189): the underlying
+# column captures only the run_import body wall-clock, while the v0.5
+# ``get_import_status.duration_secs`` field reports the full worker
+# wall-clock including ZIP extraction. Same column name on the wire
+# returning different values was a documented confusion source from
+# v0.5.0 dogfood; the alias splits the two on the wire while leaving
+# the DB shape unchanged (so ``run_custom_query`` on
+# ``imports.duration_secs`` continues to work).
 _SQL = (
     "SELECT import_id, export_dir, imported_at, record_count, "
-    "workout_count, duration_secs, export_xml_sha256, records_after_dedup, "
-    "dedup_skipped, source_zip_sha256, source_zip_mtime, source_zip_size "
+    "workout_count, duration_secs AS processing_secs, export_xml_sha256, "
+    "records_after_dedup, dedup_skipped, source_zip_sha256, "
+    "source_zip_mtime, source_zip_size "
     "FROM imports ORDER BY imported_at DESC"
 )
 
