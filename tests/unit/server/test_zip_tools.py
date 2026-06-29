@@ -880,17 +880,11 @@ def test_import_zip_returns_invalid_zip_reason_for_html_file(
 # --- v0.5.1 (issue #188): schema_outdated short-circuit --------------------
 
 
-def test_list_zips_short_circuits_on_schema_outdated(
+def test_list_zips_short_circuits_on_stale_schema_version(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A populated v=5-or-earlier-shaped DB → schema_outdated envelope.
-
-    Without the v0.5.1 #188 short-circuit, ``list_zips`` would advance
-    to ``load_sha_cache`` and surface a raw DuckDB ``Catalog Error`` on
-    a pre-v0.4 ``imports`` shape; the new gate returns the typed
-    envelope so the agent can route the user at the fresh-reset path.
-    """
+    """list_zips: stale ``schema_version`` (= v=5 stamp) → schema_outdated."""
     from apple_health_mcp.db.migrations import set_current_version
     from tests._helpers import seed_one_import
 
@@ -909,16 +903,40 @@ def test_list_zips_short_circuits_on_schema_outdated(
         conn.close()
 
 
-def test_import_zip_short_circuits_on_schema_outdated(
+def test_list_zips_short_circuits_on_missing_import_jobs(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A populated v=5-or-earlier-shaped DB → schema_outdated envelope.
+    """list_zips: schema_version current, ``import_jobs`` dropped → schema_outdated.
 
-    The v0.5 ``import_jobs`` INSERT would otherwise raise a raw
-    ``Catalog Error: Table import_jobs does not exist`` on a pre-v0.5
-    DB; the gate intercepts before any worker is spawned.
+    Pins the v0.5.1 #188 new branch at the tool surface. The
+    stale-version test above would still pass even if this branch
+    were deleted (the stale probe would catch it first), so we need
+    this distinct variant to lock in the regression shape #188
+    actually exists to defeat.
     """
+    from tests._helpers import seed_one_import
+
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        seed_one_import(conn)
+        conn.execute("DROP TABLE import_jobs;")
+        out = _call_list_zips(conn)
+        assert out["state"] == "NEEDS_REIMPORT"
+        assert out["reason"] == "schema_outdated"
+    finally:
+        conn.close()
+
+
+def test_import_zip_short_circuits_on_stale_schema_version(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """import_zip: stale ``schema_version`` (= v=5 stamp) → schema_outdated."""
     from apple_health_mcp.db.migrations import set_current_version
     from tests._helpers import seed_one_import
 
@@ -930,6 +948,32 @@ def test_import_zip_short_circuits_on_schema_outdated(
         ensure_schema(conn)
         seed_one_import(conn)
         set_current_version(conn, 5)
+        out = _call_import_zip(conn, id="aaaaaaaa")
+        assert out["state"] == "NEEDS_REIMPORT"
+        assert out["reason"] == "schema_outdated"
+    finally:
+        conn.close()
+
+
+def test_import_zip_short_circuits_on_missing_import_jobs(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """import_zip: schema_version current, ``import_jobs`` dropped → schema_outdated.
+
+    Pins the new v0.5.1 #188 branch at the tool surface, distinct from
+    the stale-version sibling above.
+    """
+    from tests._helpers import seed_one_import
+
+    zip_path = tmp_path / "export.zip"
+    _make_zip(zip_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        seed_one_import(conn)
+        conn.execute("DROP TABLE import_jobs;")
         out = _call_import_zip(conn, id="aaaaaaaa")
         assert out["state"] == "NEEDS_REIMPORT"
         assert out["reason"] == "schema_outdated"

@@ -86,13 +86,12 @@ def _get_import_status_dispatch(
     job_id: str,
 ) -> str:
     """Synchronous body; split so tests can drive it directly."""
-    # v0.5.1 #188: a v=5-or-earlier DB does not carry ``import_jobs``
-    # at all, so ``job_registry.get_job`` would raise the raw DuckDB
+    # v0.5.1 #188: an outdated DB does not carry ``import_jobs`` at
+    # all, so ``job_registry.get_job`` would raise the raw DuckDB
     # ``Catalog Error``. Short-circuit with the schema_outdated
     # envelope so the agent can route the user to the fresh-reset path.
-    outdated = block_if_schema_outdated(conn, lock=lock)
-    if outdated is not None:
-        return outdated
+    if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
+        return envelope
 
     job = job_registry.get_job(conn, lock, job_id)
     if job is None:

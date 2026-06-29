@@ -57,13 +57,12 @@ DESCRIPTION = (
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def list_zips() -> str:
-        # v0.5.1 #188: short-circuit on a v=5-or-earlier DB before the
+        # v0.5.1 #188: short-circuit on an outdated DB before the
         # imports-cache load, which would otherwise hit DuckDB's
         # ``Catalog Error: Table source_zip_sha256 does not exist`` on
         # the legacy ``imports`` shape that lacks the v0.4 #148 columns.
-        outdated = block_if_schema_outdated(conn, lock=lock)
-        if outdated is not None:
-            return outdated
+        if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
+            return envelope
         dir_str = (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip()
         if not dir_str:
             return run_query_payload(

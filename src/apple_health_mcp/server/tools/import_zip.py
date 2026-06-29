@@ -158,14 +158,20 @@ def _import_zip_dispatch(
     a ``job_id``, INSERTs the queued row, and spawns the worker thread
     that drives :func:`apple_health_mcp.importers.zip_extract.extract_zip_and_import`.
     """
-    # v0.5.1 #188: short-circuit on a v=5-or-earlier DB before the
-    # writer hits ``INSERT INTO import_jobs`` (the table did not exist
-    # before v=6). The schema_outdated envelope routes the agent at
-    # the fresh-reset recovery path instead of surfacing a raw DuckDB
+    # v0.5.1 #188: short-circuit on an outdated DB before the writer
+    # hits ``INSERT INTO import_jobs`` (the table did not exist before
+    # v=6). The schema_outdated envelope routes the agent at the
+    # fresh-reset recovery path instead of surfacing a raw DuckDB
     # ``Catalog Error``.
-    outdated = block_if_schema_outdated(conn, lock=lock)
-    if outdated is not None:
-        return outdated
+    #
+    # Intentionally placed BEFORE id-validation: an agent on a stale
+    # DB cannot recover by fixing its id; surfacing schema_outdated
+    # tells them the right next step. The pre-#188 behaviour of
+    # returning ``invalid_id`` for a malformed id on a stale DB is a
+    # tolerable wire-shape change at pre-1.0 (no production consumer
+    # branches on it, per post-#195 code-review Angle A/B).
+    if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
+        return envelope
 
     cleaned = target_id.strip().lower()
     if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):

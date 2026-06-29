@@ -204,13 +204,19 @@ def test_check_data_state_returns_needs_reimport_when_schema_stale() -> None:
 
 
 def test_build_state_error_payload_for_needs_reimport_has_documented_shape() -> None:
-    """``NEEDS_REIMPORT`` envelope steers the agent at ``list_zips``."""
+    """``NEEDS_REIMPORT`` envelope steers the agent at ``import_zip``."""
     raw = build_state_error_payload(DataState.NEEDS_REIMPORT)
     payload = json.loads(raw)
     assert payload["state"] == "NEEDS_REIMPORT"
-    assert payload["suggested_action"] == "call_list_zips"
+    # v0.5.1 (post-#195 code-review Angle B): suggested_action retargeted
+    # at import_zip rather than list_zips so the recovery does not loop
+    # back through list_zips (which now also returns schema_outdated and
+    # would tell the user to call itself again). import_zip's importer
+    # path handles the fresh-reset automatically; list_zips is only
+    # needed when the agent also needs to discover the id.
+    assert payload["suggested_action"] == "call_import_zip"
     assert "human_message" in payload
-    assert "list_zips" in payload["human_message"]
+    assert "import_zip" in payload["human_message"]
     # v0.5.1 #188: reason was tightened from a free-form prose sentence
     # to a stable enum-style identifier so MCP agents can branch on
     # ``payload["reason"] == "schema_outdated"`` without a fragile
@@ -256,18 +262,31 @@ def test_check_data_state_falls_through_when_stale_probe_fails(
 
 
 def test_check_data_state_flags_populated_db_with_missing_import_jobs() -> None:
-    """A populated v=5-or-earlier-shaped DB → NEEDS_REIMPORT.
+    """A populated DB lacking ``import_jobs`` → NEEDS_REIMPORT (no stale signal).
 
-    A pre-v0.5 DB carries ``imports`` rows but no ``import_jobs`` table.
-    Without the v0.5.1 #188 detection, ``check_data_state`` would
-    happily report READY and the next ``import_zip`` call would surface
-    a raw ``Catalog Error: Table import_jobs does not exist``.
+    Constructs the EXACT corruption shape the v0.5.1 #188 branch
+    exists to catch: a populated DB whose ``schema_version`` row
+    looks healthy / current (so ``schema_version_is_stale`` returns
+    False) but whose ``import_jobs`` table is gone (so the next
+    ``import_zip`` write would otherwise surface a raw
+    ``Catalog Error: Table import_jobs does not exist``). This is
+    distinct from the v=5-or-earlier "stale schema_version" shape,
+    which the older stale branch catches one line earlier.
+
+    Verification trick: ``ensure_schema`` stamps the current
+    ``schema_version`` (= 6), so the stale probe returns False here.
+    The only way this test can pass is via the new branch.
     """
+    from apple_health_mcp.db.migrations import schema_version_is_stale
+
     conn = get_in_memory_connection()
     try:
         ensure_schema(conn)
         seed_one_import(conn)
         conn.execute("DROP TABLE import_jobs;")
+        # Pin that we are actually hitting the new branch, not the
+        # pre-existing stale-schema branch.
+        assert schema_version_is_stale(conn) is False
         assert check_data_state(conn) == DataState.NEEDS_REIMPORT
     finally:
         conn.close()
@@ -276,28 +295,39 @@ def test_check_data_state_flags_populated_db_with_missing_import_jobs() -> None:
 def test_check_data_state_import_jobs_probe_handles_alien_db(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """A probe raising on the ``import_jobs`` presence check reads as missing.
+    """A probe raising on the ``import_jobs`` presence check reads as present.
 
-    Defensive mirror of the other catch-alls in this module: an alien
-    DB (no ``duckdb_tables()`` metadata, an extreme catalog corruption)
-    must not crash the tool layer. The helper treats the failure as
-    "missing" so the downstream NEEDS_REIMPORT branch fires whenever
-    we cannot prove the table is present.
+    v0.5.1 #195 code-review (Angle A) flagged the original True-on-exception
+    semantic as asymmetric with the other catch-alls in this module
+    (``_safe_schema_stale_probe`` / ``_imports_table_has_rows`` both
+    return the *less restrictive* value on exception so a transient
+    hiccup falls through to NEEDS_CONFIG / NEEDS_IMPORT, never to
+    NEEDS_REIMPORT). Returning True ("missing") on a transient
+    catalog hiccup of a healthy v=6 DB would mis-route the user at the
+    destructive re-import recovery path, telling them to wipe
+    legitimate data. The fail-safe semantic returns False ("present")
+    so a real corruption only surfaces one tool call later via the
+    standard DuckDB error path -- recoverable, not destructive.
     """
     from apple_health_mcp.server import data_state as ds
 
     real_execute = duckdb.DuckDBPyConnection.execute
 
     def _boom(self: duckdb.DuckDBPyConnection, sql: str, *args: object, **kw: object):  # type: ignore[no-untyped-def]
-        if "import_jobs" in sql and "duckdb_tables" in sql:
+        # The probe routes through ``_table_exists_in_main(conn,
+        # 'import_jobs')``, which binds ``import_jobs`` as a SQL
+        # parameter rather than splicing into the string. Match on the
+        # bound parameter so this monkeypatch still catches the probe
+        # after the post-#195 reuse refactor folded the SQL onto a
+        # shared helper.
+        if "duckdb_tables" in sql and args and "import_jobs" in (args[0] or ()):
             raise RuntimeError("alien-db boom")
         return real_execute(self, sql, *args, **kw)
 
     monkeypatch.setattr(duckdb.DuckDBPyConnection, "execute", _boom)
     conn = get_in_memory_connection()
     try:
-        # _import_jobs_table_missing returns True on probe failure.
-        assert ds._import_jobs_table_missing(conn) is True
+        assert ds._import_jobs_table_missing(conn) is False
     finally:
         conn.close()
 

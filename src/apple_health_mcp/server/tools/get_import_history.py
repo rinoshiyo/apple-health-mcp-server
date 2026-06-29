@@ -5,6 +5,7 @@ from __future__ import annotations
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from apple_health_mcp.server.data_state import block_if_schema_outdated
 from apple_health_mcp.server.query import run_query
 
 if TYPE_CHECKING:
@@ -72,7 +73,14 @@ _SQL = (
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
     async def get_import_history() -> str:
-        # ``require_data=False`` because "list imports" is the canonical way
-        # to confirm the empty-DB state — returning the guidance message
-        # would make it impossible to ever observe the empty list.
+        # v0.5.1 #188 (post-#195 code-review Angle C): the SELECT
+        # references ``dedup_skipped`` (added in v=6 / v0.5 #163), which
+        # is absent from v=5-or-earlier ``imports`` shapes. Gate on
+        # schema_outdated BEFORE the SELECT so a pre-v0.5 DB surfaces
+        # the typed envelope instead of a raw DuckDB column-missing
+        # error. ``require_data=False`` is preserved on the
+        # READY/NEEDS_CONFIG/NEEDS_IMPORT path so "empty imports list"
+        # stays observable.
+        if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
+            return envelope
         return run_query(conn, _SQL, lock=lock, require_data=False)
