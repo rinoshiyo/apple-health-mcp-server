@@ -27,6 +27,13 @@ including Claude Desktop — through 21 MCP tools (18 read-oriented + 2 zip-flow
 - **All data stays local — no external transmission.** The importer reads
   files from disk, the server speaks MCP over stdio (HTTP is opt-in), and
   the only network artefact is whatever the client itself decides to send.
+  The DuckDB engine itself is locked down at startup
+  (`SET enable_external_access = false`), so even a prompt-injected
+  `run_custom_query` cannot reach the host filesystem or the network —
+  every fs / URL / extension function plus ATTACH / COPY / INSTALL / LOAD
+  is refused at the engine level. `run_custom_query` is additionally
+  SELECT-only and parse-time validated. See the *Security exception*
+  section below for the SemVer-level commitments.
 - **DuckDB-backed.** Re-imports are idempotent thanks to deterministic
   deduplication; ad-hoc analysis through `run_custom_query` runs at native
   DuckDB speed.

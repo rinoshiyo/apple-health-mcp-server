@@ -37,9 +37,32 @@ from sqlglot import exp
 
 from apple_health_mcp.exceptions import ValidationError
 
-# Built-in DuckDB functions that can read host files or hit external networks.
-# Even a read-only connection must reject these because the data leaves
-# through the query result. Match the Rust reference list verbatim.
+# Built-in DuckDB functions that can read host files or hit external
+# networks. Even a read-only connection must reject these because the
+# data leaves through the query result.
+#
+# v0.5.1 #190 defense-in-depth: the engine-level lockdown in
+# ``db.connection._set_engine_safety_pragmas`` (= SET
+# enable_external_access = false) is the root-cause fix that closes
+# every fs / network surface DuckDB exposes — including aliases that
+# this denylist could never enumerate exhaustively. This list remains
+# as a secondary guard:
+#
+# * It produces a friendlier ``Function 'X' is not allowed`` error
+#   than DuckDB's downstream ``IO Error`` / ``Permission Error`` on
+#   the same call, which matters for the LLM-facing UX of
+#   ``run_custom_query``.
+# * It catches the call at parse time inside ``validate_query``
+#   instead of at execute time, so a CTE or subquery hiding the
+#   denylisted function is rejected before any work runs.
+# * If ``enable_external_access`` is ever re-enabled (a deliberate
+#   future opt-in or an accidental rollback), this list still blocks
+#   the most dangerous functions.
+#
+# The v0.5.0 adversarial test (tmp/v0-5-0-adversarial-results_1.md
+# §2-2) flagged the missing parquet_scan / parquet_metadata /
+# parquet_schema / sniff_csv aliases — added below alongside the
+# pre-existing Rust-reference set.
 DENIED_FUNCTIONS: frozenset[str] = frozenset(
     {
         "read_text",
@@ -54,6 +77,12 @@ DENIED_FUNCTIONS: frozenset[str] = frozenset(
         "read_ndjson",
         "read_ndjson_auto",
         "glob",
+        # v0.5.1 #190: aliases / near-relatives of the Rust-reference
+        # set that bypassed the v0.5.0 denylist on adversarial probes.
+        "parquet_scan",
+        "parquet_metadata",
+        "parquet_schema",
+        "sniff_csv",
     }
 )
 

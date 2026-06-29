@@ -44,7 +44,15 @@ DESCRIPTION = (
     "state_of_mind (record_hash, valence, kind, labels, associations), "
     "imports, export_metadata (import_id, export_date, locale), "
     "me_attributes (import_id, date_of_birth, biological_sex, blood_type, "
-    "fitzpatrick_skin_type, cardio_fitness_medications_use)."
+    "fitzpatrick_skin_type, cardio_fitness_medications_use). "
+    "External access: queries operate only over in-DB relations. The "
+    "engine refuses every fs / network function (read_csv, read_parquet, "
+    "parquet_scan, parquet_metadata, parquet_schema, sniff_csv, glob, "
+    "read_blob, read_text, read_json, read_ndjson, and their _auto "
+    "variants) plus ATTACH / COPY / INSTALL / LOAD and any http / https / "
+    "s3 / gs / az URL — there is no opt-in. Use list_zips + import_zip "
+    "to bring new data in; ad-hoc SQL cannot reach the host filesystem "
+    "or the network."
 )
 
 

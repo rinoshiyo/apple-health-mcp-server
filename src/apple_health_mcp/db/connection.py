@@ -255,6 +255,23 @@ def get_connection(
     else:
         _migrate_if_needed_via_separate_probe(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
+    # v0.5.1 #190: lock down external resource access at the engine
+    # level BEFORE any other PRAGMA fires. This forbids httpfs / S3 /
+    # GCS / Azure FileSystem extensions, every fs-reading table
+    # function (``read_csv`` / ``read_parquet`` / ``parquet_scan`` /
+    # ``parquet_metadata`` / ``parquet_schema`` / ``sniff_csv`` /
+    # future aliases), and ATTACH / COPY / INSTALL / LOAD -- the
+    # entire egress + arbitrary-file-read surface that a denylist
+    # cannot exhaustively cover. The v0.5.0 adversarial test
+    # (tmp/v0-5-0-adversarial-results_1.md §2-2) confirmed
+    # parquet_scan / parquet_metadata / parquet_schema / sniff_csv all
+    # bypassed the denylist, and parquet_scan('https://...') exfiltrated
+    # a remote URL. The importer's writable path is unaffected: bulk
+    # ingestion goes through PyArrow `conn.register(...) → INSERT ...
+    # SELECT * FROM __bulk_arrow` so the engine never reaches for the
+    # fs / network. Read tools and `run_custom_query` operate only on
+    # in-DB relations.
+    _set_engine_safety_pragmas(conn)
     if not read_only:
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
         # v0.4 (issue #148): preserve_insertion_order=false used to be
@@ -269,6 +286,20 @@ def get_connection(
         conn.execute("PRAGMA preserve_insertion_order = false;")
     _apply_session_tz(conn)
     return conn
+
+
+def _set_engine_safety_pragmas(conn: duckdb.DuckDBPyConnection) -> None:
+    """Forbid all external resource access on ``conn`` at the engine level.
+
+    DuckDB's ``enable_external_access`` setting governs the entire
+    family of file / network functions plus ATTACH / COPY / INSTALL /
+    LOAD. Setting it to false is the single switch that closes the
+    denylist's blind spots (read_parquet aliases, csv sniffer, http /
+    https / s3 URLs) without per-function enumeration. The Python
+    binding accepts both ``SET`` and ``PRAGMA`` spellings; we use
+    ``SET`` to match DuckDB's official docs on the setting.
+    """
+    conn.execute("SET enable_external_access = false;")
 
 
 def _migrate_if_needed_via_separate_probe(db_path: Path) -> None:
@@ -289,6 +320,14 @@ def _migrate_if_needed_via_separate_probe(db_path: Path) -> None:
     """
     probe = duckdb.connect(str(db_path), read_only=True)
     try:
+        # v0.5.1 #190 (post-#200 code-review Angle C): the probe runs
+        # only two hardcoded SELECTs today (table existence + MAX
+        # version), so the lockdown is defence-in-depth rather than a
+        # live exploit fix. Extending the probe later to read an
+        # attacker-controllable column would otherwise inherit a
+        # carve-out that is invisible by name from the production
+        # serve path.
+        _set_engine_safety_pragmas(probe)
         _migrate_if_needed_on_handle(probe, db_path)
     finally:
         probe.close()
@@ -414,6 +453,18 @@ def _materialise_empty_db(db_path: Path) -> None:
     try:
         bootstrap = duckdb.connect(str(tmp_path), read_only=False)
         try:
+            # v0.5.1 #190 (post-#200 code-review Angle C): apply the
+            # same engine-level lockdown the public ``get_connection``
+            # entry points apply. The bootstrap handle currently runs
+            # only package-controlled DDL (``ensure_schema`` +
+            # ``stamp_current_version``), so the lockdown is defence-
+            # in-depth rather than a live exploit fix today. The carve-
+            # out matters when a future contributor adds a step that
+            # touches an attacker-controlled value (e.g. a settings
+            # row seeded from env, or a migration that reads a sidecar
+            # file) -- inheriting the lockdown by default keeps the
+            # contract uniform.
+            _set_engine_safety_pragmas(bootstrap)
             bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
             ensure_schema(bootstrap)
             # v0.5 (issue #178): stamp the version sentinel. The pre-#178
@@ -444,6 +495,11 @@ def get_in_memory_connection() -> duckdb.DuckDBPyConnection:
     touching the filesystem.
     """
     conn = duckdb.connect(":memory:")
+    # v0.5.1 #190: in-memory connections inherit the same external-
+    # access lockdown as the on-disk path so adversarial tests run
+    # against the production safety contract (otherwise tests would
+    # pin the wrong behaviour and let a future regression land).
+    _set_engine_safety_pragmas(conn)
     conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
     _apply_session_tz(conn)
     return conn
