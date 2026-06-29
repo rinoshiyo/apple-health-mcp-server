@@ -713,6 +713,12 @@ CREATE INDEX IF NOT EXISTS idx_correlation_members_record
 CREATE INDEX IF NOT EXISTS idx_import_jobs_source_sha256
     ON import_jobs(source_sha256);
 CREATE INDEX IF NOT EXISTS idx_import_jobs_status ON import_jobs(status);
+-- v0.5 code-review (PR #184 F8): every ``get_import_status`` poll +
+-- every ``mark_running`` / ``mark_phase`` / ``mark_done`` /
+-- ``mark_error`` UPDATE filters by ``job_id``. Without this index they
+-- degenerate to a sequential scan that grows linearly with the
+-- accumulated import history.
+CREATE INDEX IF NOT EXISTS idx_import_jobs_job_id ON import_jobs(job_id);
 """
 
 

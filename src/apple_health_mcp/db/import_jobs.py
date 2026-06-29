@@ -287,6 +287,52 @@ def get_job(
     return _row_to_job(row)
 
 
+def claim_or_get_active(
+    conn: duckdb.DuckDBPyConnection,
+    lock: Lock,
+    *,
+    job_id: str,
+    source_id: str,
+    source_sha256: str,
+    queued_at: datetime | None = None,
+) -> tuple[ImportJob, bool]:
+    """Atomically: return an existing active job for the sha, or INSERT this one.
+
+    Closes the multi-launch guard TOCTOU window the original ``find_active_by_sha``
+    + ``insert_queued`` pair had: a concurrent caller for the same sha could land
+    between the SELECT and the INSERT and both spawn workers. Holding the writer
+    lock around both reads + the INSERT eliminates the race, since every other
+    competing call must take the same lock to even read the table.
+
+    Returns ``(job, freshly_inserted)``. ``freshly_inserted=True`` means the
+    caller owns the new worker thread spawn responsibility; ``False`` means
+    another in-flight job for the same sha already exists and the caller
+    should return its ``job_id`` to the agent without spawning anything.
+    """
+    moment = queued_at or datetime.now(UTC)
+    with lock:
+        row = conn.execute(
+            f"SELECT {_SELECT_COLUMNS} FROM import_jobs "
+            "WHERE source_sha256=? AND status IN (?, ?) "
+            "ORDER BY queued_at DESC LIMIT 1",
+            [source_sha256, STATUS_QUEUED, STATUS_RUNNING],
+        ).fetchone()
+        if row is not None:
+            return _row_to_job(row), False
+        conn.execute(
+            "INSERT INTO import_jobs (job_id, source_id, source_sha256, "
+            "status, queued_at) VALUES (?, ?, ?, ?, ?)",
+            [job_id, source_id, source_sha256, STATUS_QUEUED, moment],
+        )
+        inserted = conn.execute(
+            f"SELECT {_SELECT_COLUMNS} FROM import_jobs WHERE job_id=?",
+            [job_id],
+        ).fetchone()
+    # The INSERT we just made guarantees a hit; assert for static analysis.
+    assert inserted is not None
+    return _row_to_job(inserted), True
+
+
 def find_active_by_sha(
     conn: duckdb.DuckDBPyConnection,
     lock: Lock,
@@ -370,6 +416,7 @@ __all__ = [
     "STATUS_QUEUED",
     "STATUS_RUNNING",
     "ImportJob",
+    "claim_or_get_active",
     "find_active_by_sha",
     "generate_job_id",
     "get_job",

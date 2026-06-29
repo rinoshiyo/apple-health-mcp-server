@@ -16,7 +16,6 @@ import asyncio
 import io
 import json
 import threading
-import time
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,7 +27,7 @@ from apple_health_mcp.db.migrations import stamp_current_version
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.tools import import_zip as import_zip_mod
 from apple_health_mcp.server.tools import list_zips as list_zips_mod
-from tests._helpers import bind_tool
+from tests._helpers import bind_tool, drain_import_workers
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -226,21 +225,10 @@ def _call_import_zip(conn: duckdb.DuckDBPyConnection, *, id: str) -> dict[str, o
     return json.loads(raw)
 
 
-def _drain_import_workers(timeout: float = 30.0) -> None:
-    """Wait for every ``import-zip-*`` daemon thread to terminate.
-
-    v0.5 (issue #157) async ``import_zip`` spawns a worker thread without
-    returning the ``Thread`` handle; tests join via
-    ``threading.enumerate()`` instead. Per-thread timeout; the synthetic
-    fixtures here finish in tens of milliseconds.
-    """
-    deadline = time.monotonic() + timeout
-    for thread in list(threading.enumerate()):
-        if thread.name.startswith("import-zip-") and thread.is_alive():
-            remaining = max(0.0, deadline - time.monotonic())
-            thread.join(remaining)
-            if thread.is_alive():  # pragma: no cover - defensive
-                raise TimeoutError(f"import worker {thread.name} did not finish in {timeout}s")
+# v0.5 code-review (PR #184 F9): ``drain_import_workers`` lives in
+# tests/_helpers.py so the helper does not drift between this file and
+# tests/unit/server/test_import_jobs_async.py.
+_drain_import_workers = drain_import_workers
 
 
 def _await_queued(

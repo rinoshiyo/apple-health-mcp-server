@@ -43,6 +43,7 @@ multi-launch guard would wedge on a worker the OS killed mid-import.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -125,12 +126,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             ),
         ],
     ) -> str:
-        # No ``asyncio.to_thread`` wrap here: the dispatch body now
-        # returns in milliseconds (insert one row + spawn a worker
-        # thread). Keeping the handler on the event loop means the MCP
-        # transport keepalives stay responsive without paying a
-        # thread-pool hop on every call.
-        return _import_zip_dispatch(conn, lock, id)
+        # v0.5 code-review (PR #184 F2): wrap dispatch in
+        # ``asyncio.to_thread`` so multi-GB sha256 streaming (when
+        # ``_resolve_target`` misses the cache on a first import) does
+        # not block the asyncio event loop. The dispatch body is
+        # usually milliseconds, but the worst-case cache-miss path
+        # streams a 1-2 GB ZIP synchronously — exactly the kind of
+        # event-loop block the v0.5 split was designed to avoid on
+        # first-time users.
+        return await asyncio.to_thread(_import_zip_dispatch, conn, lock, id)
 
 
 def _import_zip_dispatch(
@@ -266,62 +270,59 @@ def _import_zip_dispatch(
             }
         )
 
-    # Multi-launch guard: if a worker is already in flight for the
-    # exact same sha256, return THAT job_id instead of spawning a
-    # duplicate. The duplicate would queue on the writer lock for the
-    # full extract + run_import window, then observe the
-    # ``imports.source_zip_sha256`` row the first worker just wrote and
-    # no-op anyway -- so the guard is both a correctness win
-    # (deterministic single-active-job semantics) AND a wasted-work
-    # eliminator.
-    active = job_registry.find_active_by_sha(conn, lock, selected_sha)
-    if active is not None:
+    stat = selected.stat()
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    size = stat.st_size
+    source_zip = (selected_sha, mtime, size)
+
+    # v0.5 code-review (PR #184 F3): atomic claim-or-get-active closes
+    # the TOCTOU window between the multi-launch guard SELECT and the
+    # INSERT. Two near-simultaneous calls for the same sha used to
+    # both pass the guard and both spawn workers; ``claim_or_get_active``
+    # now holds the writer lock across both the read AND the INSERT, so
+    # the second caller deterministically gets the first call's
+    # ``job_id`` back via ``freshly_inserted=False``.
+    new_job_id = job_registry.generate_job_id(selected_sha)
+    claimed, freshly_inserted = job_registry.claim_or_get_active(
+        conn,
+        lock,
+        job_id=new_job_id,
+        source_id=canonical_id,
+        source_sha256=selected_sha,
+    )
+    if not freshly_inserted:
         return run_query_payload(
             {
                 "status": "queued",
-                "job_id": active.job_id,
+                "job_id": claimed.job_id,
                 "id": canonical_id,
-                "queued_at": str(active.queued_at),
+                "queued_at": str(claimed.queued_at),
                 "message": (
                     f"Import for {selected.name} is already in flight "
-                    f"(job_id={active.job_id}). Poll "
+                    f"(job_id={claimed.job_id}). Poll "
                     "get_import_status(job_id=...) every 10-30 seconds "
                     "until status reaches 'done' or 'error'."
                 ),
             }
         )
 
-    stat = selected.stat()
-    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-    size = stat.st_size
-    source_zip = (selected_sha, mtime, size)
-
-    job_id = job_registry.generate_job_id(selected_sha)
-    queued_at = job_registry.insert_queued(
-        conn,
-        lock,
-        job_id=job_id,
-        source_id=canonical_id,
-        source_sha256=selected_sha,
-    )
-
     worker = threading.Thread(
         target=_run_import_in_background,
-        args=(conn, lock, selected, source_zip, job_id),
+        args=(conn, lock, selected, source_zip, claimed.job_id),
         daemon=True,
-        name=f"import-zip-{job_id}",
+        name=f"import-zip-{claimed.job_id}",
     )
     worker.start()
 
     return run_query_payload(
         {
             "status": "queued",
-            "job_id": job_id,
+            "job_id": claimed.job_id,
             "id": canonical_id,
-            "queued_at": str(queued_at),
+            "queued_at": str(claimed.queued_at),
             "message": (
                 f"Import of {selected.name} started in background "
-                f"(job_id={job_id}). Poll get_import_status(job_id=...) "
+                f"(job_id={claimed.job_id}). Poll get_import_status(job_id=...) "
                 "every 10-30 seconds to track progress. Total runtime "
                 "depends on your machine (~45s on fast NVMe + recent CPU, "
                 "several minutes on slower hardware)."
@@ -360,9 +361,15 @@ def _run_import_in_background(
             [phase, job_id],
         )
 
-    job_registry.mark_running(conn, lock, job_id, phase="extracting")
+    # v0.5 code-review (PR #184 F5): wrap mark_running inside the same
+    # try block as extract_zip_and_import. Pre-fix, a failing
+    # mark_running (transient DuckDB error, file lock contention) would
+    # escape the daemon thread silently and leave the row stuck at
+    # status='queued' until the next boot sweep — wedging the
+    # multi-launch guard against this sha indefinitely.
     started = time.monotonic()
     try:
+        job_registry.mark_running(conn, lock, job_id, phase="extracting")
         stats = extract_zip_and_import(
             selected,
             source_zip=source_zip,
@@ -372,7 +379,7 @@ def _run_import_in_background(
         )
     except zipfile.BadZipFile as exc:
         _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
-        job_registry.mark_error(
+        _safe_mark_error(
             conn,
             lock,
             job_id,
@@ -382,7 +389,7 @@ def _run_import_in_background(
         return
     except Exception as exc:  # pragma: no cover - covered via injected failure test
         _logger.exception("Background import failed for %s", selected)
-        job_registry.mark_error(
+        _safe_mark_error(
             conn,
             lock,
             job_id,
@@ -392,17 +399,43 @@ def _run_import_in_background(
         return
     duration_secs = round(time.monotonic() - started, 2)
 
-    job_registry.mark_done(
-        conn,
-        lock,
-        job_id,
-        records_added=stats.records,
-        workouts_added=stats.workouts,
-        ecg_readings_added=stats.ecg_readings,
-        route_points_added=stats.route_points,
-        duration_secs=duration_secs,
-        already_imported_at=None,
-    )
+    try:
+        job_registry.mark_done(
+            conn,
+            lock,
+            job_id,
+            records_added=stats.records,
+            workouts_added=stats.workouts,
+            ecg_readings_added=stats.ecg_readings,
+            route_points_added=stats.route_points,
+            duration_secs=duration_secs,
+            already_imported_at=None,
+        )
+    except Exception:  # pragma: no cover - defensive: mark_done is the last write
+        _logger.exception("mark_done failed for %s after successful import", job_id)
+
+
+def _safe_mark_error(
+    conn: duckdb.DuckDBPyConnection,
+    lock: Lock,
+    job_id: str,
+    *,
+    reason: str,
+    message: str,
+) -> None:
+    """Best-effort ``mark_error`` that never re-raises out of the worker.
+
+    The terminal-state write is the last opportunity to flip a job to
+    a terminal status; if it raises, the row is stuck in ``running``
+    forever (the boot sweep's only safety net) and the agent's poll
+    keeps returning ``running`` indefinitely. Swallowing the exception
+    here loses the failure detail but keeps the agent UX honest — the
+    underlying error is already logged with full traceback above.
+    """
+    try:
+        job_registry.mark_error(conn, lock, job_id, reason=reason, message=message)
+    except Exception:  # pragma: no cover - DB unreachable during error reporting
+        _logger.exception("mark_error failed for %s; row left in running state", job_id)
 
 
 def _resolve_target(

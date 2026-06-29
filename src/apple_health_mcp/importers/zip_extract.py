@@ -72,8 +72,14 @@ def extract_zip_and_import(
     ``None`` is fine for single-thread callers (CLI: no shared
     connection, so no lock needed).
     """
-    if phase_callback is not None:
-        phase_callback("extracting")
+    # v0.5 code-review (PR #184 F1): no phase_callback fire here. The
+    # worker's _phase_cb assumes it runs INSIDE the writer-lock context
+    # ``with lock_ctx:`` opens around run_import, but ``extracting`` was
+    # being sent BEFORE that lock was acquired — racing concurrent read
+    # tools on the not-thread-safe DuckDB connection. Worker's
+    # ``mark_running(phase="extracting")`` (inside the writer lock) is
+    # the canonical extracting-phase stamp; the redundant outer
+    # callback added no new information.
     with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
         extracted_root = Path(tmpdir)
         # v0.5 (PR #172 code-review #1/#2): scope the extraction-phase

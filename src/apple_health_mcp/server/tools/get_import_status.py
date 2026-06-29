@@ -124,20 +124,27 @@ def _get_import_status_dispatch(
         )
 
     if job.status == job_registry.STATUS_DONE:
+        # v0.5 code-review (PR #184 F4 + F6): include ``id`` so the wire
+        # shape matches the legacy synchronous import_zip envelope; and
+        # guard ``duration_secs`` against None so a partially-written
+        # row (external tool, future migration mid-state) cannot
+        # surface as a TypeError instead of a typed envelope.
+        duration_secs = job.duration_secs if job.duration_secs is not None else 0.0
         return run_query_payload(
             {
                 "status": "ok",
                 "job_id": job.job_id,
+                "id": job.source_id,
                 "records_added": job.records_added,
                 "workouts_added": job.workouts_added,
                 "ecg_readings_added": job.ecg_readings_added,
                 "route_points_added": job.route_points_added,
-                "duration_secs": job.duration_secs,
+                "duration_secs": duration_secs,
                 "already_imported_at": job.already_imported_at,
                 "message": (
                     f"Imported {job.records_added} records / "
                     f"{job.workouts_added} workouts in "
-                    f"{job.duration_secs:.1f}s. Read tools now return "
+                    f"{duration_secs:.1f}s. Read tools now return "
                     "real data."
                 ),
             }

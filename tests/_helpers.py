@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from collections.abc import Awaitable, Callable
 from threading import Lock
 from typing import Any
@@ -97,6 +99,29 @@ def seed_one_import(
         "VALUES (?, '/tmp/x', TIMESTAMPTZ '2024-01-01 00:00:00+00')",
         [import_id],
     )
+
+
+def drain_import_workers(timeout: float = 30.0) -> None:
+    """Wait for every ``import-zip-*`` daemon thread spawned by ``import_zip``.
+
+    v0.5 (issue #157) async ``import_zip`` returns ``status: 'queued'``
+    immediately and runs the importer in a daemon thread named
+    ``import-zip-<job_id>``. Tests that assert on the final ``import_jobs``
+    state must join those threads first, but the dispatcher does not
+    surface the ``Thread`` handle; this helper walks
+    ``threading.enumerate()`` and joins each match.
+
+    Per-thread timeout. Synthetic fixtures finish in tens of
+    milliseconds; production-scale would take much longer (the entire
+    point of the async refactor in issue #157).
+    """
+    deadline = time.monotonic() + timeout
+    for thread in list(threading.enumerate()):
+        if thread.name.startswith("import-zip-") and thread.is_alive():
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(remaining)
+            if thread.is_alive():  # pragma: no cover - defensive
+                raise TimeoutError(f"import worker {thread.name} did not finish in {timeout}s")
 
 
 def assert_tool_db_error(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> str:
