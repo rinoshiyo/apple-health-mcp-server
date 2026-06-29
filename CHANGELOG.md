@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-29
+
 ### Security
 
 - **Lock down all external resource access at the DuckDB engine level
