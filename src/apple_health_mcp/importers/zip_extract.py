@@ -15,6 +15,7 @@ import contextlib
 import logging
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
@@ -39,6 +40,7 @@ def extract_zip_and_import(
     import_id: str | None = None,
     force: bool = False,
     lock: Lock | None = None,
+    phase_callback: Callable[[str], None] | None = None,
 ) -> ImportStats:
     """Extract ``zip_path`` into a tempdir and run the full import pipeline.
 
@@ -70,6 +72,14 @@ def extract_zip_and_import(
     ``None`` is fine for single-thread callers (CLI: no shared
     connection, so no lock needed).
     """
+    # v0.5 code-review (PR #184 F1): no phase_callback fire here. The
+    # worker's _phase_cb assumes it runs INSIDE the writer-lock context
+    # ``with lock_ctx:`` opens around run_import, but ``extracting`` was
+    # being sent BEFORE that lock was acquired — racing concurrent read
+    # tools on the not-thread-safe DuckDB connection. Worker's
+    # ``mark_running(phase="extracting")`` (inside the writer lock) is
+    # the canonical extracting-phase stamp; the redundant outer
+    # callback added no new information.
     with tempfile.TemporaryDirectory(prefix="apple-health-zip-") as tmpdir:
         extracted_root = Path(tmpdir)
         # v0.5 (PR #172 code-review #1/#2): scope the extraction-phase
@@ -115,6 +125,7 @@ def extract_zip_and_import(
                 import_id=import_id,
                 force=force,
                 source_zip=source_zip,
+                phase_callback=phase_callback,
             )
 
 

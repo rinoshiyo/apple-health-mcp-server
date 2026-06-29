@@ -27,6 +27,7 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.db.connection import get_connection
 from apple_health_mcp.exceptions import ConfigError
 from apple_health_mcp.server import tools as tools_pkg
@@ -59,6 +60,32 @@ def create_server(
 
     mcp = FastMCP(name, host=host, port=port)
     lock = Lock()
+    # v0.5 (issue #157): boot-time orphan sweep. Any ``import_jobs`` row
+    # left in ``queued`` / ``running`` from a prior process is owned by
+    # a worker thread that no longer exists; rewrite it to ``error``
+    # with ``reason='server_restarted_while_running'`` so the
+    # multi-launch guard inside ``import_zip`` does not stay wedged on
+    # a phantom job and the agent re-polling an old ``job_id`` after a
+    # restart gets a definite terminal state.
+    #
+    # v0.5 code-review (PR #184 F7): guard against transient sweep
+    # failure (DuckDB I/O error, file lock contention from an
+    # orphaned importer process being cleaned up) so the failure does
+    # not bring down server boot for every unrelated read tool too.
+    # A logged warning + degraded boot is strictly better than the
+    # whole MCP surface failing to come up.
+    try:
+        swept = job_registry.sweep_orphan_jobs(conn, lock)
+    except Exception:  # pragma: no cover - boot-time IO errors are environment-specific
+        _logger.warning(
+            "Orphan import_jobs sweep failed at server boot; continuing in "
+            "degraded mode (stale queued/running rows may persist until "
+            "manually cleared).",
+            exc_info=True,
+        )
+    else:
+        if swept:
+            _logger.info("Swept %d orphan import_jobs row(s) on server boot.", swept)
     for register in tools_pkg.ALL_TOOLS:
         register(mcp, conn, lock)
     return mcp

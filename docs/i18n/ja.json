@@ -34,7 +34,7 @@
     "name": "Claude",
     "time": "just now",
     "body_html": "<p>先週のランは合計 <span class=\"hi\">32.4 km</span>、 平均ペースは 5'38\"/km でした。 一昨日のロング走の翌日に HRV が 9 ms 落ちているので、 今日は easy run か rest がおすすめです。</p><p style=\"color: var(--muted); font-size: 12.5px;\">睡眠の深さも同じ日に -22% &mdash; 回復を優先しましょう。</p>",
-    "meta": "Local DuckDB · 20 tools · no cloud upload"
+    "meta": "Local DuckDB · 21 tools · no cloud upload"
   },
   "cta": {
     "primary": "クイックスタート",
@@ -107,7 +107,7 @@
     "codex_body": "<code>~/.codex/config.toml</code> に MCP サーバーとして登録します。"
   },
   "tools": {
-    "eyebrow": "20 個のツール",
+    "eyebrow": "21 個のツール",
     "title": "読み取り中心の、 幅広いクエリ。",
     "deck": "Claude が自分で選んで使う、 Apple ヘルスケア向けのツールです。 クエリの組み立てからローカルでの応答まで、 すべてあなたのコンピュータの中で完結します。",
     "g1_title": "Records / Statistics",

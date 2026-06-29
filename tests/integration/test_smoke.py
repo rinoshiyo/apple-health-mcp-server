@@ -31,6 +31,7 @@ from apple_health_mcp.server.tools import (
     get_ecg_data,
     get_heart_rate_samples,
     get_import_history,
+    get_import_status,
     get_me_attributes,
     get_record_statistics,
     get_server_info,
@@ -150,13 +151,14 @@ def test_all_mcp_tools_smoke(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Invoke each of the 20 MCP tools against the fixture-imported DB.
+    """Invoke each of the 21 MCP tools against the fixture-imported DB.
 
-    v0.4 added ``list_zips`` + ``import_zip``; smoke now covers them
-    against an empty drop-zone (NEEDS_CONFIG-style hint envelope for
-    list_zips, ``id_not_found`` error envelope for import_zip) so a
-    regression in the new tools' wire shape surfaces at integration
-    time rather than during a dogfood pass.
+    v0.4 added ``list_zips`` + ``import_zip``; smoke covers them against
+    an empty drop-zone (NEEDS_CONFIG-style hint envelope for list_zips,
+    ``id_not_found`` error envelope for import_zip). v0.5 (issue #157)
+    added ``get_import_status``; smoke covers it via the ``job_not_found``
+    branch so a regression in the new tools' wire shape surfaces at
+    integration time rather than during a dogfood pass.
     """
     with _open_db(imported_db.db_path) as conn:
         # Resolve fixture-derived row keys once.
@@ -305,6 +307,14 @@ def test_all_mcp_tools_smoke(
         payload = call_tool(bind_tool(import_zip, conn), id="deadbeef")
         assert payload["status"] == "error"
         assert payload["reason"] == "id_not_found"
+
+        # 21. get_import_status — v0.5 (issue #157) async job poll.
+        # Driven against a fabricated job_id so the ``job_not_found``
+        # branch pins the wire shape without spawning a worker; happy
+        # paths are unit-covered in tests/unit/server/test_import_jobs.py.
+        payload = call_tool(bind_tool(get_import_status, conn), job_id="ij_nope")
+        assert payload["status"] == "error"
+        assert payload["reason"] == "job_not_found"
 
 
 # --- date-only end_date inclusive smoke (issue #49) --------------------------

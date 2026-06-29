@@ -1,25 +1,44 @@
-"""``import_zip`` MCP tool — drive run_import from a discovered ZIP.
+"""``import_zip`` MCP tool — job-based async import driver (v0.5, issue #157).
 
-v0.4 (issue #148) companion to ``list_zips``. The agent picks an ``id``
-from ``list_zips``'s output and passes it here; this module locates the
-matching ZIP under ``APPLE_HEALTH_EXPORT_ZIPS_DIR``, extracts it into a
-``tempfile.TemporaryDirectory``, and hands the resulting export
-directory to ``run_import`` against the server's live writable handle.
+v0.4 (issue #148) introduced this tool as a *synchronous* importer that
+returned a ``done`` envelope after the full XML → ECG → GPX → finalize
+pipeline finished. Dogfood on a fast workstation (Intel 14 + NVMe) ran
+in 44-106s, but the implicit MCP tool-call timeout on slower clients
+made the synchronous shape unshippable — a 200-400s import on mid-range
+hardware deterministically tripped the client's timeout and left the
+user with a half-imported DB and no progress signal.
 
-Idempotency lives inside the importer, not at this tool's surface: the
-``source_zip_sha256`` lookup inside ``run_import`` makes a byte-identical
-re-import a no-op that returns in milliseconds with
-``records_added: 0`` + ``already_imported_at`` set.
+v0.5 splits the surface into two tools:
 
-**Concurrency contract.** The DuckDB Python connection is not thread-
-safe and the v0.4 server opens it writable so this tool can reuse the
-same handle. The full extract + ``run_import`` body therefore runs
-under the same ``lock`` every other MCP tool acquires before touching
-``conn`` -- without the wrap, a concurrent read tool's
-``conn.execute(...)`` would race the importer's writes. The handler is
-also dispatched via ``asyncio.to_thread`` so the event loop stays
-responsive to the MCP transport's keepalives during the 1-2 minute
-import.
+* ``import_zip(id=...)`` — validates the id, resolves the ZIP under
+  ``APPLE_HEALTH_EXPORT_ZIPS_DIR``, inspects it for the Apple Health
+  marker, then inserts an ``import_jobs`` row, spawns a worker thread,
+  and returns a ``queued`` envelope in ms. Validation / config /
+  invalid-zip / not-an-Apple-Health-ZIP failures still surface
+  synchronously through ``error`` envelopes — a job_id is only minted
+  once we have a real importer to run.
+* ``get_import_status(job_id=...)`` — the new companion tool the agent
+  polls every 10-30 seconds to retrieve ``running`` / ``done`` / ``error``
+  state from the same ``import_jobs`` row.
+
+**Idempotency.** A byte-identical re-import still no-ops in ms: the
+sha256 lookup against ``imports.source_zip_sha256`` runs BEFORE any
+job is inserted, so the agent receives a ``done`` envelope with
+``records_added: 0`` and ``already_imported_at`` populated, exactly
+matching the v0.4 wire shape. No row is written to ``import_jobs`` for
+the no-op case.
+
+**Multi-launch guard.** If a worker is already in flight for the same
+sha256 (``status IN ('queued','running')``), the second call returns
+the EXISTING ``job_id`` instead of spawning a duplicate worker that
+would queue on the writer lock and then no-op against the same
+``imports.source_zip_sha256`` row anyway.
+
+**Orphan recovery.** Server boot runs
+:func:`apple_health_mcp.db.import_jobs.sweep_orphan_jobs` to flip every
+``queued`` / ``running`` row to ``error`` with
+``reason='server_restarted_while_running'``. Without the sweep, the
+multi-launch guard would wedge on a worker the OS killed mid-import.
 """
 
 from __future__ import annotations
@@ -28,6 +47,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 import time
 import zipfile
 from datetime import UTC, datetime
@@ -37,6 +57,7 @@ from typing import TYPE_CHECKING, Annotated
 
 from pydantic import Field
 
+from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.query import query_to_json, run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
@@ -59,22 +80,27 @@ DESCRIPTION = (
     "Import an Apple Health export ZIP into the local DuckDB database. "
     "Pass the ``id`` value emitted by list_zips (an 8-char sha256 "
     "prefix). The tool resolves the ZIP under "
-    "APPLE_HEALTH_EXPORT_ZIPS_DIR, extracts it into a temp directory, "
-    "and runs the full XML → ECG → GPX → finalize pipeline. Takes 1-2 "
-    "minutes for a typical multi-GB export; the agent should tell the "
-    "user it is working synchronously. A byte-identical re-import "
-    "no-ops in milliseconds (records_added: 0, "
-    "already_imported_at populated). Returns {status: 'ok' | 'error', "
-    "id, records_added, workouts_added, ecg_readings_added, "
-    "route_points_added, already_imported_at, duration_secs, message} "
-    "on success, or {status: 'error', reason, message} on a "
-    "configuration / invalid-zip / not-an-Apple-Health-ZIP / "
-    "ZIP-not-found / invalid-id failure. The ``invalid_zip`` reason "
-    "signals the file is not a valid ZIP archive (corruption, partial "
-    "download, an HTML page renamed to .zip) and the user should "
-    "re-download; ``not_apple_health_export`` signals a valid ZIP that "
-    "is just missing the Apple Health marker and the user should pick "
-    "a different file."
+    "APPLE_HEALTH_EXPORT_ZIPS_DIR, inspects it, and -- on success -- "
+    "kicks off the importer in a background worker thread. **Returns "
+    "immediately with a ``job_id``** so the call cannot trip the MCP "
+    "client's tool-call timeout on slow hardware. Poll "
+    "get_import_status(job_id=...) every 10-30 seconds to track "
+    "progress and retrieve the final result; total import time depends "
+    "on the user's machine (~45s on a fast NVMe + recent CPU, several "
+    "minutes on slower hardware). A byte-identical re-import returns "
+    "the legacy ``done`` envelope synchronously without spawning a "
+    "worker (records_added: 0, already_imported_at populated). Returns "
+    "{status: 'queued', job_id, id, queued_at, message} on a new "
+    "import; {status: 'ok', id, records_added: 0, "
+    "already_imported_at, ...} on the idempotent no-op; or "
+    "{status: 'error', reason, message} on a configuration / "
+    "invalid-zip / not-an-Apple-Health-ZIP / ZIP-not-found / "
+    "invalid-id failure. The ``invalid_zip`` reason signals the file "
+    "is not a valid ZIP archive (corruption, partial download, an "
+    "HTML page renamed to .zip) and the user should re-download; "
+    "``not_apple_health_export`` signals a valid ZIP that is just "
+    "missing the Apple Health marker and the user should pick a "
+    "different file."
 )
 
 
@@ -100,20 +126,28 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             ),
         ],
     ) -> str:
-        # Offload to a worker thread so the asyncio event loop stays
-        # responsive during the multi-minute import; the body holds the
-        # ``lock`` for the whole conn.execute path, so concurrent tool
-        # calls back off cleanly instead of racing the writer.
-        return await asyncio.to_thread(_import_zip_sync, conn, lock, id)
+        # v0.5 code-review (PR #184 F2): wrap dispatch in
+        # ``asyncio.to_thread`` so multi-GB sha256 streaming (when
+        # ``_resolve_target`` misses the cache on a first import) does
+        # not block the asyncio event loop. The dispatch body is
+        # usually milliseconds, but the worst-case cache-miss path
+        # streams a 1-2 GB ZIP synchronously — exactly the kind of
+        # event-loop block the v0.5 split was designed to avoid on
+        # first-time users.
+        return await asyncio.to_thread(_import_zip_dispatch, conn, lock, id)
 
 
-def _import_zip_sync(
+def _import_zip_dispatch(
     conn: duckdb.DuckDBPyConnection,
     lock: Lock,
     target_id: str,
 ) -> str:
-    """Synchronous body of ``import_zip``; split so the asyncio handler
-    can offload to ``asyncio.to_thread`` and tests can drive it directly.
+    """Synchronous body of ``import_zip``; split so tests can drive it directly.
+
+    Validation and short-circuit branches return their envelopes inline
+    (no job row is created). Only the "new import to run" branch mints
+    a ``job_id``, INSERTs the queued row, and spawns the worker thread
+    that drives :func:`apple_health_mcp.importers.zip_extract.extract_zip_and_import`.
     """
     cleaned = target_id.strip().lower()
     if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):
@@ -157,12 +191,6 @@ def _import_zip_sync(
             }
         )
     except NotADirectoryError:
-        # v0.4.1 (issue #160 code-review #4): mirror list_zips's typed
-        # envelope when APPLE_HEALTH_EXPORT_ZIPS_DIR points at a file
-        # instead of a directory. Pre-fix this raised through to
-        # FastMCP as an unstructured MCP error; the sibling list_zips
-        # has caught NotADirectoryError since v0.4.0, so import_zip
-        # was the only path with the gap.
         return run_query_payload(
             {
                 "status": "error",
@@ -219,16 +247,10 @@ def _import_zip_sync(
             }
         )
 
-    stat = selected.stat()
-    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
-    size = stat.st_size
-
-    # Idempotency check before paying the unzip cost: if the importer
-    # would no-op anyway, surface the already-imported envelope
-    # directly without writing to disk. ``run_import``'s own Tier-1
-    # sha256 fast path still covers the same case for completeness;
-    # this pre-check just keeps the user's tempdir cleaner and shaves
-    # ~0.5s on a multi-GB ZIP that would otherwise extract.
+    # Idempotency check: byte-identical re-import returns the legacy
+    # ``ok`` envelope without writing to ``import_jobs``. The pre-v0.5
+    # synchronous wire shape (status: 'ok', records_added: 0,
+    # already_imported_at populated) is preserved on this no-op branch.
     already = _find_existing_import(conn, lock, selected_sha)
     if already is not None:
         return run_query_payload(
@@ -248,69 +270,172 @@ def _import_zip_sync(
             }
         )
 
-    # v0.5 (issue #170): the extract + run_import body is shared with
-    # the CLI's ``import <zip>`` subcommand via
-    # ``importers.zip_extract.extract_zip_and_import``. Lazy import to
-    # keep the server boot off the importer / lxml / pyarrow path —
-    # ``test_server_module_does_not_import_pyarrow`` pins that invariant.
-    from apple_health_mcp.importers.zip_extract import extract_zip_and_import
+    stat = selected.stat()
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    size = stat.st_size
+    source_zip = (selected_sha, mtime, size)
 
-    # Hold the lock for the whole importer run: the DuckDB Python
-    # binding is not thread-safe and ``run_import`` performs many
-    # writes against ``conn``. Releasing the lock here would let a
-    # concurrent read tool's ``conn.execute`` race the importer
-    # mid-write -- cursor corruption, partial reads, or worse.
-    # Concurrent agent calls back off on this lock until the
-    # import completes; the ``asyncio.to_thread`` wrap in the
-    # handler keeps the event loop responsive to the MCP
-    # transport's keepalives meanwhile.
-    # v0.5 (issue #173): the lock is now passed INTO
-    # ``extract_zip_and_import`` and acquired only around the
-    # ``run_import`` call. The multi-second ZIP extraction phase runs
-    # lock-free so concurrent read tools can keep serving queries.
-    started = time.monotonic()
-    try:
-        stats = extract_zip_and_import(
-            selected,
-            source_zip=(selected_sha, mtime, size),
-            conn=conn,
-            lock=lock,
-        )
-    except zipfile.BadZipFile as exc:
-        # Extraction-phase failure only: ``zip_extract`` re-raises any
-        # OSError from ``extractall`` as BadZipFile so the two
-        # extraction-time failure modes (corruption / IO) share one
-        # envelope. Importer-phase OSError (DuckDB writes, ECG / GPX
-        # file IO) bypasses this branch so it does not get misclassified
-        # as "zip_extract_failed" — it surfaces as the importer's own
-        # typed exception or an upstream AppleHealthMCPError instead.
-        _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
+    # v0.5 code-review (PR #184 F3): atomic claim-or-get-active closes
+    # the TOCTOU window between the multi-launch guard SELECT and the
+    # INSERT. Two near-simultaneous calls for the same sha used to
+    # both pass the guard and both spawn workers; ``claim_or_get_active``
+    # now holds the writer lock across both the read AND the INSERT, so
+    # the second caller deterministically gets the first call's
+    # ``job_id`` back via ``freshly_inserted=False``.
+    new_job_id = job_registry.generate_job_id(selected_sha)
+    claimed, freshly_inserted = job_registry.claim_or_get_active(
+        conn,
+        lock,
+        job_id=new_job_id,
+        source_id=canonical_id,
+        source_sha256=selected_sha,
+    )
+    if not freshly_inserted:
         return run_query_payload(
             {
-                "status": "error",
-                "reason": "zip_extract_failed",
-                "message": f"Failed to extract {selected.name}: {exc}",
+                "status": "queued",
+                "job_id": claimed.job_id,
+                "id": canonical_id,
+                "queued_at": str(claimed.queued_at),
+                "message": (
+                    f"Import for {selected.name} is already in flight "
+                    f"(job_id={claimed.job_id}). Poll "
+                    "get_import_status(job_id=...) every 10-30 seconds "
+                    "until status reaches 'done' or 'error'."
+                ),
             }
         )
-    duration_secs = round(time.monotonic() - started, 2)
+
+    worker = threading.Thread(
+        target=_run_import_in_background,
+        args=(conn, lock, selected, source_zip, claimed.job_id),
+        daemon=True,
+        name=f"import-zip-{claimed.job_id}",
+    )
+    worker.start()
 
     return run_query_payload(
         {
-            "status": "ok",
+            "status": "queued",
+            "job_id": claimed.job_id,
             "id": canonical_id,
-            "records_added": stats.records,
-            "workouts_added": stats.workouts,
-            "ecg_readings_added": stats.ecg_readings,
-            "route_points_added": stats.route_points,
-            "already_imported_at": None,
-            "duration_secs": duration_secs,
+            "queued_at": str(claimed.queued_at),
             "message": (
-                f"Imported {selected.name} ({stats.records} records, "
-                f"{stats.workouts} workouts) in {duration_secs:.1f}s. "
-                "Read tools now return real data."
+                f"Import of {selected.name} started in background "
+                f"(job_id={claimed.job_id}). Poll get_import_status(job_id=...) "
+                "every 10-30 seconds to track progress. Total runtime "
+                "depends on your machine (~45s on fast NVMe + recent CPU, "
+                "several minutes on slower hardware)."
             ),
         }
     )
+
+
+def _run_import_in_background(
+    conn: duckdb.DuckDBPyConnection,
+    lock: Lock,
+    selected: Path,
+    source_zip: tuple[str, datetime, int],
+    job_id: str,
+) -> None:
+    """Worker-thread body: run extract + import + record terminal state.
+
+    Catches every Exception so the daemon thread cannot die silently --
+    a swallowed traceback here would leave the ``import_jobs`` row stuck
+    in ``running`` until the next server boot's orphan sweep, which is
+    the wrong story for an in-process error the agent should see now.
+    """
+    # Lazy import: ``extract_zip_and_import`` pulls the importer / lxml /
+    # pyarrow graph; the server boot path must stay clean of it
+    # (``test_server_module_does_not_import_pyarrow``).
+    from apple_health_mcp.importers.zip_extract import extract_zip_and_import
+
+    # Phase callback runs INSIDE the writer-lock context
+    # ``extract_zip_and_import`` opens around ``run_import``. Re-acquiring
+    # the same ``threading.Lock`` would deadlock, so the callback issues
+    # the UPDATE directly. Safe because we are guaranteed to own the
+    # lock for the duration of the callback's lifetime.
+    def _phase_cb(phase: str) -> None:
+        conn.execute(
+            "UPDATE import_jobs SET phase=? WHERE job_id=?",
+            [phase, job_id],
+        )
+
+    # v0.5 code-review (PR #184 F5): wrap mark_running inside the same
+    # try block as extract_zip_and_import. Pre-fix, a failing
+    # mark_running (transient DuckDB error, file lock contention) would
+    # escape the daemon thread silently and leave the row stuck at
+    # status='queued' until the next boot sweep — wedging the
+    # multi-launch guard against this sha indefinitely.
+    started = time.monotonic()
+    try:
+        job_registry.mark_running(conn, lock, job_id, phase="extracting")
+        stats = extract_zip_and_import(
+            selected,
+            source_zip=source_zip,
+            conn=conn,
+            lock=lock,
+            phase_callback=_phase_cb,
+        )
+    except zipfile.BadZipFile as exc:
+        _logger.warning("ZIP extraction failed for %s: %s", selected, exc)
+        _safe_mark_error(
+            conn,
+            lock,
+            job_id,
+            reason="zip_extract_failed",
+            message=f"Failed to extract {selected.name}: {exc}",
+        )
+        return
+    except Exception as exc:  # pragma: no cover - covered via injected failure test
+        _logger.exception("Background import failed for %s", selected)
+        _safe_mark_error(
+            conn,
+            lock,
+            job_id,
+            reason="run_import_failed",
+            message=str(exc),
+        )
+        return
+    duration_secs = round(time.monotonic() - started, 2)
+
+    try:
+        job_registry.mark_done(
+            conn,
+            lock,
+            job_id,
+            records_added=stats.records,
+            workouts_added=stats.workouts,
+            ecg_readings_added=stats.ecg_readings,
+            route_points_added=stats.route_points,
+            duration_secs=duration_secs,
+            already_imported_at=None,
+        )
+    except Exception:  # pragma: no cover - defensive: mark_done is the last write
+        _logger.exception("mark_done failed for %s after successful import", job_id)
+
+
+def _safe_mark_error(
+    conn: duckdb.DuckDBPyConnection,
+    lock: Lock,
+    job_id: str,
+    *,
+    reason: str,
+    message: str,
+) -> None:
+    """Best-effort ``mark_error`` that never re-raises out of the worker.
+
+    The terminal-state write is the last opportunity to flip a job to
+    a terminal status; if it raises, the row is stuck in ``running``
+    forever (the boot sweep's only safety net) and the agent's poll
+    keeps returning ``running`` indefinitely. Swallowing the exception
+    here loses the failure detail but keeps the agent UX honest — the
+    underlying error is already logged with full traceback above.
+    """
+    try:
+        job_registry.mark_error(conn, lock, job_id, reason=reason, message=message)
+    except Exception:  # pragma: no cover - DB unreachable during error reporting
+        _logger.exception("mark_error failed for %s; row left in running state", job_id)
 
 
 def _resolve_target(

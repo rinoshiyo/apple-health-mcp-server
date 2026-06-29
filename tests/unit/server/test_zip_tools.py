@@ -1,10 +1,21 @@
-"""Tests for the v0.4 ZIP-flow MCP tools (``list_zips`` + ``import_zip``)."""
+"""Tests for the v0.4 ZIP-flow MCP tools (``list_zips`` + ``import_zip``).
+
+v0.5 (issue #157) turned ``import_zip`` into a job-based async tool: the
+happy path now returns ``{status: 'queued', job_id, ...}`` in
+milliseconds and a daemon worker thread completes the import in the
+background. The pre-v0.5 helpers in this file therefore wait for every
+``import-zip-*`` daemon thread to drain before asserting on the
+``imports`` table state. The synchronous short-circuits
+(invalid_id / config errors / not_apple_health / idempotent re-import
+no-op) still return inline so those tests stay untouched.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import io
 import json
+import threading
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -16,7 +27,7 @@ from apple_health_mcp.db.migrations import stamp_current_version
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.tools import import_zip as import_zip_mod
 from apple_health_mcp.server.tools import list_zips as list_zips_mod
-from tests._helpers import bind_tool
+from tests._helpers import bind_tool, drain_import_workers
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -214,6 +225,52 @@ def _call_import_zip(conn: duckdb.DuckDBPyConnection, *, id: str) -> dict[str, o
     return json.loads(raw)
 
 
+# v0.5 code-review (PR #184 F9): ``drain_import_workers`` lives in
+# tests/_helpers.py so the helper does not drift between this file and
+# tests/unit/server/test_import_jobs_async.py.
+_drain_import_workers = drain_import_workers
+
+
+def _await_queued(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    id: str,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Drive a v0.5 async ``import_zip`` call and read back the final status.
+
+    Returns ``(queued_envelope, job_row)``. ``queued_envelope`` is the
+    immediate ``{status: 'queued', job_id, ...}`` payload; ``job_row``
+    is the resolved row from ``import_jobs`` after the worker
+    terminates (status is one of ``done`` / ``error`` -- never
+    ``queued`` / ``running`` because we drained the workers first).
+    """
+    from apple_health_mcp.db import import_jobs as job_registry
+
+    queued = _call_import_zip(conn, id=id)
+    assert queued["status"] == "queued", queued
+    _drain_import_workers()
+    job_id = str(queued["job_id"])
+    # ``get_job`` requires a Lock to serialise against the writer; tests
+    # use a process-local lock just for these reads.
+    job = job_registry.get_job(conn, threading.Lock(), job_id)
+    assert job is not None
+    return queued, {
+        "job_id": job.job_id,
+        "status": job.status,
+        "source_id": job.source_id,
+        "source_sha256": job.source_sha256,
+        "phase": job.phase,
+        "records_added": job.records_added,
+        "workouts_added": job.workouts_added,
+        "ecg_readings_added": job.ecg_readings_added,
+        "route_points_added": job.route_points_added,
+        "duration_secs": job.duration_secs,
+        "already_imported_at": job.already_imported_at,
+        "error_reason": job.error_reason,
+        "error_message": job.error_message,
+    }
+
+
 def test_import_zip_rejects_empty_id() -> None:
     """An empty id MUST NOT silently select the alphabetically-first ZIP.
 
@@ -264,11 +321,12 @@ def test_import_zip_accepts_uppercase_hex_id(
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
-        out = _call_import_zip(conn, id=sha[:8].upper())
-        assert out["status"] == "ok"
+        queued, job = _await_queued(conn, id=sha[:8].upper())
         # Canonical id on the wire is lowercase, 8 chars, regardless of
         # what the user passed.
-        assert out["id"] == sha[:8]
+        assert queued["id"] == sha[:8]
+        assert job["status"] == "done"
+        assert job["source_id"] == sha[:8]
     finally:
         conn.close()
 
@@ -362,11 +420,11 @@ def test_import_zip_drives_run_import_against_live_handle(
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-        out = _call_import_zip(conn, id=sha[:8])
-        assert out["status"] == "ok"
-        assert out["id"] == sha[:8]
-        assert out["already_imported_at"] is None
-        assert isinstance(out["records_added"], int)
+        queued, job = _await_queued(conn, id=sha[:8])
+        assert queued["id"] == sha[:8]
+        assert job["status"] == "done"
+        assert job["already_imported_at"] is None
+        assert isinstance(job["records_added"], int)
         # ``run_import`` stamped the source ZIP triple via the v0.4 seam.
         row = conn.execute(
             "SELECT source_zip_sha256, source_zip_size FROM imports WHERE "
@@ -405,10 +463,12 @@ def test_import_zip_resolves_via_db_cache_fast_path(
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-        # First import: populates source_zip_* triple in imports.
-        first = _call_import_zip(conn, id=sha[:8])
-        assert first["status"] == "ok"
-        # Second import via prefix: hits the DB cache fast-path.
+        # First import: queued + worker await populates source_zip_*
+        # triple in imports.
+        _, first_job = _await_queued(conn, id=sha[:8])
+        assert first_job["status"] == "done"
+        # Second import via prefix: hits the DB cache fast-path AND the
+        # synchronous idempotent ``ok`` short-circuit (no worker spawned).
         second = _call_import_zip(conn, id=sha[:8])
         assert second["status"] == "ok"
         assert second["records_added"] == 0
@@ -482,14 +542,20 @@ def test_import_zip_returns_already_imported_envelope_on_byte_identical_reimport
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-        # First import: real records_added.
-        first = _call_import_zip(conn, id=sha[:8])
-        assert first["status"] == "ok"
-        # Second import: no-op envelope, populated already_imported_at.
+        # First import: queued + worker await populates imports row.
+        _, first_job = _await_queued(conn, id=sha[:8])
+        assert first_job["status"] == "done"
+        # Second import: synchronous no-op envelope; the idempotent
+        # short-circuit MUST NOT spawn a worker (no ``import_jobs``
+        # row written, no thread costs paid).
         second = _call_import_zip(conn, id=sha[:8])
         assert second["status"] == "ok"
         assert second["records_added"] == 0
         assert second["already_imported_at"] is not None
+        # No new ``import_jobs`` row was inserted -- only the first
+        # call's queued row exists.
+        rows = conn.execute("SELECT COUNT(*) FROM import_jobs").fetchone()
+        assert rows is not None and rows[0] == 1
     finally:
         conn.close()
 
@@ -515,8 +581,8 @@ def test_import_zip_handles_flat_apple_health_zip(
         import hashlib
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-        out = _call_import_zip(conn, id=sha[:8])
-        assert out["status"] == "ok"
+        _, job = _await_queued(conn, id=sha[:8])
+        assert job["status"] == "done"
     finally:
         conn.close()
 
@@ -554,12 +620,22 @@ def test_import_zip_returns_zip_extract_failed_on_corrupt_archive(
 
         sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
         out = _call_import_zip(conn, id=sha[:8])
-        # Either the is_apple_health probe rejects the corrupted file
-        # (BadZipFile in zipfile.ZipFile init) or the extract path
-        # catches a downstream OSError -- both surface as a typed
-        # error envelope, never as an unhandled exception.
-        assert out["status"] == "error"
-        assert out["reason"] in {"not_apple_health_export", "zip_extract_failed"}
+        # v0.5: ``inspect_zip`` rejects archives whose central directory
+        # is unreadable (``invalid_zip``) synchronously; a ZIP that
+        # passes inspect_zip but fails ``extractall`` mid-stream goes
+        # through the async path and the worker records the error in
+        # ``import_jobs``.
+        if out["status"] == "error":
+            assert out["reason"] in {"invalid_zip", "not_apple_health_export"}
+        else:
+            assert out["status"] == "queued"
+            _drain_import_workers()
+            from apple_health_mcp.db import import_jobs as job_registry
+
+            job = job_registry.get_job(conn, threading.Lock(), str(out["job_id"]))
+            assert job is not None
+            assert job.status == "error"
+            assert job.error_reason == "zip_extract_failed"
     finally:
         conn.close()
 
