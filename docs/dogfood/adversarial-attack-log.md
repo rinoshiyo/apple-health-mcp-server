@@ -3,7 +3,88 @@
 本書は **これまでの adversarial review で既に試した attack vector** の
 カタログ。 新規 adversarial review (= Desktop agent や別端末で意地悪
 テストを依頼する時) に **「既出を再現するな、 新しい角度を考えろ」** と
-渡すための referense。
+渡すための reference。
+
+> ⚡ **使い方**: 下の「Adversarial 依頼 prompt テンプレート」 セクション
+> を **本書ごと Desktop agent / 別 session に丸ごと渡す**。 prompt 部分は
+> 雛形なので、 依頼者は冒頭 1〜2 文を口語で差し替えても良い (= 「次、
+> 意地悪してくれ」 等)。 本書末尾の attack vector 表が既出リスト、 agent
+> はそこに無い角度を探す。
+
+## Adversarial 依頼 prompt テンプレート (= ここから下を agent にコピペ)
+
+---
+
+あなたは MCP server `apple-health-mcp-server` の adversarial QA tester
+です。 **MCP のテスターとして、 思いつく限り穴をついてください**。
+
+`run_custom_query` / `import_zip` / `list_zips` / `get_import_status` /
+各種 read tool に対して、 仕様の隙間・異常系・セキュリティ境界を狙う。
+過去の adversarial で発掘した stop-ship (= v0.5.0 #190 SSRF / `sniff_csv`
+実データ漏洩) と同等以上の defect を発掘するのが目的。
+
+### 行動規律
+
+- **軽いものから順に試す** (= 副作用の小さい read 系 attack を先に、
+  破壊性のある書き込み / DoS 系 attack は後)
+- **1 件ずつ報告する** (= 一気に複数 attack を打ち込んで結果を一括返却
+  しない、 各 attack ごとに観測結果を区切って報告)
+- **「やれるやつは全部やれ」**。 思いつく vector を「これは agent ループ
+  で踏めない」 と早合点して切るな。 sub-second concurrency 系 (= 同時 2
+  連発、 worker 走行中の並列 read) は確かに agent ループで踏めないが、
+  それ以外の vector は基本的に試行可能
+- **既出の attack vector は再試行しない**。 本書末尾の表に列挙されてる
+  vector を見て、 そこに無い角度から攻める。 同じ目的 (= e.g. fs 読み
+  取り) でも別の関数 / 別の入力経路を考える
+
+### 報告形式 (= 各 attack ごと、 1 メッセージ 1 attack)
+
+- **入力**: 投げた tool call と引数を verbatim で
+- **観測結果**: envelope / error message そのまま (= truncate しない、
+  整形しない、 解釈しない)
+- **判定**:
+  - ✅ block (= 攻撃成立せず、 typed error or rejection)
+  - ⚠ by-design 通過 (= 設計上の carve-out、 既知)
+  - 🚨 defect 候補 (= 実害ある or 仕様と挙動の重大な乖離)
+  - ⏳ 未確定 (= さらに検証必要)
+- **defect 候補なら**: 影響 + 推奨修正方針【推測】 を 1-3 文で
+- **既出への類似度**: 本書末尾の表の attack # と比較、 「#11 (parquet_scan)
+  と同経路だが別関数」 等の差分明示
+
+### Test Basis 引用必須
+
+- 「あの DESCRIPTION でこう書いてあった」 「issue #N の acceptance
+  criteria」 「CHANGELOG の v0.5.1 ### Security 行」 等、 一次情報の
+  突合先を結果に添える
+- **推測ベースの defect 報告はしない** (= 確証取れた挙動だけ報告)
+- 不確かなら 「【推測】 〜の可能性、 検証要」 と明示
+
+### 重大な禁止事項
+
+- **server を hang させたら正直に報告する** (= 隠さない)。 user に
+  「Claude Desktop の物理再起動が必要かもしれません」 と促す
+- **「既に試された」 「scope 外」 と勝手に切らない**。 既出と判断する場合は
+  本書の attack # を引用して理由を明示
+- **defect の重要度を勝手に下げない**。 「self-DoS だから低い」 等の
+  判定は user の領分
+
+### 終了条件
+
+- 「これ以上思いつく vectors が無い」 と判断したら、 試行した attack
+  一覧 (= 番号 + 1 行サマリ) と defect 候補リスト + UX 改善候補 +
+  新規発見 attack vector の **本書追記候補** を出して終了
+- user から「終わり」 と言われたら終了
+- 5 連続で ✅ block が続いたら一旦区切って「次に攻める角度を考えてる」
+  と user に報告し、 指示待ちでも可
+
+### 既出 attack vector のリスト
+
+(= 下記「凡例」 section + 各カテゴリの attack vector 表を参照、 既出は
+基本的に再試行しない)
+
+---
+
+## 本書の運用規律 (= 書き手 / 読者向け)
 
 **書き手規約:**
 - 1 行 = 1 attack vector (= 入力 + 経路 + 結果概要 + 起点 review)
