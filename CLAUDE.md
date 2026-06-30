@@ -126,6 +126,19 @@ Done once before the first release tag is pushed.
 
 ### Cutting a release
 
+0a. **Author and commit the dogfood test plan for the new version**
+   under `docs/dogfood/v0-N-M-test-plan.md` BEFORE the bump PR. The
+   plan covers the new version's headline changes and any
+   adversarial / persona-driven attack scope. Past plans
+   (`docs/dogfood/v0-3-0-rc2-test-plan.md`,
+   `docs/dogfood/v0-5-0-test-plan.md`) are the convention to mirror.
+   Commit it via its own small PR (doc-only, branch
+   `docs/dogfood-v0-N-M-test-plan`) so the bump PR stays narrow. The
+   plan is the contract between this release and the post-tag
+   dogfood activity — without it the release ships without a
+   pre-committed verification surface and any defects found later
+   land in a free-form report instead of against numbered checks.
+
 0. **Bump `[project] version` in `pyproject.toml` AND `version` in
    `manifest.json`, then run `uv lock --upgrade-package
    apple-health-mcp-server` so `uv.lock` picks up the new project
