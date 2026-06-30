@@ -23,12 +23,6 @@ unit / integration テストは 607 件全 green、 100% branch coverage 維持
 済なので「一般動作の確認」 ではなく **テストが構造的に踏めない経路** を
 優先する。
 
-- **A1.4 (= `get_import_history` が v=5 DB で raw column-missing error
-  を出さない)**. v0.5.1 PR #200 の code-review で発覚した gate 漏れ
-  経路。 `dedup_skipped` column が v=5 imports shape に存在しない →
-  v0.5.0 では raw `Catalog Error: Referenced column "dedup_skipped"
-  not found` が露出していた。 v0.5.1 で gate 追加済だが、 0.4.legacy
-  DB を実機で開く以外に「raw error が出ないこと」 の確認手段が無い。
 - **B2.1 (= `current_setting('enable_external_access')` が `"false"` を
   実機で返す)**. `SET enable_external_access = false` が本当に効いて
   るかは、 in-process unit test では engine 起動時の同 setting で確認
@@ -36,9 +30,8 @@ unit / integration テストは 607 件全 green、 100% branch coverage 維持
   でしか分からない。 これが落ちると denylist の網の目を裏で外せる。
 - **C2.2 (= 同 import の `processing_secs` vs `duration_secs` で
   数秒差を実測)**. unit test では mock 値しか pin できない (= 実 ZIP
-  展開時間に依存)。 集客 narrative の F&Q 素材
-  (「何故 2 つの数字がある?」) に直接使えるので、 1 件だけでも実測
-  値を H3 にメモする価値あり。
+  展開時間に依存)。 narrative 補強用途で、 1 件だけでも実測値を
+  H3 にメモする価値あり。
 - **E3 (= MCPB bundle 経由で `run_custom_query` の denylist が
   agent 経由でも reject する)**. agent prompt 経由で adversarial
   query を投げる経路は unit test では simulate できない。 in-process
@@ -52,18 +45,9 @@ unit / integration テストは 607 件全 green、 100% branch coverage 維持
 これらは v0.5.0 dogfood でも未踏のまま、 unit test (concurrent_*
 系) でカバー済。 ここで踏もうとして時間溶かさない。
 
-任意で踏む:
-
-- **A5 (= v=6 stamp + `import_jobs` DROP の corruption corner)**.
-  Claude Desktop を終了 → DuckDB CLI で `health.duckdb` を開いて
-  `DROP TABLE import_jobs` → 再起動 → `list_zips` が schema_outdated
-  envelope を返すか確認。 unit test
-  (`test_check_data_state_flags_populated_db_with_missing_import_jobs`)
-  で pin 済なので実機で踏む必要性は低い。 skip 可。
-
 ## 0. セットアップ
 
-zion 物理操作前提。 順に消化。
+順に消化。
 
 - [ ] **0.1** Claude Code (CLI) で v0.5.1 を pin インストール:
       `uvx --from 'apple-health-mcp-server==0.5.1' apple-health-mcp-server --version`
@@ -74,96 +58,35 @@ zion 物理操作前提。 順に消化。
       <https://github.com/rinoshiyo/apple-health-mcp-server/releases/tag/v0.5.1>
       から `.mcpb` を DL → ダブルクリックでインストール → Settings →
       Extensions に「Apple Health (0.5.1)」 表示。
-- [ ] **0.3** `APPLE_HEALTH_EXPORT_ZIPS_DIR` を実 export 置き場
-      (例: `D:\data\OneDrive - itrans\apple-health-exports`) に設定。
-- [ ] **0.4** **2 系統 DB を準備** (G 章で使う):
-      - **fresh DB**: `APPLE_HEALTH_DB` を空 path に設定し、 v0.5.1
-        サーバが新規作成する DB で A〜F を走らせる。
-      - **legacy v=5 DB の退避コピー**: 前回 dogfood で残した v0.4
-        系 DB ファイル (= `schema_version=5`、 `import_jobs` 不在)
-        を `health-v0.4.duckdb` 等にコピーして保存。 G 章で
-        `APPLE_HEALTH_DB` をこの path に向けて schema_outdated 経路を
-        踏む。
+- [ ] **0.3** `APPLE_HEALTH_EXPORT_ZIPS_DIR` を実 export 置き場 (= 任意
+      の path) に設定。
+- [ ] **0.4** fresh DB を準備: `APPLE_HEALTH_DB` を空 path に設定し、
+      v0.5.1 サーバが新規作成する DB で全 dogfood を走らせる。 既存
+      DB との汚染を避けるため、 必ず新規 path。
 
-## A. schema_outdated typed envelope (= v0.5.1 主役 1/2)
+## A. schema_outdated typed envelope ✂ skip (= 再現環境がもう作られない)
 
-v0.4 系 DB を v0.5.1 server で開いた時の挙動。 v0.5.0 dogfood で
-「raw `Catalog Error: import_jobs does not exist!` が露出した」 ボトル
-ネックを envelope 経由に切り替える。 read tool 経路は v0.4.1
-(#156) で既に NEEDS_REIMPORT 化済、 v0.5.1 で **write tool 4 経路**
-(`list_zips` / `import_zip` / `get_import_status` /
-`get_import_history`) にも gate 追加。
+v0.5.1 で実装した schema_outdated envelope (#188) は v=5-or-earlier DB を
+v0.5.1 server で開いた時の挙動だが、 **v0.5.0 以降 v=5 DB はもう新規に
+作られない** (= v=6 stamp 必須)。 既存 v=5 DB を保持してる user は v0.5.0
+からの upgrade 経由者のみで、 ピコ環境にも v=5 DB の残りは無い (= 確認済)。
 
-### A1. v=5 DB に対する 4 write tool の gate
+= 再現に必要な「v=5 stamped DB」 が事実上手に入らない、 もしくは作るのに
+過度のコスト (= 過去 release から DB 復元) がかかる。 検証価値 << 再現
+コスト。
 
-`APPLE_HEALTH_DB` を 0.4.legacy DB に向けて server 起動。
+実装側は unit / integration test で完全に pin 済:
 
-- [ ] **A1.1** `list_zips` → `{"state":"NEEDS_REIMPORT",
-      "reason":"schema_outdated","suggested_action":"call_import_zip",
-      "human_message":"..."}` が返る。 raw Catalog Error が**出ない**
-      ことを確認。
-- [ ] **A1.2** `import_zip(id="aaaaaaaa")` (id 値は何でもよい、 gate
-      が validation より先に発火する設計) → 同 envelope。 `INSERT
-      INTO import_jobs` には到達しない (= worker spawn されない)。
-- [ ] **A1.3** `get_import_status(job_id="ij_anything")` → 同 envelope。
-      `job_registry.get_job` に到達しない。
-- [ ] **A1.4** `get_import_history` → 同 envelope (= `dedup_skipped`
-      column を SELECT する手前で gate)。 v=5 imports shape の
-      column-missing error が**出ない**ことを確認。
+- `test_check_data_state_flags_populated_db_with_missing_import_jobs`
+  (= 新 branch を unit で踏む)
+- `test_list_zips_short_circuits_on_stale_schema_version` 等の tool-surface
+  variants
+- `test_block_if_schema_outdated_returns_envelope_on_stale_db`
 
-### A2. envelope 内容の wire-shape 確認
+= dogfood では skip 可。 もし将来 schema_outdated 経路を再触る場合は、
+unit test 側で hardening するのが筋。
 
-`payload["reason"] == "schema_outdated"` (= 安定した enum 識別子) で
-agent が分岐可能か。 v0.5.0 時点では `"database was imported under
-an older package release; ..."` の prose だったが v0.5.1 で固定 enum
-に変更。
-
-- [ ] **A2.1** `state`, `reason`, `suggested_action`, `human_message`
-      の 4 キーが揃ってる。
-- [ ] **A2.2** `human_message` 内に「`import_zip(id=...)` を呼べ」
-      系の誘導文がある (= `list_zips` 呼出しを再度推奨しない =
-      list_zips loop 回避、 PR #200 code-review #4)。
-
-### A3. fresh-reset → 再 ingest
-
-`import_zip(id=<実 sha>)` をピコ判断で呼ぶと、 importer の
-fresh-reset 経路が起動 (= `schema_version_is_stale` 検知 →
-`reset_db_for_fresh_import` → `ensure_schema` → 再 ingest)。
-v=5 → v=6 in-place migration **ではない** (= 既存データは消える)。
-ターミナル不要なのが v0.4.1 思想。
-
-- [ ] **A3.1** legacy v=5 DB を path 指定して `import_zip(id=<sha>)`
-      を実行 → 初回は schema_outdated envelope (上述) → ピコ判断で
-      ID 指定再呼出し時、 worker spawn される (= fresh-reset
-      経由で `import_jobs` 作成済)。 (※ v0.5.1 の挙動を厳密に再確認:
-      fresh-reset は server 起動時か、 import_zip 呼出し時か。
-      issue #188 本文 + #156 の挙動次第)。
-- [ ] **A3.2** 完走後 `get_server_info` → `record_count > 0`、
-      `version="0.5.1"`。 v=5 DB の元データは消えてる (= 期待通り)。
-
-### A4. healthy DB は無影響
-
-fresh DB / 既に v=6 stamped + import_jobs 存在 DB では 4 write tool
-が普通に動く。
-
-- [ ] **A4.1** A1 を fresh DB に向けて再実行 → 全 tool が schema_outdated
-      ではなく通常の response を返す。
-
-### A5. corruption corner case (= v=6 stamp + import_jobs DROP)
-
-v0.5.1 の新 branch (= `has_rows AND jobs_missing`) を踏む。
-
-- [ ] **A5.1** fresh DB を 1 回 import 完了させてから、
-      `run_custom_query("DROP TABLE import_jobs")` ... と思ったが
-      `run_custom_query` は DDL を validator で reject。 → 代わりに
-      Claude Desktop 終了して別ツール (e.g. DuckDB CLI) で
-      `health.duckdb` を開き、 `DROP TABLE import_jobs` を実行。 再
-      起動して `list_zips` → schema_outdated envelope (= 新 branch
-      が catch)。 ピコの判断で skip 可 (= unit test
-      `test_check_data_state_flags_populated_db_with_missing_import_jobs`
-      で pin 済)。
-
-## B. external access lockdown (= v0.5.1 主役 2/2)
+## B. external access lockdown (= v0.5.1 主役)
 
 `run_custom_query` 経由で外部 fs / network access が rejected
 されること。 v0.5.0 adversarial で発覚した SSRF / 任意 fs 読み
@@ -624,9 +547,10 @@ narrative 拡張用素材集め)。
 
 ## 終了条件
 
-**A〜F + X (X1-X5 + X7-X8 必須、 X6 は任意)** が all green になったら
-v0.5.1 の集客フェーズ復帰可。 G は v0.5.0 DB を保持してれば確認、
-持ってない場合 skip 可。 H は集客 narrative 拡張時の素材集め
+**B〜F + X (X1-X5 + X7-X8 必須、 X6 は任意)** が all green になったら
+v0.5.1 dogfood 完走。 A 章は skip (= v=5 DB が再現できないため、
+unit / integration test 側で pin 済)。 G は v0.5.0 DB を保持して
+れば確認、 持ってない場合 skip 可。 H は narrative 補強用の素材集め
 (= 必須ではない)。
 
 X 章は「実施者が skip 誘惑を感じやすい」 章なので意識的に通すこと。
@@ -635,7 +559,5 @@ v0.5.0 では adversarial で stop-ship #190 (`parquet_scan` SSRF) を
 発掘漏れの母体になる。
 
 dogfood で発見した defect は GitHub issue 起票 (`type:fix` /
-`stop-ship` ラベル) → 当該 fix を **v0.5.2 hot-fix** で出してから
-集客、 が筋。 v0.5.2 milestone は既に #193 (README rot) が乗ってる
-ので、 defect 起票時はそこに追加するのが流れ。 stop-ship 系は新規
-milestone 切るかピコ判断。
+`stop-ship` ラベル) → 次の minor / patch リリースで fix を出す
+流れ。 stop-ship 系は milestone 設計をピコと相談する。
