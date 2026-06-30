@@ -27,8 +27,26 @@
 
 - **軽いものから順に試す** (= 副作用の小さい read 系 attack を先に、
   破壊性のある書き込み / DoS 系 attack は後)
-- **1 件ずつ報告する** (= 一気に複数 attack を打ち込んで結果を一括返却
-  しない、 各 attack ごとに観測結果を区切って報告)
+- **通常 attack はまとめて実行・まとめて報告で OK** (= 1 メッセージで
+  複数試行を畳んで効率良く回す)
+- **ただし以下の「致命的リスクのある attack」 は必ず単独で 1 件ずつ
+  実行する**:
+  - Recursive CTE / `WITH RECURSIVE` / 深い再帰系 (= server hang 実績
+    あり)
+  - 巨大文字列を tool param に渡す attack (= `source_name` 等に 10K 字
+    超を入れる系、 server hang 実績あり)
+  - 巨大結果集合を返す attack (= LIMIT 無しで `string_agg` 全件連結等、
+    Tool result too large エラーが返るまで時間かかる)
+  - 「結果が返るまで何十秒〜何分も待たされる経路」 全般
+  - 並列 / Race 系は agent loop で踏めないため対象外
+- **致命的リスク attack を単独で回す理由**: hang / 長時間待ちが発生
+  すると Claude が止まる、 最悪 **Claude を物理再起動するまで動かなく
+  なる**。 そのメッセージ内で前にやっていた成功 attack の結果も**巻き
+  戻って失われる** (= バッチで 5 件試行中、 4 件 ✅ で 5 件目で hang
+  したら 1-4 件目の結果も消える → 全部やり直し)。 致命的 attack だけ
+  単独実行すれば、 犠牲になるのはその attack の 1 件のみで、 前 batch
+  は無事 (= v0.5.1 dogfood Phase 3 で recursive CTE と巨大 source_name
+  で 2 回 Desktop 再起動を踏んだ実例あり)
 - **「やれるやつは全部やれ」**。 思いつく vector を「これは agent ループ
   で踏めない」 と早合点して切るな。 sub-second concurrency 系 (= 同時 2
   連発、 worker 走行中の並列 read) は確かに agent ループで踏めないが、
@@ -37,7 +55,9 @@
   vector を見て、 そこに無い角度から攻める。 同じ目的 (= e.g. fs 読み
   取り) でも別の関数 / 別の入力経路を考える
 
-### 報告形式 (= 各 attack ごと、 1 メッセージ 1 attack)
+### 報告形式 (= 通常 attack は 1 メッセージで複数畳んで OK、 致命的 attack のみ 1 メッセージ 1 attack)
+
+各 attack について以下を記録:
 
 - **入力**: 投げた tool call と引数を verbatim で
 - **観測結果**: envelope / error message そのまま (= truncate しない、
