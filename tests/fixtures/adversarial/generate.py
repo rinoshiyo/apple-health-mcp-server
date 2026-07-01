@@ -18,7 +18,7 @@ matters is ``x4-6-future-mtime.zip``; the script stamps that one with
 mtime that is interesting, not the central-directory entries inside.
 
 These fixtures are intended for **manual dogfood** by the human reviewer
-(see ``docs/dogfood/v0-5-1-test-plan.md`` §X4). They are NOT pulled in by
+(see ``internal/dogfood/v0-5-1-test-plan.md`` §X4). They are NOT pulled in by
 ``tests/`` because the importer's adversarial tests exercise their own
 inline ZIPs.
 """
