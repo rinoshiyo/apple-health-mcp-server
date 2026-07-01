@@ -27,6 +27,7 @@ silent succeed.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import duckdb
@@ -35,6 +36,8 @@ import pytest
 from apple_health_mcp.db import get_in_memory_connection
 from apple_health_mcp.db.connection import get_connection
 from apple_health_mcp.server.safety import DENIED_FUNCTIONS
+from apple_health_mcp.server.tools import run_custom_query
+from tests._helpers import bind_tool
 
 # v0.5.1 #190 (post-#200 code-review Angle Reuse): build the
 # parametrize list from ``DENIED_FUNCTIONS`` so the engine-level
@@ -223,5 +226,61 @@ def test_on_disk_connection_has_external_access_off(tmp_path: Path, read_only: b
         row = conn.execute("SELECT current_setting('enable_external_access')").fetchone()
         assert row is not None
         assert str(row[0]).lower() == "false"
+    finally:
+        conn.close()
+
+
+def test_recursive_cte_does_not_hang_server() -> None:
+    """v0.6 (#222/#223): a runaway recursive CTE fails fast, server stays up.
+
+    v0.5.1 dogfood Phase 3 defect #2: ``run_custom_query`` on an
+    unbounded recursive CTE (materialising intermediate state) hung the
+    whole MCP server process under DuckDB's pre-hardening 50 GiB
+    default ``memory_limit`` -- even ``get_server_info`` stopped
+    responding, and only a physical Claude Desktop restart recovered
+    it. The string-doubling CTE below is a *fast* OOM trigger (a
+    monotonic-integer counter alone does not exceed the 2 GB ceiling
+    quickly enough for a CI-friendly test) -- doubling a string's
+    length on every recursive step blows past the cap within a few
+    iterations. The regression this guards against is
+    ``_set_engine_safety_pragmas`` losing its ``memory_limit`` pragma
+    (or a future DuckDB release changing OOM behaviour): either would
+    let this query run away again.
+    """
+    conn = get_in_memory_connection()
+    fn = bind_tool(run_custom_query, conn)
+    bomb_sql = (
+        "WITH RECURSIVE bomb(s) AS ("
+        "SELECT 'A' UNION ALL SELECT s || s FROM bomb WHERE length(s) < 2000000000"
+        ") SELECT max(length(s)) FROM bomb"
+    )
+    out = asyncio.run(fn(query=bomb_sql))
+    assert out.startswith("Error:")
+    assert "out of memory" in out.lower()
+
+    # The server (this connection) must still answer subsequent tool
+    # calls -- the whole point of the hardening is that a self-DoS
+    # query fails in isolation instead of taking the process down.
+    follow_up = asyncio.run(fn(query="SELECT 1 AS x"))
+    assert not follow_up.startswith("Error:")
+
+
+def test_lock_configuration_prevents_reenable() -> None:
+    """v0.6 (#222): once locked, the hardening set cannot be SET back.
+
+    ``run_custom_query`` only ever forwards ``SELECT``/``WITH``
+    statements (``validate_query`` rejects everything else before it
+    reaches the engine), so a ``SET`` re-enable attempt through the
+    public tool surface is already caught at the validator layer. This
+    test instead pins the engine-level guarantee directly -- the same
+    pattern ``test_engine_rejects_file_or_url_attach_install_load``
+    uses -- so a future refactor that bypasses the validator (or a
+    DuckDB upgrade that changes how ``SET`` failures surface) cannot
+    silently regress the second line of defence.
+    """
+    conn = get_in_memory_connection()
+    try:
+        with pytest.raises(duckdb.Error, match="lock"):
+            conn.execute("SET enable_external_access = true;")
     finally:
         conn.close()

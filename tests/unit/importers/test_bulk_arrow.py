@@ -256,9 +256,12 @@ def test_real_schema_records_round_trip() -> None:
     """
     from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 
-    conn = get_in_memory_connection()
+    # v0.6 (issues #222/#223): pin the session TZ via the ``tz`` kwarg --
+    # a post-hoc ``SET TimeZone`` is now rejected once
+    # ``lock_configuration = true`` fires inside
+    # ``get_in_memory_connection``.
+    conn = get_in_memory_connection(tz="UTC")
     ensure_schema(conn)
-    conn.execute("SET TimeZone = 'UTC';")
     rows = [
         (
             "rh1",
