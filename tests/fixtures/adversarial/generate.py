@@ -64,7 +64,9 @@ def _writestr(zip_path: Path, *entries: tuple[str, str | bytes]) -> None:
 def make_x4_3_multi_entry_zero_byte_xml() -> Path:
     """§X4.3: multi-entry ZIP whose ``export.xml`` is 0 bytes.
 
-    The importer should complete (no crash) but produce ``record_count=0``.
+    The importer should fail at Phase-1 XML parse and land the job in a
+    terminal ``error`` state with a typed ``run_import_failed`` envelope
+    (message contains ``unrecoverable XML syntax error``).
     A second, harmless entry is included so the ZIP isn't merely a single
     empty file — that's covered by §X4.1.
     """
