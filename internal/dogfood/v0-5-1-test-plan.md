@@ -424,7 +424,7 @@ engine 経由で reject される」。
       `list_zips` で `zip_status: invalid_zip`、 `import_zip(id=...)`
       で `invalid_zip` envelope。
 - [ ] **X4.2** **1 byte ZIP** (= ZIP 仕様より短い) → 同上。
-- [ ] **X4.3** マルチエントリ ZIP で `apple_health_export/export.xml` が
+- [ ] **X4.3** **マルチエントリ ZIP** で `apple_health_export/export.xml` が
       含まれてるが 0 byte → typed envelope の `run_import_failed` で error
       終端、 message に「unrecoverable XML syntax error: no element found
       (line 0)」 を含む。 完走 (= status:ok) ではない。

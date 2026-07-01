@@ -15,7 +15,7 @@ Claude Desktop or `apple-health-mcp-server` CLI.
 
 | File | §X4 item | What it targets |
 |---|---|---|
-| `x4-3-multi-empty-xml.zip` | X4.3 | Multi-entry ZIP whose `apple_health_export/export.xml` is **zero bytes**. Importer should complete (no crash) and produce `record_count: 0`. |
+| `x4-3-multi-empty-xml.zip` | X4.3 | Multi-entry ZIP whose `apple_health_export/export.xml` is **zero bytes**. Importer should fail at Phase-1 XML parse and land the job in a terminal `error` state with a typed `run_import_failed` envelope whose message contains `unrecoverable XML syntax error`. Not a clean `status: ok` completion. |
 | `x4-4-zip-slip.zip` | X4.4 | Zip-slip attempt: contains an entry named `../../../tmp/zip-slip-escape.txt` plus a valid Apple Health marker. Importer must refuse to write the escape path. After running `import_zip` on this fixture, verify `/tmp/zip-slip-escape.txt` (POSIX) or the Windows equivalent **does not exist**. |
 | `x4-5-original.zip` / `x4-5-renamed-clone.zip` | X4.5 | Two filenames, byte-identical contents → identical sha256. Both appear in `list_zips` with the **same `id`** (= `sha256[:8]`). Importing one should mark the other `imported: true` on the next `list_zips`. Pinned sha256 (verified at generation): `b91758aed29a4163655d02d21f1829a859bba8d5cbe242189cab00d86c79ea65` |
 | `x4-6-future-mtime.zip` | X4.6 | On-disk mtime stamped to 2100-01-01 UTC. `list_zips` should report the ISO mtime as-is and the sha cache keyed on `(size, mtime)` should treat it like any other entry — no future-date assertion crash. |
