@@ -45,54 +45,45 @@ _CONVERSION_ERROR_COLUMN_RE = re.compile(r"casting from source column (\w+)")
 
 # Every TIMESTAMPTZ-typed column across the Arrow schemas in
 # ``_bulk_arrow.py`` (issue #227): an empty or malformed ``startDate`` /
-# ``endDate`` / ``creationDate`` attribute in ``export.xml`` lands here
-# as an empty string, which DuckDB's implicit cast on
-# ``INSERT INTO <table> SELECT * FROM __bulk_arrow`` rejects.
-_TIMESTAMP_COLUMNS = frozenset(
-    {"creation_date", "start_date", "end_date", "date", "timestamp", "sample_time"}
-)
+# ``endDate`` / ``creationDate`` attribute in ``export.xml`` (or a
+# malformed GPX ``<time>`` element) lands here as an unparseable
+# string, which DuckDB's implicit cast on
+# ``INSERT INTO <table> SELECT * FROM __bulk_arrow`` rejects. A unit
+# test pins this set against the ``_ts``-typed columns actually
+# declared in ``_bulk_arrow.SCHEMAS`` so the two cannot drift.
+_TIMESTAMP_COLUMNS = frozenset({"creation_date", "start_date", "end_date", "date", "timestamp"})
 
 
 def _translate_conversion_error(exc: duckdb.ConversionException) -> HealthImportError:
     """Translate a raw DuckDB Conversion Error into a human-friendly message.
 
-    Apple Health exports occasionally carry a ``Record`` (or ``Workout``
-    / ``WorkoutRoute`` / ``HeartRateVariabilityMetadataList`` entry) whose
-    timestamp or value attribute is empty or otherwise malformed --
-    XML-valid but semantically broken. DuckDB's Arrow bulk-load INSERT
-    (``_bulk_arrow.bulk_load_via_arrow``) rejects the cast with a message
-    like::
-
-        Conversion Error: invalid timestamp field format: "", expected
-        format is (YYYY-MM-DD HH:MM:SS...) when casting from source
-        column start_date
-
-    That message is accurate but assumes DuckDB internals knowledge no
-    end user has. This function extracts the offending column name (if
-    present) and returns a :class:`HealthImportError` whose message
-    explains the problem in export.xml terms, with the original DuckDB
-    message preserved in parentheses for anyone who does want to see it
-    (bug reports, debug logging).
+    Apple Health exports occasionally carry a record whose timestamp
+    attribute is empty or otherwise malformed -- XML-valid (or a
+    parseable GPX/ECG file) but semantically broken. DuckDB rejects the
+    cast with a message like ``Conversion Error: invalid timestamp field
+    format: "" ... when casting from source column start_date``, which
+    assumes engine-internals knowledge no end user has. This function
+    extracts the offending column (if the message names one) and returns
+    a :class:`HealthImportError` that explains the problem in
+    export-file terms, preserving the original DuckDB message in
+    parentheses for bug reports / debugging. The wording says "Apple
+    Health export" rather than "export.xml" because Phase 2 (ECG CSVs)
+    and Phase 3 (GPX routes) feed the same TIMESTAMPTZ casts from
+    sibling files inside the export.
     """
     match = _CONVERSION_ERROR_COLUMN_RE.search(str(exc))
     column = match.group(1) if match else None
     if column in _TIMESTAMP_COLUMNS:
         friendly = (
-            "Your export.xml contains records with empty or invalid timestamp "
-            "fields. The export may be partially corrupted; please re-export "
-            "from Apple Health."
-        )
-    elif column is not None:
-        friendly = (
-            f"Your export.xml contains records with an invalid value in the "
-            f"'{column}' field. The export may be partially corrupted; please "
+            "Your Apple Health export contains records with empty or invalid "
+            "timestamp fields. The export may be partially corrupted; please "
             "re-export from Apple Health."
         )
     else:
         friendly = (
-            "Your export.xml contains records DuckDB could not import due to "
-            "a data-format error. The export may be partially corrupted; "
-            "please re-export from Apple Health."
+            "Your Apple Health export contains records DuckDB could not "
+            "import due to a data-format error. The export may be partially "
+            "corrupted; please re-export from Apple Health."
         )
     return HealthImportError(f"{friendly} (details: {exc})")
 
@@ -308,15 +299,18 @@ def run_import(
         # ``importers.zip_extract``); the worker's implementation issues
         # the UPDATE directly without re-acquiring the lock to avoid
         # deadlocking on a ``threading.Lock``.
-        # Issue #227: a DuckDB Conversion Error surfacing from any of the
-        # four phases below (most commonly Phase 1's records/workouts
-        # INSERT, but Phase 2/3's ECG/GPX bulk loads share the same
-        # Arrow-typed columns) is translated into a human-friendly
-        # message before it reaches the ``run_import_failed`` envelope.
-        # Left uncaught, the raw DuckDB message names internal column
-        # types no end user can act on (see
-        # ``_translate_conversion_error`` docstring for the exact
-        # wording DuckDB emits).
+        # Issue #227: a DuckDB Conversion Error surfacing from the three
+        # ingest phases below (most commonly Phase 1's records/workouts
+        # INSERT, but Phase 2/3's ECG/GPX loads feed the same
+        # TIMESTAMPTZ casts from sibling export files) is translated
+        # into a human-friendly message before it reaches the
+        # ``run_import_failed`` envelope. Left uncaught, the raw DuckDB
+        # message names internal column types no end user can act on.
+        # Phase 4 (finalize) is deliberately OUTSIDE the catch: it only
+        # re-processes rows the ingest phases already validated and
+        # inserted, so a ConversionException there would signal an
+        # internal SQL bug -- telling the user to re-export would send
+        # them chasing a corruption that does not exist.
         try:
             if phase_callback is not None:
                 phase_callback("xml_parsing")
@@ -340,13 +334,13 @@ def run_import(
                 stats.workout_route_map,
                 existing=existing,
             )
-
-            if phase_callback is not None:
-                phase_callback("finalize")
-            _logger.info("Phase 4: Finalize (dedupe, backfill, daily stats)")
-            finalize_import(conn, skip_dedup=existing is not None)
         except duckdb.ConversionException as exc:
             raise _translate_conversion_error(exc) from exc
+
+        if phase_callback is not None:
+            phase_callback("finalize")
+        _logger.info("Phase 4: Finalize (dedupe, backfill, daily stats)")
+        finalize_import(conn, skip_dedup=existing is not None)
 
         duration_secs = time.monotonic() - start
         # Issue #129: ``record_count`` is the Phase-1 parse count

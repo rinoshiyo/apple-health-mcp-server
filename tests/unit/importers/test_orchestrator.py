@@ -8,7 +8,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from apple_health_mcp.db import get_in_memory_connection
+from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers.orchestrator import (
     _open_db,
@@ -399,30 +399,48 @@ def test_run_import_translates_empty_start_date_conversion_error(tmp_path: Path)
     assert isinstance(exc_info.value.__cause__, duckdb.ConversionException)
 
 
-# Issue #227: the two branches below are exercised directly against
+# Issue #227: the fallback branch below is exercised directly against
 # ``_translate_conversion_error`` rather than through a full
 # ``run_import`` pipeline. Every column DuckDB's Arrow bulk-load can
-# reject that carries an XML-derived raw string (as opposed to a
-# Python-parsed ``float``) is a TIMESTAMPTZ column -- the importer's
-# ``_parse_opt_float`` already sanitises numeric attributes like
-# ``value`` / ``duration`` before they reach DuckDB, so a non-timestamp
-# Conversion Error from a real export.xml is not reachable through the
-# public pipeline. Unit-testing the translator directly against a
-# hand-built ``duckdb.ConversionException`` message covers those two
-# branches without requiring an artificial (and misleading) fixture.
-def test_translate_conversion_error_non_timestamp_column() -> None:
-    """A conversion error naming a non-timestamp column gets column-specific wording."""
-    from apple_health_mcp.importers.orchestrator import _translate_conversion_error
+# reject that carries a raw export-derived string is a TIMESTAMPTZ
+# column -- the importer's ``_parse_opt_float`` already sanitises
+# numeric attributes like ``value`` / ``duration`` before they reach
+# DuckDB -- so the generic branch is only reachable when the message
+# does not name a known timestamp column. Unit-testing the translator
+# directly against a hand-built ``duckdb.ConversionException`` covers
+# it without an artificial (and misleading) fixture.
+def test_timestamp_columns_match_bulk_arrow_schemas() -> None:
+    """``_TIMESTAMP_COLUMNS`` mirrors the Arrow-fed TIMESTAMPTZ columns exactly.
 
-    exc = duckdb.ConversionException(
-        'Conversion Error: could not convert string to double: "not-a-number" '
-        "when casting from source column value"
-    )
-    translated = _translate_conversion_error(exc)
-    message = str(translated)
-    assert "invalid value in the 'value' field" in message
-    assert "re-export from Apple Health" in message
-    assert "not-a-number" in message
+    Guards the hand-maintained frozenset against drifting from the real
+    schemas (a stale ``sample_time`` entry slipped in once): a new
+    TIMESTAMPTZ column added to an Arrow-loaded table without updating
+    the set would silently demote its conversion errors to the generic
+    wording. The Arrow side types timestamps as ``pa.string()``
+    (indistinguishable from true string columns), so the DuckDB
+    ``information_schema`` supplies the TIMESTAMPTZ axis and the Arrow
+    schema supplies the bulk-loaded-column axis.
+    """
+    from apple_health_mcp.importers._bulk_arrow import SCHEMAS
+    from apple_health_mcp.importers.orchestrator import _TIMESTAMP_COLUMNS
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        table_names = sorted(SCHEMAS.keys())
+        placeholders = ", ".join("?" for _ in table_names)
+        rows = conn.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            f"WHERE data_type = 'TIMESTAMP WITH TIME ZONE' "
+            f"AND table_name IN ({placeholders})",
+            table_names,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    arrow_columns = {(table, field.name) for table, schema in SCHEMAS.items() for field in schema}
+    ts_columns = {column for table, column in rows if (table, column) in arrow_columns}
+    assert ts_columns == _TIMESTAMP_COLUMNS
 
 
 def test_translate_conversion_error_unknown_column() -> None:
