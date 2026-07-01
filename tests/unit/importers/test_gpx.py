@@ -25,11 +25,13 @@ from apple_health_mcp.importers.gpx import (
 
 @pytest.fixture
 def conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
-    c = get_in_memory_connection()
+    # v0.6 (issues #222/#223): pin the session TZ via the ``tz`` kwarg
+    # (applied before ``lock_configuration = true`` fires) so TIMESTAMPTZ
+    # -> string casts stay deterministic regardless of the host's OS
+    # local TZ. A post-hoc ``SET TimeZone`` would now be rejected by
+    # the lockdown.
+    c = get_in_memory_connection(tz="UTC")
     ensure_schema(c)
-    # Pin the session TZ so TIMESTAMPTZ -> string casts are deterministic
-    # regardless of the host's OS local TZ.
-    c.execute("SET TimeZone = 'UTC';")
     yield c
     c.close()
 

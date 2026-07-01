@@ -50,6 +50,22 @@ _DATA_DIR_ENV_VAR = "APPLE_HEALTH_DATA_DIR"
 _TZ_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_+\-/]*$")
 
 
+def _set_session_tz(conn: duckdb.DuckDBPyConnection, tz: str) -> None:
+    """Validate ``tz`` against the IANA-name whitelist and ``SET`` it.
+
+    Shared by :func:`_apply_session_tz` (env-var-driven, production) and
+    :func:`get_in_memory_connection`'s explicit ``tz`` kwarg (test-fixture-
+    driven). Both call sites must run before
+    :func:`_set_engine_safety_pragmas` locks the configuration -- once
+    ``lock_configuration = true`` fires, ``SET TimeZone`` raises.
+    """
+    if not _TZ_NAME_RE.fullmatch(tz):
+        raise ConfigError(
+            f"invalid {_TZ_ENV_VAR}={tz!r}: expected an IANA timezone like 'Asia/Tokyo'"
+        )
+    conn.execute(f"SET TimeZone = '{tz}';")
+
+
 def _apply_session_tz(conn: duckdb.DuckDBPyConnection) -> None:
     """Apply ``APPLE_HEALTH_TZ`` to the connection's session TZ when set.
 
@@ -61,11 +77,7 @@ def _apply_session_tz(conn: duckdb.DuckDBPyConnection) -> None:
     tz = os.environ.get(_TZ_ENV_VAR, "").strip()
     if not tz:
         return
-    if not _TZ_NAME_RE.fullmatch(tz):
-        raise ConfigError(
-            f"invalid {_TZ_ENV_VAR}={tz!r}: expected an IANA timezone like 'Asia/Tokyo'"
-        )
-    conn.execute(f"SET TimeZone = '{tz}';")
+    _set_session_tz(conn, tz)
 
 
 def resolve_db_path() -> Path:
@@ -255,23 +267,15 @@ def get_connection(
     else:
         _migrate_if_needed_via_separate_probe(resolved)
     conn = duckdb.connect(str(resolved), read_only=read_only)
-    # v0.5.1 #190: lock down external resource access at the engine
-    # level BEFORE any other PRAGMA fires. This forbids httpfs / S3 /
-    # GCS / Azure FileSystem extensions, every fs-reading table
-    # function (``read_csv`` / ``read_parquet`` / ``parquet_scan`` /
-    # ``parquet_metadata`` / ``parquet_schema`` / ``sniff_csv`` /
-    # future aliases), and ATTACH / COPY / INSTALL / LOAD -- the
-    # entire egress + arbitrary-file-read surface that a denylist
-    # cannot exhaustively cover. The v0.5.0 adversarial test
-    # (tmp/v0-5-0-adversarial-results_1.md §2-2) confirmed
-    # parquet_scan / parquet_metadata / parquet_schema / sniff_csv all
-    # bypassed the denylist, and parquet_scan('https://...') exfiltrated
-    # a remote URL. The importer's writable path is unaffected: bulk
-    # ingestion goes through PyArrow `conn.register(...) → INSERT ...
-    # SELECT * FROM __bulk_arrow` so the engine never reaches for the
-    # fs / network. Read tools and `run_custom_query` operate only on
-    # in-DB relations.
-    _set_engine_safety_pragmas(conn)
+    # v0.6 (issues #222/#223): every other PRAGMA/SET this function
+    # issues must run BEFORE ``_set_engine_safety_pragmas`` fires,
+    # because that helper now ends with ``SET lock_configuration =
+    # true`` -- once locked, DuckDB rejects every subsequent
+    # configuration change on the connection (``PRAGMA threads``,
+    # ``preserve_insertion_order``, ``SET TimeZone`` included). The
+    # lockdown itself stays the connection's last setup step, which is
+    # what makes it load-bearing: nothing runs afterwards that could
+    # unpick it.
     if not read_only:
         conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
         # v0.4 (issue #148): preserve_insertion_order=false used to be
@@ -285,21 +289,57 @@ def get_connection(
         # the load-bearing comment the orchestrator carries.
         conn.execute("PRAGMA preserve_insertion_order = false;")
     _apply_session_tz(conn)
+    # v0.5.1 #190 (extended v0.6 #222/#223): lock down external
+    # resource access and the resource ceilings (memory / temp disk /
+    # community extensions) at the engine level, then lock the
+    # configuration so none of it can be SET back. This forbids
+    # httpfs / S3 / GCS / Azure FileSystem extensions, every
+    # fs-reading table function (``read_csv`` / ``read_parquet`` /
+    # ``parquet_scan`` / ``parquet_metadata`` / ``parquet_schema`` /
+    # ``sniff_csv`` / future aliases), and ATTACH / COPY / INSTALL /
+    # LOAD -- the entire egress + arbitrary-file-read surface that a
+    # denylist cannot exhaustively cover -- plus the runaway-query
+    # self-DoS surface (recursive CTEs, oversized inputs) that an
+    # unbounded ``memory_limit`` left open. The v0.5.0 adversarial test
+    # (tmp/v0-5-0-adversarial-results_1.md §2-2) confirmed
+    # parquet_scan / parquet_metadata / parquet_schema / sniff_csv all
+    # bypassed the denylist, and parquet_scan('https://...') exfiltrated
+    # a remote URL. The importer's writable path is unaffected: bulk
+    # ingestion goes through PyArrow `conn.register(...) → INSERT ...
+    # SELECT * FROM __bulk_arrow` so the engine never reaches for the
+    # fs / network. Read tools and `run_custom_query` operate only on
+    # in-DB relations.
+    _set_engine_safety_pragmas(conn)
     return conn
 
 
 def _set_engine_safety_pragmas(conn: duckdb.DuckDBPyConnection) -> None:
-    """Forbid all external resource access on ``conn`` at the engine level.
+    """Lock down ``conn`` at the engine level against self-DoS and escape.
 
-    DuckDB's ``enable_external_access`` setting governs the entire
-    family of file / network functions plus ATTACH / COPY / INSTALL /
-    LOAD. Setting it to false is the single switch that closes the
-    denylist's blind spots (read_parquet aliases, csv sniffer, http /
-    https / s3 URLs) without per-function enumeration. The Python
-    binding accepts both ``SET`` and ``PRAGMA`` spellings; we use
-    ``SET`` to match DuckDB's official docs on the setting.
+    v0.5.1 (issue #190) established ``enable_external_access = false`` as
+    the single switch that closes the denylist's blind spots (read_parquet
+    aliases, csv sniffer, http / https / s3 URLs) without per-function
+    enumeration. v0.5.1 dogfood Phase 3 (issues #222, #223) found that the
+    engine otherwise ships wide-open resource ceilings (50 GiB memory, 90%
+    of disk for temp spill, community extensions enabled), which let a
+    single adversarial query (e.g. an unbounded recursive CTE) materialize
+    intermediate state until DuckDB exhausts host memory and the whole MCP
+    server process hangs. The settings below cap those ceilings so a
+    runaway query fails fast with a typed ``Out of Memory`` error instead
+    of starving the process.
+
+    ``lock_configuration`` is set **last**: once enabled it rejects every
+    subsequent ``SET``/``PRAGMA`` on this connection (including further
+    calls to this function), so it must be the final statement or it
+    would block the hardening pragmas that follow it.
     """
+    conn.execute("SET memory_limit = '2GB';")
+    conn.execute("SET max_temp_directory_size = '4GB';")
+    conn.execute("SET allow_community_extensions = false;")
+    conn.execute("SET autoload_known_extensions = false;")
+    conn.execute("SET autoinstall_known_extensions = false;")
     conn.execute("SET enable_external_access = false;")
+    conn.execute("SET lock_configuration = true;")
 
 
 def _migrate_if_needed_via_separate_probe(db_path: Path) -> None:
@@ -464,8 +504,13 @@ def _materialise_empty_db(db_path: Path) -> None:
             # row seeded from env, or a migration that reads a sidecar
             # file) -- inheriting the lockdown by default keeps the
             # contract uniform.
-            _set_engine_safety_pragmas(bootstrap)
+            #
+            # v0.6 (issues #222/#223): ``PRAGMA threads`` must run
+            # before the lockdown -- ``_set_engine_safety_pragmas`` now
+            # ends with ``lock_configuration = true``, which would
+            # reject this PRAGMA if it ran afterwards.
             bootstrap.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
+            _set_engine_safety_pragmas(bootstrap)
             ensure_schema(bootstrap)
             # v0.5 (issue #178): stamp the version sentinel. The pre-#178
             # ``apply_pending_migrations`` call did the same thing on a
@@ -488,18 +533,34 @@ def _materialise_empty_db(db_path: Path) -> None:
         raise
 
 
-def get_in_memory_connection() -> duckdb.DuckDBPyConnection:
+def get_in_memory_connection(*, tz: str | None = None) -> duckdb.DuckDBPyConnection:
     """Open an ephemeral in-memory DuckDB connection.
 
     Used by the test suite and any caller that wants schema isolation without
     touching the filesystem.
+
+    ``tz`` lets test fixtures pin a deterministic session TZ (e.g.
+    ``"UTC"``) at construction time. It exists because
+    ``_set_engine_safety_pragmas`` now ends with ``lock_configuration =
+    true`` (v0.6, issues #222/#223): a caller that tried
+    ``conn.execute("SET TimeZone = '...'")`` on the connection this
+    function returns would hit a hard reject. Passing ``tz`` here
+    applies it before the lockdown fires.
     """
     conn = duckdb.connect(":memory:")
-    # v0.5.1 #190: in-memory connections inherit the same external-
-    # access lockdown as the on-disk path so adversarial tests run
-    # against the production safety contract (otherwise tests would
-    # pin the wrong behaviour and let a future regression land).
-    _set_engine_safety_pragmas(conn)
     conn.execute(f"PRAGMA threads={_DEFAULT_THREADS};")
-    _apply_session_tz(conn)
+    if tz is not None:
+        _set_session_tz(conn, tz)
+    else:
+        _apply_session_tz(conn)
+    # v0.5.1 #190 (extended v0.6 #222/#223): in-memory connections
+    # inherit the same engine-level lockdown as the on-disk path --
+    # external-access denial plus the resource-ceiling hardening set
+    # (memory_limit / temp-dir cap / community extensions off) locked
+    # in with ``lock_configuration`` -- so adversarial tests run
+    # against the production safety contract (otherwise tests would
+    # pin the wrong behaviour and let a future regression land). This
+    # must be the last setup step; see the docstring above and
+    # ``_set_engine_safety_pragmas`` for why.
+    _set_engine_safety_pragmas(conn)
     return conn

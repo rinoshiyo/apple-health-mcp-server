@@ -119,14 +119,17 @@ INSERT INTO me_attributes VALUES
 @pytest.fixture
 def seeded_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection populated with synthetic Apple Health rows."""
-    conn = get_in_memory_connection()
+    # v0.6 (issues #222/#223): the session TZ must be pinned via the
+    # ``tz`` kwarg (applied before ``lock_configuration = true`` fires
+    # inside ``get_in_memory_connection``) rather than a post-hoc
+    # ``conn.execute("SET TimeZone = ...")`` -- the lockdown now
+    # rejects any configuration change issued after the connection is
+    # returned. The seeds below intentionally use bare
+    # ``TIMESTAMP '...'`` literals because they read as "Apple Watch /
+    # iPhone wall-clock"; pinning UTC here keeps that mental model
+    # deterministic across the CI matrix.
+    conn = get_in_memory_connection(tz="UTC")
     ensure_schema(conn)
-    # Pin the session TZ so naive TIMESTAMP seed literals land at the
-    # same UTC instant regardless of the host OS local TZ. The seeds
-    # below intentionally use bare ``TIMESTAMP '...'`` literals because
-    # they read as "Apple Watch / iPhone wall-clock"; pinning UTC here
-    # keeps that mental model deterministic across the CI matrix.
-    conn.execute("SET TimeZone = 'UTC';")
     conn.execute(_SEED_SQL)
     rebuild_daily_stats(conn)
     yield conn
@@ -136,9 +139,8 @@ def seeded_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
 @pytest.fixture
 def empty_conn() -> Generator[duckdb.DuckDBPyConnection, None, None]:
     """In-memory DuckDB connection with schema only -- no rows."""
-    conn = get_in_memory_connection()
+    conn = get_in_memory_connection(tz="UTC")
     ensure_schema(conn)
-    conn.execute("SET TimeZone = 'UTC';")
     rebuild_daily_stats(conn)
     yield conn
     conn.close()
