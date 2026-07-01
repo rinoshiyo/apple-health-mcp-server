@@ -63,6 +63,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             str,
             Field(
                 description="A read-only SQL query (must start with SELECT or WITH)",
+                max_length=65536,
             ),
         ],
     ) -> str:

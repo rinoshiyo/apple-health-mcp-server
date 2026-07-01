@@ -74,6 +74,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                 description=(
                     "The ``job_id`` returned by import_zip when it queued the background worker."
                 ),
+                max_length=64,
             ),
         ],
     ) -> str:

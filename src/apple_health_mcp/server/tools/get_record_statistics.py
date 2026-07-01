@@ -38,20 +38,22 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             str,
             Field(
                 description="The health record type, e.g. HKQuantityTypeIdentifierHeartRate",
+                max_length=256,
             ),
         ],
         start_date: Annotated[
             str | None,
-            Field(description="Start date filter (ISO 8601 / YYYY-MM-DD)"),
+            Field(description="Start date filter (ISO 8601 / YYYY-MM-DD)", max_length=256),
         ] = None,
         end_date: Annotated[
             str | None,
-            Field(description="End date filter (ISO 8601 / YYYY-MM-DD)"),
+            Field(description="End date filter (ISO 8601 / YYYY-MM-DD)", max_length=256),
         ] = None,
         period: Annotated[
             str | None,
             Field(
                 description="Aggregation period: day, week, month, or year (default: day)",
+                max_length=256,
             ),
         ] = None,
     ) -> str:

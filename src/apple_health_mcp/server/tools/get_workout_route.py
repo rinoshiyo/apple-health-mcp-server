@@ -74,7 +74,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     async def get_workout_route(
         workout_hash: Annotated[
             str,
-            Field(description="The workout hash identifier"),
+            Field(description="The workout hash identifier", max_length=64),
         ],
         limit: Annotated[
             int | None,
@@ -87,7 +87,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(description=OFFSET_DESCRIPTION),
+            Field(description=OFFSET_DESCRIPTION, ge=0, le=2**63 - 1),
         ] = None,
         every_nth: Annotated[
             int | None,

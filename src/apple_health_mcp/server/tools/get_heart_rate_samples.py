@@ -46,6 +46,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             str,
             Field(
                 description="The parent HR or HRV record hash to fetch beat-level samples for",
+                max_length=64,
             ),
         ],
         limit: Annotated[
@@ -56,7 +57,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         ] = None,
         offset: Annotated[
             int | None,
-            Field(description=OFFSET_DESCRIPTION),
+            Field(description=OFFSET_DESCRIPTION, ge=0, le=2**63 - 1),
         ] = None,
     ) -> str:
         try:
