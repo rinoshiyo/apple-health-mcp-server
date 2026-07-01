@@ -9,6 +9,7 @@ import duckdb
 import pytest
 
 from apple_health_mcp.db import get_in_memory_connection
+from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers.orchestrator import (
     _open_db,
     make_import_id,
@@ -361,3 +362,75 @@ def test_run_import_resets_stale_schema_before_importing(tmp_path: Path) -> None
     # short-circuit the import itself.
     assert stats.records == 1
     assert stats.workouts == 1
+
+
+# Issue #227: export.xml with an empty ``startDate`` attribute. XML-valid
+# (unlike the x4-3 / x4-7 adversarial fixtures, which fail Phase-1 XML
+# parse itself) but the Phase-1 Arrow bulk-load INSERT rejects the empty
+# string when casting the ``start_date`` column to TIMESTAMPTZ.
+_EXPORT_XML_EMPTY_START_DATE = """<?xml version="1.0" encoding="UTF-8"?>
+<HealthData locale="en_US">
+ <ExportDate value="2024-06-01 12:00:00 +0000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="iPhone" unit="count" value="100" startDate="" endDate="2024-01-01 09:30:00 +0900"/>
+</HealthData>"""
+
+
+def test_run_import_translates_empty_start_date_conversion_error(tmp_path: Path) -> None:
+    """An empty ``startDate`` attribute yields a human-friendly message.
+
+    Pins the issue #227 fix: the raw ``duckdb.ConversionException``
+    ("... when casting from source column start_date") is translated to
+    a ``HealthImportError`` a user can act on, with the original DuckDB
+    message preserved parenthetically for debugging.
+    """
+    export_dir = tmp_path / "export"
+    export_dir.mkdir()
+    (export_dir / "export.xml").write_text(_EXPORT_XML_EMPTY_START_DATE, encoding="utf-8")
+
+    db_path = tmp_path / "h.duckdb"
+    with pytest.raises(HealthImportError) as exc_info:
+        run_import(export_dir, db_path)
+
+    message = str(exc_info.value)
+    assert "empty or invalid timestamp fields" in message
+    assert "re-export from Apple Health" in message
+    # The original DuckDB diagnostics stay available for debugging.
+    assert "start_date" in message
+    assert isinstance(exc_info.value.__cause__, duckdb.ConversionException)
+
+
+# Issue #227: the two branches below are exercised directly against
+# ``_translate_conversion_error`` rather than through a full
+# ``run_import`` pipeline. Every column DuckDB's Arrow bulk-load can
+# reject that carries an XML-derived raw string (as opposed to a
+# Python-parsed ``float``) is a TIMESTAMPTZ column -- the importer's
+# ``_parse_opt_float`` already sanitises numeric attributes like
+# ``value`` / ``duration`` before they reach DuckDB, so a non-timestamp
+# Conversion Error from a real export.xml is not reachable through the
+# public pipeline. Unit-testing the translator directly against a
+# hand-built ``duckdb.ConversionException`` message covers those two
+# branches without requiring an artificial (and misleading) fixture.
+def test_translate_conversion_error_non_timestamp_column() -> None:
+    """A conversion error naming a non-timestamp column gets column-specific wording."""
+    from apple_health_mcp.importers.orchestrator import _translate_conversion_error
+
+    exc = duckdb.ConversionException(
+        'Conversion Error: could not convert string to double: "not-a-number" '
+        "when casting from source column value"
+    )
+    translated = _translate_conversion_error(exc)
+    message = str(translated)
+    assert "invalid value in the 'value' field" in message
+    assert "re-export from Apple Health" in message
+    assert "not-a-number" in message
+
+
+def test_translate_conversion_error_unknown_column() -> None:
+    """A conversion error with no extractable column name falls back to a generic message."""
+    from apple_health_mcp.importers.orchestrator import _translate_conversion_error
+
+    exc = duckdb.ConversionException("Conversion Error: some engine-internal detail")
+    translated = _translate_conversion_error(exc)
+    message = str(translated)
+    assert "data-format error" in message
+    assert "re-export from Apple Health" in message
