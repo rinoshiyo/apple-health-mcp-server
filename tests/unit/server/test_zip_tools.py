@@ -307,6 +307,35 @@ def test_import_zip_rejects_non_hex_id() -> None:
         conn.close()
 
 
+def test_import_zip_truncates_oversized_id_in_invalid_id_message() -> None:
+    """An adversarially large ``id`` is not echoed back in full (issue #228).
+
+    ``StubMCP`` (unlike real FastMCP) does not enforce the ``id`` field's
+    ``max_length=64`` Pydantic constraint, so this test exercises the
+    dispatch function's own defense-in-depth truncation directly with a
+    ~2,000-char id -- the same shape a client sending raw JSON-RPC could
+    push through. Without truncation the ``message`` field would balloon
+    to roughly the input size, wasting agent context for no diagnostic
+    benefit.
+    """
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        huge_id = "deadbeef" * 250  # 2,000 chars, well past the 64-char cap
+        out = _call_import_zip(conn, id=huge_id)
+        assert out["status"] == "error"
+        assert out["reason"] == "invalid_id"
+        message = out["message"]
+        assert isinstance(message, str)
+        # The message must not regurgitate all 2,000 input characters.
+        assert len(message) < len(huge_id)
+        assert "deadbeef" * 8 in message  # truncated prefix is still present
+        assert "..." in message
+        assert huge_id not in message
+    finally:
+        conn.close()
+
+
 def test_import_zip_accepts_uppercase_hex_id(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
