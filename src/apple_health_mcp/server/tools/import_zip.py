@@ -119,6 +119,22 @@ _MIN_ID_LEN = 4
 _MAX_ID_LEN = 64
 _ID_HEX_RE = re.compile(r"^[0-9a-f]+$")
 
+# Cap for echoing the caller-supplied ``id`` back inside the
+# ``invalid_id`` error message (issue #228). Real MCP calls cannot reach
+# this code with an oversized id: the ``max_length=64`` Field constraint
+# on the tool argument (added in #235) rejects them at the FastMCP
+# boundary before dispatch. The truncation is defense-in-depth for the
+# paths that bypass that gate -- direct ``_import_zip_dispatch`` calls
+# (unit tests) and any future regression of the Field constraint.
+_ID_ECHO_MAX_CHARS = _MAX_ID_LEN
+
+
+def _truncate_id_for_echo(value: str) -> str:
+    """Truncate ``value`` to ``_ID_ECHO_MAX_CHARS`` with a ``...`` suffix."""
+    if len(value) <= _ID_ECHO_MAX_CHARS:
+        return value
+    return f"{value[:_ID_ECHO_MAX_CHARS]}..."
+
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     @mcp.tool(description=DESCRIPTION)
@@ -176,6 +192,7 @@ def _import_zip_dispatch(
 
     cleaned = target_id.strip().lower()
     if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):
+        echoed_id = _truncate_id_for_echo(target_id)
         return run_query_payload(
             {
                 "status": "error",
@@ -183,7 +200,7 @@ def _import_zip_dispatch(
                 "message": (
                     f"id must be {_MIN_ID_LEN}-{_MAX_ID_LEN} hex "
                     f"characters (case-insensitive, surrounding "
-                    f"whitespace ignored); got {target_id!r}. Call "
+                    f"whitespace ignored); got {echoed_id!r}. Call "
                     "list_zips and pass the ``id`` field."
                 ),
             }
