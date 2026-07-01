@@ -41,6 +41,7 @@ import json
 import logging
 import os
 from enum import StrEnum
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
 
@@ -51,6 +52,40 @@ _logger = logging.getLogger(__name__)
 
 
 EXPORT_ZIPS_DIR_ENV_VAR = "APPLE_HEALTH_EXPORT_ZIPS_DIR"
+
+
+def resolve_export_zips_dir(dir_str: str) -> Path:
+    """Normalise a configured ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` value.
+
+    Expands ``~`` and absolutises the result (issue #226 / v0.5.1
+    dogfood UX #1): a relative value such as
+    ``..\\..\\..\\Windows\\System32`` previously surfaced verbatim in
+    the ``list_zips`` envelope and ``import_zip`` error messages,
+    leaving the agent / user unable to tell which directory was
+    actually being read. ``os.path.abspath`` folds ``..`` components
+    without touching the filesystem, so symlink notation the user
+    configured is preserved in envelopes and no filesystem error
+    (e.g. a symlink loop) can escape this helper. A ``~user`` value
+    that ``expanduser`` cannot resolve falls back to the raw string.
+
+    A relative value is accepted so the graceful NEEDS_CONFIG /
+    empty-``list_zips`` recovery flow keeps working, but it resolves
+    against the server process's CWD — almost always a
+    misconfiguration (the sibling ``APPLE_HEALTH_DB`` resolver rejects
+    relative values outright) — so it is logged as a warning.
+    """
+    try:
+        expanded = Path(dir_str).expanduser()
+    except RuntimeError:  # ~unknownuser and similar unresolvable homes
+        expanded = Path(dir_str)
+    if not expanded.is_absolute():
+        _logger.warning(
+            "%s is a relative path (%s); resolving against the server's "
+            "working directory. Set an absolute path to avoid surprises.",
+            EXPORT_ZIPS_DIR_ENV_VAR,
+            dir_str,
+        )
+    return Path(os.path.abspath(expanded))
 
 
 class DataState(StrEnum):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -16,11 +17,56 @@ from apple_health_mcp.server.data_state import (
     build_state_error_payload,
     check_data_state,
     require_ready_or_state_error,
+    resolve_export_zips_dir,
 )
 from tests._helpers import seed_one_import
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
+
+
+def test_resolve_export_zips_dir_expands_home_and_absolutises(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``~`` expansion and relative-path absolutisation both apply (issue #226).
+
+    Windows' ``ntpath.expanduser`` consults ``USERPROFILE`` (then
+    ``HOMEDRIVE``+``HOMEPATH``) and never reads ``HOME``, so both
+    variables are patched to keep the assertion meaningful across the
+    3-OS CI matrix.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+    home_relative = resolve_export_zips_dir("~/exports")
+    assert home_relative == Path(tmp_path / "exports")
+    assert home_relative.is_absolute()
+
+    monkeypatch.chdir(tmp_path)
+    plain_relative = resolve_export_zips_dir("some_dir")
+    assert plain_relative == Path(tmp_path / "some_dir")
+    assert plain_relative.is_absolute()
+
+    dotdot = resolve_export_zips_dir("a/../b")
+    assert dotdot == Path(tmp_path / "b")
+
+
+def test_resolve_export_zips_dir_falls_back_when_expanduser_fails(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unresolvable ``~user`` value degrades to the raw string (no raise)."""
+
+    def _boom(self: Path) -> Path:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "expanduser", _boom)
+    monkeypatch.chdir(tmp_path)
+    resolved = resolve_export_zips_dir("~no-such-user/exports")
+    assert resolved.is_absolute()
+    assert resolved == Path(tmp_path / "~no-such-user" / "exports")
 
 
 def test_check_data_state_returns_ready_when_imports_has_rows() -> None:

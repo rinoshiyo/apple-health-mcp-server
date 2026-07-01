@@ -99,6 +99,33 @@ def test_list_zips_returns_empty_hint_when_dir_missing(
         conn.close()
 
 
+def test_list_zips_normalises_relative_dir_to_absolute(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Relative env value → ``export_zips_dir`` returns the absolute path.
+
+    Issue #226: without normalisation a relative
+    ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` (e.g. a directory-escape attempt
+    like ``../../../Windows/System32``) surfaced verbatim, leaving the
+    agent / user unable to tell which directory was actually being
+    read without mentally resolving it against the server's working
+    directory.
+    """
+    target = tmp_path / "exports"
+    target.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, "exports")
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_list_zips(conn)
+        assert out["export_zips_dir"] == str(target.resolve())
+        assert Path(str(out["export_zips_dir"])).is_absolute()
+    finally:
+        conn.close()
+
+
 def test_list_zips_returns_empty_hint_for_path_that_is_a_file(
     monkeypatch: MonkeyPatch,
     tmp_path: Path,
@@ -449,6 +476,31 @@ def test_import_zip_errors_when_dir_missing(
         out = _call_import_zip(conn, id="aaaaaaaa")
         assert out["status"] == "error"
         assert out["reason"] == "export_zips_dir_missing"
+    finally:
+        conn.close()
+
+
+def test_import_zip_reports_absolute_dir_in_error_message(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Relative env value → error message carries the absolute path.
+
+    Issue #226: ``import_zip`` error messages must stay consistent with
+    ``list_zips`` and always surface the normalised absolute directory,
+    not the raw (possibly relative) env value.
+    """
+    monkeypatch.chdir(tmp_path)
+    missing_relative = "no_such_relative_dir"
+    monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, missing_relative)
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        out = _call_import_zip(conn, id="aaaaaaaa")
+        assert out["status"] == "error"
+        assert out["reason"] == "export_zips_dir_missing"
+        expected_dir = str((tmp_path / missing_relative).resolve())
+        assert expected_dir in str(out["message"])
     finally:
         conn.close()
 
