@@ -120,26 +120,20 @@ _MAX_ID_LEN = 64
 _ID_HEX_RE = re.compile(r"^[0-9a-f]+$")
 
 # Cap for echoing the caller-supplied ``id`` back inside the
-# ``invalid_id`` error message (issue #228). A malicious/adversarial
-# caller can pass an arbitrarily long string (up to the Pydantic
-# ``max_length=64`` gate is intended, but ``target_id`` here is the raw
-# ``str`` argument -- Pydantic validation runs on the FastMCP boundary,
-# and this function is also unit-tested directly with oversized input).
-# Echoing thousands of characters back wastes agent context for no
-# diagnostic benefit; a truncated preview is enough to spot a typo'd id.
-_ID_ECHO_MAX_CHARS = 64
+# ``invalid_id`` error message (issue #228). Real MCP calls cannot reach
+# this code with an oversized id: the ``max_length=64`` Field constraint
+# on the tool argument (added in #235) rejects them at the FastMCP
+# boundary before dispatch. The truncation is defense-in-depth for the
+# paths that bypass that gate -- direct ``_import_zip_dispatch`` calls
+# (unit tests) and any future regression of the Field constraint.
+_ID_ECHO_MAX_CHARS = _MAX_ID_LEN
 
 
-def _truncate_id_for_echo(value: str, max_chars: int = _ID_ECHO_MAX_CHARS) -> str:
-    """Truncate ``value`` to ``max_chars`` with a ``...`` suffix when clipped.
-
-    Kept as a small, independently testable helper so the truncation
-    threshold and suffix can be pinned by a unit test without invoking
-    the full ``import_zip`` dispatch.
-    """
-    if len(value) <= max_chars:
+def _truncate_id_for_echo(value: str) -> str:
+    """Truncate ``value`` to ``_ID_ECHO_MAX_CHARS`` with a ``...`` suffix."""
+    if len(value) <= _ID_ECHO_MAX_CHARS:
         return value
-    return f"{value[:max_chars]}..."
+    return f"{value[:_ID_ECHO_MAX_CHARS]}..."
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:

@@ -307,16 +307,40 @@ def test_import_zip_rejects_non_hex_id() -> None:
         conn.close()
 
 
+def test_truncate_id_for_echo_boundaries() -> None:
+    """Pin the truncation threshold and suffix at the 64-char boundary."""
+    at_cap = "a" * 64
+    assert import_zip_mod._truncate_id_for_echo(at_cap) == at_cap
+    over_cap = "a" * 65
+    assert import_zip_mod._truncate_id_for_echo(over_cap) == "a" * 64 + "..."
+
+
+def test_import_zip_echoes_short_invalid_id_verbatim() -> None:
+    """An invalid id at or under 64 chars is echoed unmodified (issue #228)."""
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        short_bad_id = "Z" * 40
+        out = _call_import_zip(conn, id=short_bad_id)
+        assert out["status"] == "error"
+        assert out["reason"] == "invalid_id"
+        message = out["message"]
+        assert isinstance(message, str)
+        assert repr(short_bad_id) in message
+        assert "..." not in message
+    finally:
+        conn.close()
+
+
 def test_import_zip_truncates_oversized_id_in_invalid_id_message() -> None:
     """An adversarially large ``id`` is not echoed back in full (issue #228).
 
-    ``StubMCP`` (unlike real FastMCP) does not enforce the ``id`` field's
-    ``max_length=64`` Pydantic constraint, so this test exercises the
-    dispatch function's own defense-in-depth truncation directly with a
-    ~2,000-char id -- the same shape a client sending raw JSON-RPC could
-    push through. Without truncation the ``message`` field would balloon
-    to roughly the input size, wasting agent context for no diagnostic
-    benefit.
+    Real MCP calls cannot deliver an oversized id -- the ``max_length=64``
+    Field constraint (#235) rejects them at the FastMCP boundary. This
+    test exercises the dispatch function's defense-in-depth truncation
+    directly (``StubMCP`` skips Pydantic argument binding) with a
+    ~2,000-char id, guarding the direct-dispatch path and any future
+    regression of the Field constraint.
     """
     conn = get_in_memory_connection()
     try:
