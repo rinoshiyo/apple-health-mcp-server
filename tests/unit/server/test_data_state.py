@@ -173,8 +173,12 @@ def test_build_state_error_payload_for_needs_config_has_documented_shape() -> No
     payload = json.loads(raw)
     assert payload["state"] == "NEEDS_CONFIG"
     assert payload["suggested_action"] == "ask_user_to_open_settings"
-    assert EXPORT_ZIPS_DIR_ENV_VAR in payload["reason"]
+    # v0.6 #196: reason is an enum-style identifier so agents can
+    # branch on exact-match instead of a fragile substring check; the
+    # env var name still lives in human_message.
+    assert payload["reason"] == "env_unset"
     assert "human_message" in payload
+    assert EXPORT_ZIPS_DIR_ENV_VAR in payload["human_message"]
     assert "Settings" in payload["human_message"]
 
 
@@ -184,6 +188,10 @@ def test_build_state_error_payload_for_needs_import_has_documented_shape() -> No
     payload = json.loads(raw)
     assert payload["state"] == "NEEDS_IMPORT"
     assert payload["suggested_action"] == "call_list_zips"
+    # v0.6 #196: reason is an enum-style identifier (matches the
+    # NEEDS_REIMPORT precedent set in v0.5.1), not the old free-form
+    # prose sentence.
+    assert payload["reason"] == "no_imports"
     assert "human_message" in payload
     assert "list_zips" in payload["human_message"]
 

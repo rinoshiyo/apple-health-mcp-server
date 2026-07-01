@@ -550,22 +550,26 @@ JSON エンベロープを返します:
 ```json
 {
   "state": "NEEDS_CONFIG",
-  "reason": "APPLE_HEALTH_EXPORT_ZIPS_DIR is not set",
+  "reason": "env_unset",
   "suggested_action": "ask_user_to_open_settings",
   "human_message": "Set the APPLE_HEALTH_EXPORT_ZIPS_DIR ..."
 }
 ```
 
-`state` は次のいずれかです:
+`state` は次のいずれかです（括弧内は機械判定用の `reason` 値）:
 
-- `NEEDS_CONFIG` — `APPLE_HEALTH_EXPORT_ZIPS_DIR` 環境変数
-  （v0.4 の `list_zips` / `import_zip` MCP ツールが読みに行く ZIP の
-  置き場所）が未設定。 Claude Desktop ユーザーは Settings → MCP →
-  apple-health-mcp-server → Export ZIPs directory から、 それ以外の
-  MCP クライアントは環境変数を直接設定します。
-- `NEEDS_IMPORT` — 置き場所は設定済みだがまだインポート成功行が
-  ない。 Claude に `list_zips` → `import_zip(id="…")` の順で呼ばせて
-  ください。
+- `NEEDS_CONFIG`（reason: `env_unset`）— `APPLE_HEALTH_EXPORT_ZIPS_DIR`
+  環境変数（v0.4 の `list_zips` / `import_zip` MCP ツールが読みに行く
+  ZIP の置き場所）が未設定。 Claude Desktop ユーザーは Settings →
+  MCP → apple-health-mcp-server → Export ZIPs directory から、 それ
+  以外の MCP クライアントは環境変数を直接設定します。
+- `NEEDS_IMPORT`（reason: `no_imports`）— 置き場所は設定済みだが
+  まだインポート成功行がない。 Claude に `list_zips` →
+  `import_zip(id="…")` の順で呼ばせてください。
+- `NEEDS_REIMPORT`（reason: `schema_outdated`）— 古いバージョンの
+  パッケージでインポートされた DB で、 スキーマが現行より古い。
+  Claude に `import_zip(id="…")` を呼ばせると、 スキーマ再構築と
+  再インポートが一括で実行されます。
 
 CLI 経由のインポートは:
 

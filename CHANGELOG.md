@@ -9,6 +9,20 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: unified the state-machine error envelope's `reason`
+  field to enum-style identifiers across all three error states**
+  (issue #196). `NEEDS_CONFIG.reason` changes from the prose string
+  `"APPLE_HEALTH_EXPORT_ZIPS_DIR is not set"` to `"env_unset"`;
+  `NEEDS_IMPORT.reason` changes from
+  `"no successful Apple Health import found in this database"` to
+  `"no_imports"`. `NEEDS_REIMPORT.reason` was already `"schema_outdated"`
+  (v0.5.1) and is unchanged. Agents that branched on `reason` via
+  substring matching must switch to exact-match comparison; the
+  human-readable explanation (env var name, recovery steps) still
+  lives in `human_message`, unchanged.
+
 ## [0.5.1] - 2026-06-29
 
 ### Security

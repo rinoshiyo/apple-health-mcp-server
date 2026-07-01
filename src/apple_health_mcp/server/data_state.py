@@ -112,7 +112,7 @@ _STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
     DataState.NEEDS_CONFIG: json.dumps(
         {
             "state": DataState.NEEDS_CONFIG.value,
-            "reason": f"{EXPORT_ZIPS_DIR_ENV_VAR} is not set",
+            "reason": "env_unset",
             "suggested_action": "ask_user_to_open_settings",
             "human_message": (
                 f"Set the {EXPORT_ZIPS_DIR_ENV_VAR} environment variable "
@@ -130,7 +130,7 @@ _STATE_ERROR_PAYLOADS: Final[dict[DataState, str]] = {
     DataState.NEEDS_IMPORT: json.dumps(
         {
             "state": DataState.NEEDS_IMPORT.value,
-            "reason": "no successful Apple Health import found in this database",
+            "reason": "no_imports",
             "suggested_action": "call_list_zips",
             "human_message": (
                 "No Apple Health export has been imported yet. Call "
