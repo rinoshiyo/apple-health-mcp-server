@@ -61,6 +61,7 @@ from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.server.data_state import (
     EXPORT_ZIPS_DIR_ENV_VAR,
     block_if_schema_outdated,
+    resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import query_to_json, run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
@@ -219,7 +220,7 @@ def _import_zip_dispatch(
             }
         )
 
-    export_dir = Path(dir_str).expanduser()
+    export_dir = resolve_export_zips_dir(dir_str)
     try:
         candidates = sorted(p for p in export_dir.iterdir() if p.suffix.lower() == ".zip")
     except FileNotFoundError:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -16,11 +17,28 @@ from apple_health_mcp.server.data_state import (
     build_state_error_payload,
     check_data_state,
     require_ready_or_state_error,
+    resolve_export_zips_dir,
 )
 from tests._helpers import seed_one_import
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
+
+
+def test_resolve_export_zips_dir_expands_home_and_absolutises(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """``~`` expansion and relative-path absolutisation both apply (issue #226)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_relative = resolve_export_zips_dir("~/exports")
+    assert home_relative == (tmp_path / "exports").resolve()
+    assert home_relative.is_absolute()
+
+    monkeypatch.chdir(tmp_path)
+    plain_relative = resolve_export_zips_dir("some_dir")
+    assert plain_relative == (tmp_path / "some_dir").resolve()
+    assert plain_relative.is_absolute()
 
 
 def test_check_data_state_returns_ready_when_imports_has_rows() -> None:

@@ -41,6 +41,7 @@ import json
 import logging
 import os
 from enum import StrEnum
+from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
 
@@ -51,6 +52,22 @@ _logger = logging.getLogger(__name__)
 
 
 EXPORT_ZIPS_DIR_ENV_VAR = "APPLE_HEALTH_EXPORT_ZIPS_DIR"
+
+
+def resolve_export_zips_dir(dir_str: str) -> Path:
+    """Normalise a configured ``APPLE_HEALTH_EXPORT_ZIPS_DIR`` value.
+
+    Expands ``~`` and resolves the result to an absolute path (issue
+    #226 / v0.5.1 dogfood UX #1): a relative value such as
+    ``..\\..\\..\\Windows\\System32`` previously surfaced verbatim in
+    the ``list_zips`` envelope and ``import_zip`` error messages,
+    leaving the agent / user unable to tell which directory was
+    actually being read without mentally resolving it against the
+    server's working directory. ``Path.resolve()`` does not require
+    the path to exist, so the non-existent-directory branches that
+    call this helper still work unchanged.
+    """
+    return Path(dir_str).expanduser().resolve()
 
 
 class DataState(StrEnum):

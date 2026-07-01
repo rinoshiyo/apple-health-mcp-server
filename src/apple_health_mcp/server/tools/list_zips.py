@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from apple_health_mcp.server.data_state import (
     EXPORT_ZIPS_DIR_ENV_VAR,
     block_if_schema_outdated,
+    resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import run_query_payload
 from apple_health_mcp.server.tools._zip_inspect import (
@@ -79,7 +80,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                 }
             )
 
-        export_dir = Path(dir_str).expanduser()
+        export_dir = resolve_export_zips_dir(dir_str)
         try:
             entries = sorted(p for p in export_dir.iterdir() if p.suffix.lower() == ".zip")
         except FileNotFoundError:
