@@ -946,6 +946,33 @@ def test_run_custom_query_validation_error(
     assert out.startswith("Error:")
 
 
+@pytest.mark.parametrize(
+    "fn",
+    [
+        # v0.6 #216: introspection functions leak internal paths
+        # (e.g. temp_directory) and are not covered by
+        # enable_external_access, so the validator is the only guard.
+        "duckdb_settings",
+        "duckdb_extensions",
+        "duckdb_databases",
+        # v0.6 #225: fs-read families missed by the v0.5.1 #190 sweep.
+        "read_duckdb",
+        "read_ndjson_objects",
+        "read_json_objects",
+        "read_json_objects_auto",
+    ],
+)
+def test_run_custom_query_rejects_extended_denylist(
+    seeded_conn: duckdb.DuckDBPyConnection, fn: str
+) -> None:
+    """v0.6 #216 / #225: extended DENIED_FUNCTIONS entries are rejected at parse time."""
+    fn_call = f"{fn}(1)" if fn.startswith("duckdb_") else f"{fn}('/etc/passwd')"
+    bound = _bind(run_custom_query, seeded_conn)
+    out = asyncio.run(bound(query=f"SELECT * FROM {fn_call}"))
+    assert out.startswith("Error:")
+    assert "not allowed" in out
+
+
 def test_run_custom_query_enforces_limit(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:

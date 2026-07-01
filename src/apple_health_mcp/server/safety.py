@@ -83,6 +83,24 @@ DENIED_FUNCTIONS: frozenset[str] = frozenset(
         "parquet_metadata",
         "parquet_schema",
         "sniff_csv",
+        # v0.6 #216: in-DB introspection functions. These are NOT
+        # covered by ``enable_external_access = false`` (they read
+        # session state, not host files/network), so this denylist is
+        # the ONLY guard closing this leak. ``duckdb_settings`` /
+        # ``duckdb_databases`` expose internal paths (e.g.
+        # ``temp_directory``); ``duckdb_extensions`` happens to also
+        # touch the extension directory and is separately blocked by
+        # the engine, but it is listed here too for parse-time UX
+        # consistency with its introspection siblings.
+        "duckdb_settings",
+        "duckdb_extensions",
+        "duckdb_databases",
+        # v0.6 #225: fs-read families missed by the v0.5.1 #190 sweep.
+        # Defense-in-depth on top of ``enable_external_access = false``.
+        "read_duckdb",
+        "read_ndjson_objects",
+        "read_json_objects",
+        "read_json_objects_auto",
     }
 )
 
