@@ -33,11 +33,11 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     async def get_activity_summaries(
         start_date: Annotated[
             str | None,
-            Field(description="Start date filter (ISO 8601 / YYYY-MM-DD)"),
+            Field(description="Start date filter (ISO 8601 / YYYY-MM-DD)", max_length=256),
         ] = None,
         end_date: Annotated[
             str | None,
-            Field(description="End date filter (ISO 8601 / YYYY-MM-DD)"),
+            Field(description="End date filter (ISO 8601 / YYYY-MM-DD)", max_length=256),
         ] = None,
         limit: Annotated[
             int | None,

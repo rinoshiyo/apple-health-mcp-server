@@ -132,6 +132,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                     "leading/trailing whitespace is trimmed and "
                     "uppercase is normalised to lowercase before lookup."
                 ),
+                max_length=64,
             ),
         ],
     ) -> str:

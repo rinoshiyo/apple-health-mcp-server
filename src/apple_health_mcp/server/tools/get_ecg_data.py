@@ -36,7 +36,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     async def get_ecg_data(
         ecg_hash: Annotated[
             str,
-            Field(description="The ECG hash identifier"),
+            Field(description="The ECG hash identifier", max_length=64),
         ],
         include_voltages: Annotated[
             bool | None,

@@ -36,7 +36,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     async def get_workout_details(
         workout_hash: Annotated[
             str,
-            Field(description="The workout hash identifier"),
+            Field(description="The workout hash identifier", max_length=64),
         ],
     ) -> str:
         if msg := require_imports_or_message(conn, lock=lock):
