@@ -1,3 +1,8 @@
+---
+name: dev-flow
+description: 本リポの開発フロー (4 パターン分岐、 code-review 運用、 Pattern 4 自走手順)。 project rule として auto-load される。
+---
+
 # 開発フロー（Git 運用・必須）
 
 2026-06-13 制定・2026-06-25 改訂（GitHub Flow 統一）・2026-07-02 改訂（4 パターン分岐導入）。以降は自走ループ中も含め必ず守る。
@@ -21,7 +26,7 @@ Pattern 2/3 で code-review を通す時 (Pattern 1 も場合により)、 main 
 
 **Pattern 2/3 で code-review を通す時は毎回 `--comment` を付ける** — findings を PR インラインコメントとして残し、 後日振り返り時に「どの行にどの指摘があったか」 を復元できるようにするため。 REFUTED (却下) は自動投稿されないので、 却下は別途手動で PR コメントに記録する。
 
-**Pattern 4 (自走) は `--fix` を base にする** — main が finding を apply/skip 判定 → 明快な指摘を working tree に自動修正。 実行後の summary (「修正した項目 / スキップした項目」) を main が PR コメントとして投稿し、 skip 理由 (a) 意図挙動を変える / (b) 変更範囲超過 / (c) 誤検出 のうち (a) (b) について main が別 issue 起票判断を行う (`~/.claude/rules/issue-spinoff.md` 準拠)。 `--comment` (inline PR review コメント) は付けない (自走で PR 数が増えるとノイズになるため)。
+**Pattern 4 (自走) は `--fix` を base にする** — main が finding を apply/skip 判定 → 明快な指摘を working tree に自動修正。 実行後の summary (「修正した項目 / スキップした項目」) を main が PR コメントとして投稿し、 skip 理由 (a) 意図挙動を変える / (b) 変更範囲超過 / (c) 誤検出 のうち (a) (b) について main が別 issue 起票判断を行う (issue spinoff 運用: milestone 無指定 + needs-triage ラベル付与、 priority phase 後決め)。 `--comment` (inline PR review コメント) は付けない (自走で PR 数が増えるとノイズになるため)。
 
 推奨の目安:
 
@@ -115,7 +120,7 @@ Pattern 2/3 で code-review を通す時 (Pattern 1 も場合により)、 main 
    ```
    /goal <condition>, or stop after N turns
    ```
-   構文は `~/.claude/skills/best-practice/docs/goal-loop.md` を**逐語厳守**。 `, or stop after N turns` の `or` を省いたり句点・セミコロンで区切ると evaluator が「AND」 と解釈して暴走事故 (実例: 2026-06-25 turn 130+ 暴走)
+   構文は `/goal` の公式ドキュメント (<https://code.claude.com/docs/en/goal>) を**逐語厳守**。 `, or stop after N turns` の `or` を省いたり句点・セミコロンで区切ると evaluator が「AND」 と解釈して暴走事故 (実例: 2026-06-25 turn 130+ 暴走)
 3. **condition の必須要素**:
    - **`/code-review medium --fix` 通過** (skip して merge されるのを防ぐため必ず condition に含める。 low で足りる作業でも自走中は medium 固定が安全)
    - PR merge
@@ -129,14 +134,14 @@ Pattern 2/3 で code-review を通す時 (Pattern 1 も場合により)、 main 
    - 軽い作業 (issue 1 件、 限定的編集): N=20-30
    - 中量級 (issue 数件、 PR review 込み): N=80-150
    - 重量級 (複数 issue 連続 + PR review fan-out): N=200-230
-5. **main の自走**: `code-implement` サブエージェント dispatch → code-implement が実装 + PR 作成 (code-implement 内での `/code-review low` 自律実行は agent 定義書側の規定、 main の手順としては関与しない = 2 段構え運用の下段。 詳細は `~/.claude/rules/code-review-agent-usage.md` 参照)
+5. **main の自走**: `code-implement` サブエージェント dispatch → code-implement が実装 + PR 作成 (code-implement 内での `/code-review low` 自律実行は agent 定義書側の規定、 main の手順としては関与しない = 2 段構え運用の下段。 詳細は code-review sub-agent 起動規律 (user rule) 参照)
 6. **main が `/code-review medium --fix` 起動** (2 段構え運用の上段):
    - main が findings 抽出 → apply/skip 判定 → 明快な finding を working tree に apply
    - main が最後に「修正した項目 / スキップした項目」 の summary を出力
    - **main が summary を PR コメントとして投稿** (`gh pr comment <PR#> --body "$SUMMARY"` or `gh api repos/<owner>/<repo>/issues/<PR#>/comments -f body="$SUMMARY"`)
 7. **skip 記録の後続処理** (別 turn で実行):
    - main が投稿した PR コメントを review:
-     - スキップ理由が (a) 意図挙動を変える or (b) 変更範囲超過 → **別 issue 起票** (`~/.claude/rules/issue-spinoff.md` 準拠、 needs-triage ラベル)
+     - スキップ理由が (a) 意図挙動を変える or (b) 変更範囲超過 → **別 issue 起票** (issue spinoff 運用: milestone 無指定 + needs-triage ラベル)
      - スキップ理由が (c) 誤検出 → 無視
    - 起票結果を PR コメントに追記 (「Issue #N として起票」)
 8. **merge → issue close → 次 issue へ**
@@ -145,7 +150,7 @@ Pattern 2/3 で code-review を通す時 (Pattern 1 も場合により)、 main 
 **制約**:
 - 起動は `claude --permission-mode bypassPermissions` セッションで行う
 - 自作 Stop hook を作らない (`/goal` 自体が Stop hook ラッパーのため衝突)
-- evaluator (Haiku) の context 上限に注意 — 大量ファイル touch + メイン直接編集が多い作業は N を抑える、 サブエージェント fan-out 多用パターンは N を伸ばせる
+- evaluator (Haiku) の context 上限に注意 — 大量ファイル touch + メイン直接編集が多い作業は N を抑える、 サブエージェント fan-out 多用パターンは N を伸ばせる (公式仕様: <https://code.claude.com/docs/en/goal>)
 
 ## 共通ルール (全 pattern)
 
@@ -158,10 +163,10 @@ Pattern 2/3 で code-review を通す時 (Pattern 1 も場合により)、 main 
 - `feat:` / `fix:` / `chore:` / `docs:` / `refactor:` / `test:` / `style:` 等
 - 初回コミットも例外なし
 
-### 関連 rule / docs
+### 参照
 
-- `~/.claude/rules/git.md` — Git 操作全般
-- `~/.claude/rules/code-review-agent-usage.md` — `/code-review` sub-agent 規律
-- `~/.claude/rules/main-agent-economy.md` — main / sub-agent 責務分離
-- `~/.claude/rules/sub-agent-invocation.md` — サブエージェント起動時の規律 (`run_in_background: true` 必須、 `name` 指定時の `SendMessage` 明示等)
-- `~/.claude/skills/best-practice/docs/goal-loop.md` — `/goal` の全仕様 (使い分け / 構文 / turn 数実績)
+- Conventional Commits: <https://www.conventionalcommits.org/>
+- Claude Code `/goal` 公式仕様: <https://code.claude.com/docs/en/goal>
+- Claude Code hooks 公式仕様: <https://code.claude.com/docs/en/hooks>
+
+Claude Code の user-level rules (main / sub-agent 責務分離、 code-review sub-agent 起動、 issue spinoff、 sub-agent invocation の規律等) は本リポ外で管理されているため、 具体的な運用は各エージェントのセットアップに依存する。 本リポでは本ファイルが Pattern 判定・手順の source of truth。
