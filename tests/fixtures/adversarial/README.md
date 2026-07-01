@@ -1,7 +1,7 @@
 # Adversarial ZIP fixtures
 
 Hand-crafted ZIP files for the manual dogfood checklist
-(`docs/dogfood/v0-5-1-test-plan.md` §X4). Each fixture exercises one
+(`internal/dogfood/v0-5-1-test-plan.md` §X4). Each fixture exercises one
 corner case of the importer / `import_zip` / `list_zips` path that
 unit tests can not cover at the same fidelity.
 
