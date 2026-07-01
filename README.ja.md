@@ -91,8 +91,9 @@ Claude Desktop で最も簡単な手順は、 各
    だけで Claude が `list_zips` → `import_zip(id="…")` を呼びます。
    `import_zip` は `job_id` を即座に返してバックグラウンドワーカーで
    インポートを実行し、 Claude は `get_import_status(job_id=…)` を
-   10〜30 秒おきに `done` になるまで poll します。 ターミナル操作は
-   不要です。
+   10〜30 秒おきに `ok` (または `error`) になるまで poll します。
+   大きな export では取り込みに数分かかることがあります。 ターミナル
+   操作は不要です。
 5. **Windows ユーザのみ — `%LOCALAPPDATA%` 配下は避けてください。**
    Windows 版 Claude Desktop は MSIX パッケージで、 子プロセスは
    AppContainer サンドボックス内で動き `%LOCALAPPDATA%` が

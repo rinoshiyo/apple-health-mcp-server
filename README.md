@@ -102,7 +102,8 @@ Then:
    `list_zips` → `import_zip(id="…")`, which returns a `job_id`
    immediately and runs the import in a background worker. Claude
    polls `get_import_status(job_id=…)` every 10–30 seconds until the
-   job reports `done` — no terminal commands required.
+   job reports `ok` (or `error`); large exports can take a few
+   minutes — no terminal commands required.
 5. **Windows users only — avoid `%LOCALAPPDATA%` subfolders.** Claude
    Desktop on Windows ships as an MSIX package whose child processes
    run inside an AppContainer sandbox that virtualises
