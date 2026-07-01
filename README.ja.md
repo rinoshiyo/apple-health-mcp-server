@@ -88,8 +88,12 @@ Claude Desktop で最も簡単な手順は、 各
    `C:\Users\<you>\Documents\AppleHealth`、 macOS / Linux なら
    `~/Documents/AppleHealth` 等) を選び、 そこに `export.zip` を
    置いて Claude に「Apple Health export をインポートして」 と頼む
-   だけで Claude が `list_zips` → `import_zip(id="…")` を呼んで
-   1〜2 分で取り込みが完了します。 ターミナル操作は不要です。
+   だけで Claude が `list_zips` → `import_zip(id="…")` を呼びます。
+   `import_zip` は `job_id` を即座に返してバックグラウンドワーカーで
+   インポートを実行し、 Claude は `get_import_status(job_id=…)` を
+   10〜30 秒おきに `ok` (または `error`) になるまで poll します。
+   大きな export では取り込みに数分かかることがあります。 ターミナル
+   操作は不要です。
 5. **Windows ユーザのみ — `%LOCALAPPDATA%` 配下は避けてください。**
    Windows 版 Claude Desktop は MSIX パッケージで、 子プロセスは
    AppContainer サンドボックス内で動き `%LOCALAPPDATA%` が
@@ -571,9 +575,9 @@ apple-health-mcp-server import /path/to/export.zip
 
 **先に MCP サーバーを停止してから** CLI インポートを走らせてくだ
 さい（Claude Desktop を終了する、 `serve` プロセスを kill する等）。
-v0.4 以降サーバーは `import_zip` ツールがインライン import を回す
-ために DuckDB ハンドルを書き込み可能で開いており、 DuckDB は書き込
-みハンドルが生きている間ファイルに対する排他ロックを保持します。
+`serve` プロセスは `import_zip` ツールがバックグラウンドワーカーを
+起動できるよう DuckDB ハンドルを書き込み可能で開いており、 DuckDB は
+書き込みハンドルが生きている間ファイルに対する排他ロックを保持します。
 別シェルから `apple-health-mcp-server import` を打つと lock 衝突
 エラーになるため、 サーバーを止めてから実行し、 完了後に起動し
 直すという順序が必要です。

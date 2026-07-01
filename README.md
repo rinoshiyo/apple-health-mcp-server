@@ -99,8 +99,11 @@ Then:
    `~/Documents/AppleHealth` on macOS / Linux). Drop your
    `export.zip` into that folder, then ask Claude to import it:
    "Hey Claude, import the latest Apple Health export." Claude calls
-   `list_zips` → `import_zip(id="…")` and the data is queryable
-   ~1–2 minutes later — no terminal commands required.
+   `list_zips` → `import_zip(id="…")`, which returns a `job_id`
+   immediately and runs the import in a background worker. Claude
+   polls `get_import_status(job_id=…)` every 10–30 seconds until the
+   job reports `ok` (or `error`); large exports can take a few
+   minutes — no terminal commands required.
 5. **Windows users only — avoid `%LOCALAPPDATA%` subfolders.** Claude
    Desktop on Windows ships as an MSIX package whose child processes
    run inside an AppContainer sandbox that virtualises
@@ -600,10 +603,10 @@ apple-health-mcp-server import /path/to/export.zip
 ```
 
 **Stop the MCP server first** (quit Claude Desktop, kill the `serve`
-process, etc.) before running the CLI importer. v0.4 opens the serve
-handle writable so the upcoming `import_zip` tool can drive the
-importer inline; DuckDB holds an exclusive file lock for the lifetime
-of the writable handle, so a concurrent `apple-health-mcp-server
+process, etc.) before running the CLI importer. The `serve` process
+opens the DuckDB handle writable so the `import_zip` tool can dispatch
+its background worker; DuckDB holds an exclusive file lock for the
+lifetime of the writable handle, so a concurrent `apple-health-mcp-server
 import` from another shell would fail with a lock-conflict error.
 After the CLI import finishes, restart the server so the tools query
 against the fresh data.
