@@ -585,16 +585,21 @@ with a structured JSON envelope until a successful import lands:
 }
 ```
 
-The `state` is one of:
+The `state` is one of (with its machine-branchable `reason` value):
 
-- `NEEDS_CONFIG` — the `APPLE_HEALTH_EXPORT_ZIPS_DIR` env var (the
-  drop-zone the v0.4 `list_zips` / `import_zip` MCP tools read from)
-  is not configured. Claude Desktop users set it via Settings → MCP →
+- `NEEDS_CONFIG` (reason: `env_unset`) — the
+  `APPLE_HEALTH_EXPORT_ZIPS_DIR` env var (the drop-zone the v0.4
+  `list_zips` / `import_zip` MCP tools read from) is not configured.
+  Claude Desktop users set it via Settings → MCP →
   apple-health-mcp-server → Export ZIPs directory; other MCP clients
   set the env var directly.
-- `NEEDS_IMPORT` — the drop-zone is configured but no successful
-  import has happened yet. Ask Claude to call `list_zips` followed by
-  `import_zip(id="…")`.
+- `NEEDS_IMPORT` (reason: `no_imports`) — the drop-zone is configured
+  but no successful import has happened yet. Ask Claude to call
+  `list_zips` followed by `import_zip(id="…")`.
+- `NEEDS_REIMPORT` (reason: `schema_outdated`) — the DB was imported
+  under an older package release whose schema trails the current one.
+  Ask Claude to call `import_zip(id="…")` on your current export ZIP;
+  the importer rebuilds the schema and re-ingests in one shot.
 
 For the CLI import flow:
 
