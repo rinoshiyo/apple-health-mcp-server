@@ -53,7 +53,26 @@ from apple_health_mcp.server.safety import DENIED_FUNCTIONS
 # that does not exist in the engine would give us a false security
 # signal.
 _ENGINE_ABSENT_FUNCTIONS = frozenset({"read_text_auto", "read_blob_auto"})
-_ENGINE_REACHABLE_DENIED = sorted(DENIED_FUNCTIONS - _ENGINE_ABSENT_FUNCTIONS)
+
+# v0.6 #216: ``duckdb_settings`` / ``duckdb_extensions`` /
+# ``duckdb_databases`` are zero-argument introspection functions, so
+# they do not fit ``_denied_function_call``'s "pass a path argument"
+# shape (calling them with an argument raises a Binder Error before
+# the engine ever reaches the ``enable_external_access`` gate, which
+# would pin the wrong layer). More fundamentally, ``duckdb_settings``
+# and ``duckdb_databases`` are NOT blocked by
+# ``enable_external_access = false`` at all — that gap is exactly
+# what #216 closes at the validator (wire) layer, since introspection
+# functions read session state rather than host files/network. They
+# are exercised by a dedicated test below instead of the generic
+# engine-reachable-denied parametrize.
+_ENGINE_NOT_PATH_SHAPED_FUNCTIONS = frozenset(
+    {"duckdb_settings", "duckdb_extensions", "duckdb_databases"}
+)
+
+_ENGINE_REACHABLE_DENIED = sorted(
+    DENIED_FUNCTIONS - _ENGINE_ABSENT_FUNCTIONS - _ENGINE_NOT_PATH_SHAPED_FUNCTIONS
+)
 
 
 def _denied_function_call(fn: str) -> str:
