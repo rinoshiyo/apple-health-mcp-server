@@ -550,7 +550,7 @@ JSON エンベロープを返します:
 ```json
 {
   "state": "NEEDS_CONFIG",
-  "reason": "APPLE_HEALTH_EXPORT_ZIPS_DIR is not set",
+  "reason": "env_unset",
   "suggested_action": "ask_user_to_open_settings",
   "human_message": "Set the APPLE_HEALTH_EXPORT_ZIPS_DIR ..."
 }
