@@ -26,59 +26,70 @@ def test_validate_query_accepts_union() -> None:
 
 
 def test_validate_query_rejects_empty_input() -> None:
-    with pytest.raises(QueryValidationError, match="empty"):
+    with pytest.raises(QueryValidationError, match="empty") as excinfo:
         validate_query("   ")
+    assert excinfo.value.reason == "empty_query"
 
 
 def test_validate_query_rejects_comment_only_input() -> None:
-    with pytest.raises(QueryValidationError, match="empty"):
+    with pytest.raises(QueryValidationError, match="empty") as excinfo:
         validate_query("-- only a comment")
+    assert excinfo.value.reason == "empty_query"
 
 
 def test_validate_query_rejects_multiple_statements() -> None:
-    with pytest.raises(QueryValidationError, match="single SQL statement"):
+    with pytest.raises(QueryValidationError, match="single SQL statement") as excinfo:
         validate_query("SELECT 1; SELECT 2")
+    assert excinfo.value.reason == "multi_statement"
 
 
 def test_validate_query_rejects_insert() -> None:
-    with pytest.raises(QueryValidationError, match="SELECT / WITH"):
+    with pytest.raises(QueryValidationError, match="SELECT / WITH") as excinfo:
         validate_query("INSERT INTO records VALUES (1)")
+    assert excinfo.value.reason == "not_select_or_with"
 
 
 def test_validate_query_rejects_update() -> None:
-    with pytest.raises(QueryValidationError, match="SELECT / WITH"):
+    with pytest.raises(QueryValidationError, match="SELECT / WITH") as excinfo:
         validate_query("UPDATE records SET value = 0")
+    assert excinfo.value.reason == "not_select_or_with"
 
 
 def test_validate_query_rejects_attach() -> None:
-    with pytest.raises(QueryValidationError, match="SELECT / WITH"):
+    with pytest.raises(QueryValidationError, match="SELECT / WITH") as excinfo:
         validate_query("ATTACH '/tmp/x.duckdb'")
+    assert excinfo.value.reason == "not_select_or_with"
 
 
 def test_validate_query_rejects_parse_error() -> None:
-    with pytest.raises(QueryValidationError, match="parse error"):
+    with pytest.raises(QueryValidationError, match="parse error") as excinfo:
         validate_query("SELECT FROM WHERE !!!")
+    assert excinfo.value.reason == "syntax_error"
 
 
 @pytest.mark.parametrize("fn", sorted(DENIED_FUNCTIONS))
 def test_validate_query_rejects_denied_scalar_call(fn: str) -> None:
-    with pytest.raises(QueryValidationError, match=fn):
+    with pytest.raises(QueryValidationError, match=fn) as excinfo:
         validate_query(f"SELECT {fn}('/etc/passwd')")
+    assert excinfo.value.reason == "disallowed_function"
 
 
 def test_validate_query_rejects_denied_table_function() -> None:
-    with pytest.raises(QueryValidationError, match="read_csv"):
+    with pytest.raises(QueryValidationError, match="read_csv") as excinfo:
         validate_query("SELECT * FROM read_csv('/etc/passwd')")
+    assert excinfo.value.reason == "disallowed_function"
 
 
 def test_validate_query_rejects_denied_lateral_function() -> None:
-    with pytest.raises(QueryValidationError, match="read_text"):
+    with pytest.raises(QueryValidationError, match="read_text") as excinfo:
         validate_query("SELECT * FROM records, LATERAL read_text('/etc/passwd')")
+    assert excinfo.value.reason == "disallowed_function"
 
 
 def test_validate_query_rejects_case_insensitively() -> None:
-    with pytest.raises(QueryValidationError, match="READ_TEXT"):
+    with pytest.raises(QueryValidationError, match="READ_TEXT") as excinfo:
         validate_query("SELECT READ_TEXT('/etc/passwd')")
+    assert excinfo.value.reason == "disallowed_function"
 
 
 def test_validate_query_accepts_known_safe_functions() -> None:
@@ -99,8 +110,9 @@ def test_validate_query_accepts_known_safe_functions() -> None:
 def test_validate_query_rejects_quoted_path_table_references(path: str) -> None:
     """Regression: FROM '<path>' lets DuckDB auto-detect the literal as a
     file / URL to read, bypassing the function-name denylist entirely."""
-    with pytest.raises(QueryValidationError, match="Quoted-path"):
+    with pytest.raises(QueryValidationError, match="Quoted-path") as excinfo:
         validate_query(f"SELECT * FROM '{path}'")
+    assert excinfo.value.reason == "disallowed_function"
 
 
 def test_validate_query_returns_parsed_query() -> None:
