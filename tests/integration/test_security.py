@@ -28,6 +28,7 @@ silent succeed.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import duckdb
@@ -274,8 +275,14 @@ def test_recursive_cte_does_not_hang_server() -> None:
         ") SELECT max(length(s)) FROM bomb"
     )
     out = asyncio.run(fn(query=bomb_sql))
-    assert out.startswith("Error:")
-    assert "out of memory" in out.lower()
+    # v0.6.1 (issue #273): the engine's Out of Memory exception does not
+    # match any of the three translated exception classes, so it falls
+    # through to the generic ``execution_error`` envelope reason rather
+    # than the specific catalog/binder/parser reasons.
+    payload = json.loads(out)
+    assert payload["state"] == "error"
+    assert payload["reason"] == "execution_error"
+    assert "out of memory" in payload["message"].lower()
 
     # The server (this connection) must still answer subsequent tool
     # calls -- the whole point of the hardening is that a self-DoS

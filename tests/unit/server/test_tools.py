@@ -941,9 +941,13 @@ def test_run_custom_query_basic(seeded_conn: duckdb.DuckDBPyConnection) -> None:
 def test_run_custom_query_validation_error(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
+    """v0.6.1 (issue #273): validation errors surface as a typed envelope."""
     fn = _bind(run_custom_query, seeded_conn)
     out = asyncio.run(fn(query="DROP TABLE records"))
-    assert out.startswith("Error:")
+    payload = json.loads(out)
+    assert payload["state"] == "error"
+    assert payload["reason"] == "not_select_or_with"
+    assert "message" in payload
 
 
 @pytest.mark.parametrize(
@@ -969,8 +973,10 @@ def test_run_custom_query_rejects_extended_denylist(
     fn_call = f"{fn}(1)" if fn.startswith("duckdb_") else f"{fn}('/etc/passwd')"
     bound = _bind(run_custom_query, seeded_conn)
     out = asyncio.run(bound(query=f"SELECT * FROM {fn_call}"))
-    assert out.startswith("Error:")
-    assert "not allowed" in out
+    payload = json.loads(out)
+    assert payload["state"] == "error"
+    assert payload["reason"] == "disallowed_function"
+    assert "not allowed" in payload["message"]
 
 
 def test_run_custom_query_enforces_limit(
@@ -1033,13 +1039,18 @@ def test_run_custom_query_user_limit_skips_truncation_probe(
     assert payload["user_supplied_limit"] is True
 
 
-def test_run_custom_query_returns_sql_error_string(
+def test_run_custom_query_returns_typed_envelope_on_unknown_table(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """An execution-time SQL error surfaces as an ``Error: ...`` string."""
+    """v0.6.1 (issue #273): an unknown-table CatalogException surfaces as a
+    typed envelope with a recovery hint listing the real table names."""
     fn = _bind(run_custom_query, seeded_conn)
     out = asyncio.run(fn(query="SELECT * FROM nonexistent_table_xyz"))
-    assert out.startswith("Error:")
+    payload = json.loads(out)
+    assert payload["state"] == "error"
+    assert payload["reason"] == "unknown_table"
+    assert "records" in payload["hint"]["available_tables"]
+    assert payload["hint"]["available_tables"]
 
 
 def test_run_custom_query_caps_unbounded_select_despite_trailing_comment(

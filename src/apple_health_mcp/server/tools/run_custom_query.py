@@ -6,9 +6,19 @@ import logging
 from threading import Lock
 from typing import TYPE_CHECKING, Annotated
 
+import duckdb
 from pydantic import Field
 
-from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.query import (
+    build_query_error_envelope,
+    query_to_json,
+    run_query_payload,
+)
+from apple_health_mcp.server.query_error import (
+    translate_binder_exception,
+    translate_catalog_exception,
+    translate_parser_exception,
+)
 from apple_health_mcp.server.safety import (
     MAX_CUSTOM_QUERY_ROWS,
     QueryValidationError,
@@ -16,7 +26,6 @@ from apple_health_mcp.server.safety import (
 )
 
 if TYPE_CHECKING:
-    import duckdb
     from mcp.server.fastmcp import FastMCP
 
 _logger = logging.getLogger(__name__)
@@ -52,7 +61,18 @@ DESCRIPTION = (
     "variants) plus ATTACH / COPY / INSTALL / LOAD and any http / https / "
     "s3 / gs / az URL — there is no opt-in. Use list_zips + import_zip "
     "to bring new data in; ad-hoc SQL cannot reach the host filesystem "
-    "or the network."
+    "or the network. "
+    "Failure envelope (v0.6.1, issue #273): every error path returns "
+    '``{state: "error", reason, message, hint?}`` (JSON string on the '
+    "wire) instead of the success envelope above. Check ``state`` first "
+    "before reading ``rows``. Reason enum: ``empty_query``, "
+    "``not_select_or_with``, ``multi_statement``, "
+    "``disallowed_function``, ``syntax_error``, ``unknown_table``, "
+    "``unknown_view``, ``missing_column``, ``execution_error``. "
+    "``hint`` carries recovery data when available: "
+    "``available_tables`` / ``did_you_mean`` for unknown_table / "
+    "unknown_view; ``referenced_column`` / ``available_columns`` "
+    "(per-table full column list) for missing_column."
 )
 
 
@@ -71,7 +91,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         try:
             stmt = validate_query(trimmed)
         except QueryValidationError as exc:
-            return f"Error: {exc}"
+            return build_query_error_envelope(reason=exc.reason, message=str(exc))
         user_supplied_limit = stmt.args.get("limit") is not None
         # v0.4.1 (issue #159): when the caller omitted LIMIT we probe
         # with ``MAX_CUSTOM_QUERY_ROWS + 1`` so a result set sitting at
@@ -83,11 +103,30 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             sql = stmt.sql(dialect="duckdb")
         else:
             sql = stmt.limit(MAX_CUSTOM_QUERY_ROWS + 1).sql(dialect="duckdb")
+        # v0.6.1 (issue #273): translate the three DuckDB engine
+        # exception classes we know how to describe into typed
+        # envelopes with actionable hints. Any other engine exception
+        # falls through to the generic ``execution_error`` reason so
+        # the wire always carries the same envelope shape.
         try:
             rows = query_to_json(conn, sql, lock=lock)
+        except duckdb.CatalogException as exc:
+            return translate_catalog_exception(conn, exc, lock=lock)
+        except duckdb.BinderException as exc:
+            return translate_binder_exception(conn, stmt, exc, lock=lock)
+        except duckdb.ParserException as exc:  # pragma: no cover - defensive
+            # Any SQL that reaches this point already parsed cleanly under
+            # sqlglot's duckdb dialect in ``validate_query`` (a genuine
+            # syntax typo like "FRM" is rejected there as
+            # ``QueryValidationError(reason="syntax_error")`` before
+            # ``query_to_json`` ever runs). This branch only fires if a
+            # future DuckDB release accepts SQL sqlglot's dialect does not
+            # -- kept as defence-in-depth so that divergence still yields a
+            # typed envelope instead of an unhandled exception.
+            return translate_parser_exception(exc)
         except Exception as exc:
             _logger.debug("query failed: %s", exc)
-            return f"Error: {exc}"
+            return build_query_error_envelope(reason="execution_error", message=str(exc))
         if user_supplied_limit:
             payload = {
                 "rows": rows,

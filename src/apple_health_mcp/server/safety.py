@@ -115,7 +115,32 @@ class QueryValidationError(ValidationError):
     Inherits from the project's :class:`ValidationError` so callers catching
     the shared :class:`AppleHealthMCPError` base also catch SQL-validation
     failures.
+
+    ``reason`` (v0.6.1 / issue #273) is a stable enum that lets
+    ``run_custom_query`` build a typed error envelope without
+    pattern-matching on the free-form message. Known values:
+    ``empty_query``, ``not_select_or_with``, ``multi_statement``,
+    ``disallowed_function``, ``syntax_error``. Callers that do not care
+    about the enum can catch the base class exactly as before.
     """
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+# v0.6.1 (issue #273): frozen list of reason strings ``QueryValidationError``
+# may carry, exposed for tests that need to iterate over the enum without
+# duplicating the literals.
+QUERY_VALIDATION_REASONS: frozenset[str] = frozenset(
+    {
+        "empty_query",
+        "not_select_or_with",
+        "multi_statement",
+        "disallowed_function",
+        "syntax_error",
+    }
+)
 
 
 def validate_query(sql: str) -> exp.Query:
@@ -131,14 +156,17 @@ def validate_query(sql: str) -> exp.Query:
     try:
         statements = sqlglot.parse(sql, dialect="duckdb")
     except sqlglot.errors.ParseError as exc:
-        raise QueryValidationError(f"SQL parse error: {exc}") from exc
+        raise QueryValidationError(f"SQL parse error: {exc}", reason="syntax_error") from exc
 
     # ``sqlglot.parse`` returns ``[None]`` for an empty / comment-only input.
     cleaned = [s for s in statements if s is not None]
     if not cleaned:
-        raise QueryValidationError("Query is empty")
+        raise QueryValidationError("Query is empty", reason="empty_query")
     if len(cleaned) > 1:
-        raise QueryValidationError(f"Only a single SQL statement is allowed (got {len(cleaned)})")
+        raise QueryValidationError(
+            f"Only a single SQL statement is allowed (got {len(cleaned)})",
+            reason="multi_statement",
+        )
 
     stmt = cleaned[0]
     # ``exp.Query`` is the base class for SELECT / UNION / WITH-headed reads
@@ -148,7 +176,8 @@ def validate_query(sql: str) -> exp.Query:
     if not isinstance(stmt, exp.Query):
         raise QueryValidationError(
             "Only SELECT / WITH queries are allowed (DDL, DML, ATTACH, COPY, "
-            "INSTALL, LOAD, PRAGMA, etc. are rejected)"
+            "INSTALL, LOAD, PRAGMA, etc. are rejected)",
+            reason="not_select_or_with",
         )
 
     # Walk the AST looking for two failure modes:
@@ -159,20 +188,26 @@ def validate_query(sql: str) -> exp.Query:
     #    as a Table whose Identifier is *quoted*, and DuckDB auto-detects
     #    the literal as a file / URL to read. The function-name walker
     #    misses this because there is no Func / Anonymous node.
+    # Both failure modes surface as ``disallowed_function`` on the wire —
+    # quoted-path references are a DuckDB-side alias for the same
+    # fs / URL-read surface the function denylist blocks, so an LLM
+    # branching on ``reason`` sees the two as one recoverable category.
     for node in stmt.walk():
         if isinstance(node, exp.Table):
             ident = node.this
             if isinstance(ident, exp.Identifier) and ident.quoted:
                 raise QueryValidationError(
                     "Quoted-path table references are not allowed "
-                    "(DuckDB auto-detects them as file / URL reads)"
+                    "(DuckDB auto-detects them as file / URL reads)",
+                    reason="disallowed_function",
                 )
         name = _node_function_name(node)
         if name is None:
             continue
         if name.lower() in DENIED_FUNCTIONS:
             raise QueryValidationError(
-                f"Function '{name}' is not allowed (reads host files or external resources)"
+                f"Function '{name}' is not allowed (reads host files or external resources)",
+                reason="disallowed_function",
             )
 
     return stmt
