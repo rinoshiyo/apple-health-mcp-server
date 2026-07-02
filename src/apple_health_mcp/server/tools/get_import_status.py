@@ -48,7 +48,7 @@ DESCRIPTION = (
     "ecg_readings_added, route_points_added, duration_secs, "
     "already_imported_at, message} -- import succeeded, same shape as "
     "the legacy synchronous import_zip envelope. ``duration_secs`` here "
-    "is the worker-thread wall-clock from running → done (the queue → "
+    "is the worker-thread wall-clock from running → ok (the queue → "
     "running interval is typically sub-millisecond on the current "
     "single-worker design and is NOT included), and INCLUDES ZIP "
     "extraction; for the run_import-body-only figure (XML + ECG + GPX "

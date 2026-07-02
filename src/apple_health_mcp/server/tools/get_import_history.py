@@ -19,7 +19,7 @@ DESCRIPTION = (
     "BEFORE Correlation-child dedup), workout_count, processing_secs "
     "(run_import body wall-clock: Phase-1 XML parse + Phase-2 ECG + "
     "Phase-3 GPX + Phase-4 finalize; ZIP extraction time is NOT included. "
-    "For the running → done worker wall-clock -- including ZIP "
+    "For the running → ok worker wall-clock -- including ZIP "
     "extraction -- consult the matching ``import_jobs`` row via "
     "``run_custom_query`` (``SELECT job_id, duration_secs FROM "
     "import_jobs WHERE source_sha256 = (SELECT source_zip_sha256 FROM "
