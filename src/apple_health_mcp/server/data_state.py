@@ -44,6 +44,7 @@ from enum import StrEnum
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
+from weakref import WeakSet
 
 from apple_health_mcp.db.migrations import table_exists_in_main
 
@@ -346,6 +347,30 @@ def build_state_error_payload(state: DataState) -> str:
         ) from None
 
 
+# Connections whose ``block_if_schema_outdated`` probe already
+# confirmed the DB carries the current schema. Once decided, the
+# gate short-circuits without another 1-2 DuckDB roundtrips
+# (issue #197: ``get_import_status`` polling paid ~30 wasted
+# roundtrips over a 10-minute import for the same "is schema
+# outdated?" question).
+#
+# Only the "fresh" (returns ``None``) decision is memoised. An
+# "outdated" (``NEEDS_REIMPORT``) decision must never be cached
+# because ``importers.orchestrator.run_import`` calls
+# ``reset_db_for_fresh_import`` on the same writer connection to
+# flip a stale schema back to current mid-flight; a cached
+# "outdated" would then falsely block subsequent polls on a DB
+# the orchestrator just repaired.
+#
+# ``WeakSet`` auto-removes closed / GC'd connections, so the
+# cache invalidates at connection lifetime end without an
+# explicit hook. A fresh reset that spawns a NEW connection lands
+# on an empty cache automatically; a reset on an already-fresh
+# connection is a no-op for cache purposes because the "fresh"
+# invariant continues to hold.
+_SCHEMA_FRESH_DECIDED: WeakSet[duckdb.DuckDBPyConnection] = WeakSet()
+
+
 def block_if_schema_outdated(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -366,10 +391,20 @@ def block_if_schema_outdated(
     the full four-state coverage; this helper exists for the
     write-side surface where the NEEDS_CONFIG / NEEDS_IMPORT states are
     *not* errors.
+
+    v0.6 (issue #197): a "not outdated" decision is memoised on
+    :data:`_SCHEMA_FRESH_DECIDED` so long-running polling loops
+    (``get_import_status`` every 10-30 seconds) do not re-probe the
+    schema-version sentinel on every call. Only the "fresh" return
+    is cached; ``NEEDS_REIMPORT`` stays uncached so fresh-resets on
+    the same connection remain observable.
     """
+    if conn in _SCHEMA_FRESH_DECIDED:
+        return None
     state = check_data_state(conn, lock=lock)
     if state == DataState.NEEDS_REIMPORT:
         return build_state_error_payload(state)
+    _SCHEMA_FRESH_DECIDED.add(conn)
     return None
 
 
