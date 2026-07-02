@@ -368,6 +368,36 @@ def build_state_error_payload(state: DataState) -> str:
 # on an empty cache automatically; a reset on an already-fresh
 # connection is a no-op for cache purposes because the "fresh"
 # invariant continues to hold.
+#
+# Design notes:
+#
+# * The ``conn in _SCHEMA_FRESH_DECIDED`` short-circuit is
+#   intentionally lock-free. Safe here only because the cached
+#   predicate is monotonic under legal resets — a fresh connection
+#   stays fresh after ``reset_db_for_fresh_import`` on a fresh
+#   baseline. Do NOT extend this cache to any predicate that could
+#   flip under a concurrent writer (e.g., "outdated" or an
+#   env-var-sensitive state); moving the ``in`` check under
+#   ``lock`` would then be required first.
+# * Correctness assumes each ``DuckDBPyConnection`` instance is
+#   bound 1:1 to a single logical schema-version epoch — true for
+#   the current 1-conn-per-process serve topology (see
+#   ``server.py`` ``create_server``). A future refactor toward
+#   per-session or pooled connections would need to re-audit this
+#   invariant.
+# * This is the only module-level *mutable* container in
+#   ``src/apple_health_mcp/`` (all other ``_UPPER`` module bindings
+#   are ``Final`` / tuples / regexes / frozensets). A per-
+#   connection attribute would look tidier, but
+#   ``DuckDBPyConnection`` is a C extension type that rejects
+#   ``__setattr__`` for arbitrary names. ``WeakSet`` was chosen
+#   over ``id(conn)`` -keyed dict so a GC'd connection cannot leave
+#   a stale id-collision entry for a later connection.
+# * TODO(#198): once the FastMCP ``@mcp.tool(gates=[...])``
+#   decorator lands, the natural memoisation site is the decorator
+#   wrapper's closure, not this module-level global. Migrate the
+#   ``WeakSet`` onto the decorator state as part of that refactor
+#   (or fold #197 into #198 outright).
 _SCHEMA_FRESH_DECIDED: WeakSet[duckdb.DuckDBPyConnection] = WeakSet()
 
 
@@ -392,12 +422,9 @@ def block_if_schema_outdated(
     write-side surface where the NEEDS_CONFIG / NEEDS_IMPORT states are
     *not* errors.
 
-    v0.6 (issue #197): a "not outdated" decision is memoised on
-    :data:`_SCHEMA_FRESH_DECIDED` so long-running polling loops
-    (``get_import_status`` every 10-30 seconds) do not re-probe the
-    schema-version sentinel on every call. Only the "fresh" return
-    is cached; ``NEEDS_REIMPORT`` stays uncached so fresh-resets on
-    the same connection remain observable.
+    v0.6 (issue #197): "not outdated" decisions memoise on
+    :data:`_SCHEMA_FRESH_DECIDED` — see that constant's block
+    comment for the full caching rationale.
     """
     if conn in _SCHEMA_FRESH_DECIDED:
         return None
