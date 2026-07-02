@@ -419,3 +419,57 @@ def test_block_if_schema_outdated_returns_none_on_healthy_db() -> None:
         assert block_if_schema_outdated(conn) is None
     finally:
         conn.close()
+
+
+def test_block_if_schema_outdated_caches_fresh_decision_per_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #197: a "fresh" verdict on a connection short-circuits later calls.
+
+    ``get_import_status`` polling paid ~30 duckdb roundtrips over a
+    10-minute import because ``block_if_schema_outdated`` re-probed the
+    schema-version sentinel every poll. The v0.6 cache memoises the
+    fresh decision per connection so only the first call pays the probe;
+    subsequent calls short-circuit without touching ``check_data_state``.
+    """
+    from apple_health_mcp.server import data_state as ds
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        assert conn not in ds._SCHEMA_FRESH_DECIDED
+        assert ds.block_if_schema_outdated(conn) is None
+        assert conn in ds._SCHEMA_FRESH_DECIDED
+
+        # Prove the second call short-circuits: swap check_data_state
+        # for a sentinel that would raise if hit.
+        def _boom(*_args: object, **_kw: object) -> object:
+            raise AssertionError("block_if_schema_outdated re-probed a cached connection")
+
+        monkeypatch.setattr(ds, "check_data_state", _boom)
+        assert ds.block_if_schema_outdated(conn) is None
+    finally:
+        conn.close()
+
+
+def test_block_if_schema_outdated_does_not_cache_outdated_decision() -> None:
+    """Issue #197: a NEEDS_REIMPORT verdict stays uncached.
+
+    ``importers.orchestrator.run_import`` calls ``reset_db_for_fresh_import``
+    on the same writer connection to flip a stale schema back to current
+    mid-flight. Caching an "outdated" decision would falsely keep blocking
+    subsequent polls on a DB the orchestrator just repaired.
+    """
+    from apple_health_mcp.db.migrations import set_current_version
+    from apple_health_mcp.server import data_state as ds
+
+    conn = get_in_memory_connection()
+    try:
+        ensure_schema(conn)
+        seed_one_import(conn)
+        set_current_version(conn, 5)
+        envelope = ds.block_if_schema_outdated(conn)
+        assert envelope is not None
+        assert conn not in ds._SCHEMA_FRESH_DECIDED
+    finally:
+        conn.close()

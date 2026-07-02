@@ -44,6 +44,7 @@ from enum import StrEnum
 from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
+from weakref import WeakSet
 
 from apple_health_mcp.db.migrations import table_exists_in_main
 
@@ -346,6 +347,60 @@ def build_state_error_payload(state: DataState) -> str:
         ) from None
 
 
+# Connections whose ``block_if_schema_outdated`` probe already
+# confirmed the DB carries the current schema. Once decided, the
+# gate short-circuits without another 1-2 DuckDB roundtrips
+# (issue #197: ``get_import_status`` polling paid ~30 wasted
+# roundtrips over a 10-minute import for the same "is schema
+# outdated?" question).
+#
+# Only the "fresh" (returns ``None``) decision is memoised. An
+# "outdated" (``NEEDS_REIMPORT``) decision must never be cached
+# because ``importers.orchestrator.run_import`` calls
+# ``reset_db_for_fresh_import`` on the same writer connection to
+# flip a stale schema back to current mid-flight; a cached
+# "outdated" would then falsely block subsequent polls on a DB
+# the orchestrator just repaired.
+#
+# ``WeakSet`` auto-removes closed / GC'd connections, so the
+# cache invalidates at connection lifetime end without an
+# explicit hook. A fresh reset that spawns a NEW connection lands
+# on an empty cache automatically; a reset on an already-fresh
+# connection is a no-op for cache purposes because the "fresh"
+# invariant continues to hold.
+#
+# Design notes:
+#
+# * The ``conn in _SCHEMA_FRESH_DECIDED`` short-circuit is
+#   intentionally lock-free. Safe here only because the cached
+#   predicate is monotonic under legal resets — a fresh connection
+#   stays fresh after ``reset_db_for_fresh_import`` on a fresh
+#   baseline. Do NOT extend this cache to any predicate that could
+#   flip under a concurrent writer (e.g., "outdated" or an
+#   env-var-sensitive state); moving the ``in`` check under
+#   ``lock`` would then be required first.
+# * Correctness assumes each ``DuckDBPyConnection`` instance is
+#   bound 1:1 to a single logical schema-version epoch — true for
+#   the current 1-conn-per-process serve topology (see
+#   ``server.py`` ``create_server``). A future refactor toward
+#   per-session or pooled connections would need to re-audit this
+#   invariant.
+# * This is the only module-level *mutable* container in
+#   ``src/apple_health_mcp/`` (all other ``_UPPER`` module bindings
+#   are ``Final`` / tuples / regexes / frozensets). A per-
+#   connection attribute would look tidier, but
+#   ``DuckDBPyConnection`` is a C extension type that rejects
+#   ``__setattr__`` for arbitrary names. ``WeakSet`` was chosen
+#   over ``id(conn)`` -keyed dict so a GC'd connection cannot leave
+#   a stale id-collision entry for a later connection.
+# * TODO(#198): once the FastMCP ``@mcp.tool(gates=[...])``
+#   decorator lands, the natural memoisation site is the decorator
+#   wrapper's closure, not this module-level global. Migrate the
+#   ``WeakSet`` onto the decorator state as part of that refactor
+#   (or fold #197 into #198 outright).
+_SCHEMA_FRESH_DECIDED: WeakSet[duckdb.DuckDBPyConnection] = WeakSet()
+
+
 def block_if_schema_outdated(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -366,10 +421,17 @@ def block_if_schema_outdated(
     the full four-state coverage; this helper exists for the
     write-side surface where the NEEDS_CONFIG / NEEDS_IMPORT states are
     *not* errors.
+
+    v0.6 (issue #197): "not outdated" decisions memoise on
+    :data:`_SCHEMA_FRESH_DECIDED` — see that constant's block
+    comment for the full caching rationale.
     """
+    if conn in _SCHEMA_FRESH_DECIDED:
+        return None
     state = check_data_state(conn, lock=lock)
     if state == DataState.NEEDS_REIMPORT:
         return build_state_error_payload(state)
+    _SCHEMA_FRESH_DECIDED.add(conn)
     return None
 
 
