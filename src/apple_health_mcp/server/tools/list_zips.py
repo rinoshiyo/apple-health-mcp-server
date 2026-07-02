@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING, Any
 
 from apple_health_mcp.server.data_state import (
     EXPORT_ZIPS_DIR_ENV_VAR,
-    block_if_schema_outdated,
     resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import run_query_payload
@@ -29,6 +28,7 @@ from apple_health_mcp.server.tools._async_blurb import (
     IMPORT_POLL_BLURB,
     IMPORT_RUNTIME_BLURB,
 )
+from apple_health_mcp.server.tools._gates import write_tool
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -60,14 +60,13 @@ DESCRIPTION = (
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    @mcp.tool(description=DESCRIPTION)
+    # v0.5.1 #188 (issue #198): the schema_outdated envelope is injected by
+    # ``write_tool`` so any v=5-or-earlier DB short-circuits before the
+    # imports-cache load, which would otherwise hit DuckDB's
+    # ``Catalog Error: Table source_zip_sha256 does not exist`` on the
+    # legacy ``imports`` shape that lacks the v0.4 #148 columns.
+    @write_tool(mcp, conn, lock, description=DESCRIPTION)
     async def list_zips() -> str:
-        # v0.5.1 #188: short-circuit on an outdated DB before the
-        # imports-cache load, which would otherwise hit DuckDB's
-        # ``Catalog Error: Table source_zip_sha256 does not exist`` on
-        # the legacy ``imports`` shape that lacks the v0.4 #148 columns.
-        if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
-            return envelope
         dir_str = (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip()
         if not dir_str:
             return run_query_payload(
