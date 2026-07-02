@@ -31,6 +31,7 @@ from pydantic import Field
 from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.server.data_state import block_if_schema_outdated
 from apple_health_mcp.server.query import run_query_payload
+from apple_health_mcp.server.tools._async_blurb import IMPORT_RUNTIME_BLURB
 
 if TYPE_CHECKING:
     import duckdb
@@ -60,8 +61,7 @@ DESCRIPTION = (
     "(reason='server_restarted_while_running'). Unknown job_id surfaces "
     "as {status: 'error', reason: 'job_not_found', message}. Polling "
     "cost is one indexed SELECT (microseconds); no client back-off "
-    "required, but ~30s between polls is a sensible default since "
-    "imports take 45s-several minutes depending on hardware."
+    f"required. {IMPORT_RUNTIME_BLURB}."
 )
 
 

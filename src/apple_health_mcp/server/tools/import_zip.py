@@ -64,6 +64,10 @@ from apple_health_mcp.server.data_state import (
     resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.tools._async_blurb import (
+    IMPORT_POLL_BLURB,
+    IMPORT_RUNTIME_BLURB,
+)
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -89,11 +93,9 @@ DESCRIPTION = (
     "APPLE_HEALTH_EXPORT_ZIPS_DIR, inspects it, and -- on success -- "
     "kicks off the importer in a background worker thread. **Returns "
     "immediately with a ``job_id``** so the call cannot trip the MCP "
-    "client's tool-call timeout on slow hardware. Poll "
-    "get_import_status(job_id=...) every 10-30 seconds to track "
-    "progress and retrieve the final result; total import time depends "
-    "on the user's machine (~45s on a fast NVMe + recent CPU, several "
-    "minutes on slower hardware). A byte-identical re-import returns "
+    "client's tool-call timeout on slow hardware. "
+    f"{IMPORT_POLL_BLURB}. {IMPORT_RUNTIME_BLURB}. "
+    "A byte-identical re-import returns "
     "a synchronous ``status: 'ok'`` envelope (records_added: 0, "
     "already_imported_at populated) without spawning a worker -- the "
     "wire shape matches the pre-v0.5 synchronous import_zip and never "
@@ -343,9 +345,7 @@ def _import_zip_dispatch(
                 "queued_at": str(claimed.queued_at),
                 "message": (
                     f"Import for {selected.name} is already in flight "
-                    f"(job_id={claimed.job_id}). Poll "
-                    "get_import_status(job_id=...) every 10-30 seconds "
-                    "until status reaches 'ok' or 'error'."
+                    f"(job_id={claimed.job_id}). {IMPORT_POLL_BLURB}."
                 ),
             }
         )
@@ -366,10 +366,8 @@ def _import_zip_dispatch(
             "queued_at": str(claimed.queued_at),
             "message": (
                 f"Import of {selected.name} started in background "
-                f"(job_id={claimed.job_id}). Poll get_import_status(job_id=...) "
-                "every 10-30 seconds to track progress. Total runtime "
-                "depends on your machine (~45s on fast NVMe + recent CPU, "
-                "several minutes on slower hardware)."
+                f"(job_id={claimed.job_id}). {IMPORT_POLL_BLURB}. "
+                f"{IMPORT_RUNTIME_BLURB}."
             ),
         }
     )
