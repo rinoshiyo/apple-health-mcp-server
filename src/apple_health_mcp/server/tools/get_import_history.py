@@ -24,7 +24,7 @@ DESCRIPTION = (
     "``run_custom_query`` (``SELECT job_id, duration_secs FROM "
     "import_jobs WHERE source_sha256 = (SELECT source_zip_sha256 FROM "
     "imports WHERE import_id = ?)``); the live polling tool "
-    "``get_import_status(job_id=…)`` exposes the same number only "
+    "``get_import_status(job_id=...)`` exposes the same number only "
     "while a job_id from the current session is in hand. The two "
     "values can differ by several seconds on large ZIPs.), "
     "export_xml_sha256 (hex sha256 of the source export.xml; NULL on rows "

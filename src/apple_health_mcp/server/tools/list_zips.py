@@ -25,6 +25,10 @@ from apple_health_mcp.server.data_state import (
     resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import run_query_payload
+from apple_health_mcp.server.tools._async_blurb import (
+    IMPORT_POLL_BLURB,
+    IMPORT_RUNTIME_BLURB,
+)
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -51,7 +55,7 @@ DESCRIPTION = (
     "zip_status (one of 'valid_apple_health', 'valid_non_apple_health', "
     "'invalid_zip' — v0.4.1 / issue #158, lets the agent skip a corrupt "
     "or HTML-renamed file without paying the import cost). Use this "
-    "BEFORE import_zip: pick an entry, then call import_zip(id=…)."
+    "BEFORE import_zip: pick an entry, then call import_zip(id=...)."
 )
 
 
@@ -132,22 +136,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             )
         else:
             hint = (
-                "Pick an entry by ``id`` and call import_zip(id=…). "
+                "Pick an entry by ``id`` and call import_zip(id=...). "
                 "Branch on the returned envelope: an entry with "
                 "``imported: true`` short-circuits synchronously and "
                 "returns ``{status: 'ok', records_added: 0, "
                 "already_imported_at, ...}`` in milliseconds without a "
                 "``job_id`` -- do NOT poll get_import_status on this "
                 "branch; just read the synchronous payload. A fresh "
-                "import returns ``{status: 'queued', job_id, ...}``; "
-                "in that case poll ``get_import_status(job_id=…)`` "
-                "every 10-30 seconds to track progress and retrieve "
-                "the final result. Typical fresh-import wall-clock is "
-                "~45s on a fast NVMe + recent CPU and several minutes "
-                "on slower hardware; if elapsed_secs grows past ~10 "
-                "minutes without the ``phase`` field advancing, treat "
-                "the worker as stalled and surface that to the user "
-                "instead of polling forever."
+                "import returns ``{status: 'queued', job_id, ...}``. "
+                f"{IMPORT_POLL_BLURB}. {IMPORT_RUNTIME_BLURB}."
             )
 
         return run_query_payload(
