@@ -194,9 +194,8 @@ def _import_jobs_table_missing(conn: duckdb.DuckDBPyConnection) -> bool:
     outweighs the cost of letting a real corruption surface one tool
     call later via the regular DuckDB error path.
     """
-    # Reuse the existing parameterised probe in db.migrations rather
-    # than hand-rolling a third copy of the duckdb_tables() lookup (a
-    # twin already lives in db.connection._table_exists_in_main_conn).
+    # Reuse the single parameterised probe in db.migrations rather
+    # than hand-rolling a second copy of the duckdb_tables() lookup.
     # Lazy import matches the rest of this module's pattern and keeps
     # the parse-time graph clean.
     from apple_health_mcp.db.migrations import _table_exists_in_main
