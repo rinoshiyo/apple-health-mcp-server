@@ -61,7 +61,18 @@ DESCRIPTION = (
     "variants) plus ATTACH / COPY / INSTALL / LOAD and any http / https / "
     "s3 / gs / az URL — there is no opt-in. Use list_zips + import_zip "
     "to bring new data in; ad-hoc SQL cannot reach the host filesystem "
-    "or the network."
+    "or the network. "
+    "Failure envelope (v0.6.1, issue #273): every error path returns "
+    '``{state: "error", reason, message, hint?}`` (JSON string on the '
+    "wire) instead of the success envelope above. Check ``state`` first "
+    "before reading ``rows``. Reason enum: ``empty_query``, "
+    "``not_select_or_with``, ``multi_statement``, "
+    "``disallowed_function``, ``syntax_error``, ``unknown_table``, "
+    "``unknown_view``, ``missing_column``, ``execution_error``. "
+    "``hint`` carries recovery data when available: "
+    "``available_tables`` / ``did_you_mean`` for unknown_table / "
+    "unknown_view; ``referenced_column`` / ``available_columns`` "
+    "(per-table full column list) for missing_column."
 )
 
 
@@ -102,7 +113,7 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
         except duckdb.CatalogException as exc:
             return translate_catalog_exception(conn, exc, lock=lock)
         except duckdb.BinderException as exc:
-            return translate_binder_exception(conn, sql, exc, lock=lock)
+            return translate_binder_exception(conn, stmt, exc, lock=lock)
         except duckdb.ParserException as exc:  # pragma: no cover - defensive
             # Any SQL that reaches this point already parsed cleanly under
             # sqlglot's duckdb dialect in ``validate_query`` (a genuine

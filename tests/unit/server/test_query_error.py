@@ -9,9 +9,12 @@ rather than only indirectly through the tool-level integration tests.
 from __future__ import annotations
 
 import json
+from typing import cast
 
 import duckdb
 import pytest
+import sqlglot
+from sqlglot import exp as sql_exp
 
 from apple_health_mcp.server import query_error as query_error_module
 from apple_health_mcp.server.query_error import (
@@ -20,6 +23,14 @@ from apple_health_mcp.server.query_error import (
     translate_catalog_exception,
     translate_parser_exception,
 )
+
+
+def _parse(sql: str) -> sql_exp.Query:
+    """Parse ``sql`` and return the sqlglot AST node ``run_custom_query``
+    would hand to ``translate_binder_exception`` (mirrors the AST
+    ``safety.validate_query`` returns during the pre-execute guard)."""
+    parsed = sqlglot.parse_one(sql, dialect="duckdb")
+    return cast(sql_exp.Query, parsed)
 
 
 def test_strip_ansi_removes_escape_sequences() -> None:
@@ -66,7 +77,7 @@ def test_translate_binder_exception_missing_column(
     )
     out = translate_binder_exception(
         seeded_conn,
-        "SELECT hearth_rate FROM records LIMIT 1",
+        _parse("SELECT hearth_rate FROM records LIMIT 1"),
         exc,
         lock=None,
     )
@@ -130,16 +141,76 @@ def test_translate_catalog_exception_unrelated_message(
     assert "hint" not in payload
 
 
-def test_translate_binder_exception_message_without_column_name(
+def test_translate_catalog_exception_did_you_mean_not_attached_outside_table_view(
     seeded_conn: duckdb.DuckDBPyConnection,
 ) -> None:
-    """A BinderException whose message does not match the "Referenced
-    column" pattern still resolves to ``missing_column`` with no
-    ``referenced_column`` hint key."""
-    exc = duckdb.BinderException("Binder Error: some other binder failure")
-    out = translate_binder_exception(seeded_conn, "SELECT 1", exc, lock=None)
+    """v0.6.1 (issue #273 code-review A1): DuckDB emits "Did you mean X?"
+    for scalar-function CatalogExceptions too (e.g. ``SELECT foo(1)`` →
+    ``Scalar Function with name foo does not exist! Did you mean
+    'floor'?``). The suggestion must NOT be attached to the envelope
+    when the reason is ``execution_error`` — otherwise an LLM sees a
+    generic engine failure with a table-shaped ``did_you_mean`` hint
+    and retries against the wrong entity (``FROM floor``)."""
+    exc = duckdb.CatalogException(
+        'Catalog Error: Scalar Function with name foo does not exist!\nDid you mean "floor"?'
+    )
+    out = translate_catalog_exception(seeded_conn, exc, lock=None)
+    payload = json.loads(out)
+    assert payload["reason"] == "execution_error"
+    assert "hint" not in payload
+
+
+def test_translate_catalog_exception_unknown_table_without_suggestion(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """Older DuckDB releases omit the "Did you mean" line when the
+    engine has no close-enough match. The envelope must still classify
+    as ``unknown_table`` and populate ``available_tables`` without
+    adding a ``did_you_mean`` key."""
+    exc = duckdb.CatalogException(
+        "Catalog Error: Table with name totally_fabricated_name does not exist!"
+    )
+    out = translate_catalog_exception(seeded_conn, exc, lock=None)
+    payload = json.loads(out)
+    assert payload["reason"] == "unknown_table"
+    assert "did_you_mean" not in payload["hint"]
+    assert "records" in payload["hint"]["available_tables"]
+
+
+def test_translate_binder_exception_missing_column_no_referenced_tables(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """A ``SELECT hearth_rate`` with no FROM clause parses cleanly but
+    references zero tables — the ``available_columns`` hint must be
+    omitted rather than emitting an empty ``information_schema`` probe
+    against an empty ``IN (...)`` clause."""
+    exc = duckdb.BinderException(
+        'Binder Error: Referenced column "hearth_rate" not found in FROM clause!'
+    )
+    out = translate_binder_exception(
+        seeded_conn,
+        _parse("SELECT hearth_rate"),
+        exc,
+        lock=None,
+    )
     payload = json.loads(out)
     assert payload["reason"] == "missing_column"
+    assert payload["hint"] == {"referenced_column": "hearth_rate"}
+
+
+def test_translate_binder_exception_non_missing_column_falls_back(
+    seeded_conn: duckdb.DuckDBPyConnection,
+) -> None:
+    """v0.6.1 (issue #273 code-review B1): a BinderException whose
+    message does not match ``Referenced column X not found`` (e.g.
+    ambiguous column, ``ORDER term out of range``, type mismatch) must
+    NOT be hard-labeled ``missing_column`` — otherwise an LLM branching
+    on the reason enum enters a nonsensical column-fix retry loop for
+    what is really a different binder failure."""
+    exc = duckdb.BinderException("Binder Error: some other binder failure")
+    out = translate_binder_exception(seeded_conn, _parse("SELECT 1"), exc, lock=None)
+    payload = json.loads(out)
+    assert payload["reason"] == "execution_error"
     assert "hint" not in payload
 
 
@@ -153,7 +224,9 @@ def test_translate_binder_exception_deduplicates_repeated_table_reference(
     )
     out = translate_binder_exception(
         seeded_conn,
-        "SELECT a.hearth_rate FROM records a JOIN records b ON a.record_hash = b.record_hash",
+        _parse(
+            "SELECT a.hearth_rate FROM records a JOIN records b ON a.record_hash = b.record_hash"
+        ),
         exc,
         lock=None,
     )
@@ -174,7 +247,7 @@ def test_translate_binder_exception_survives_introspection_failure(
     )
     out = translate_binder_exception(
         seeded_conn,
-        "SELECT hearth_rate FROM records LIMIT 1",
+        _parse("SELECT hearth_rate FROM records LIMIT 1"),
         exc,
         lock=None,
     )

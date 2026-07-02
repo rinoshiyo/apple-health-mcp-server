@@ -9,6 +9,25 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Added
+
+- `run_custom_query` now translates raw DuckDB engine exceptions
+  (`CatalogException` → `unknown_table` / `unknown_view`,
+  `BinderException` → `missing_column`, `ParserException` →
+  `syntax_error`) and `QueryValidationError` sub-reasons
+  (`empty_query`, `not_select_or_with`, `multi_statement`,
+  `disallowed_function`, `syntax_error`) into typed envelopes
+  matching the shape `{state:"error", reason, message, hint?}`
+  (issue #273). This completes issue #227 — v0.6.0 shipped only
+  the import-path translator; the query-path was still returning
+  raw `f"Error: {exc}"` strings until this release. Envelope
+  hints include `available_tables` (from
+  `information_schema.tables`), `did_you_mean` (parsed out of
+  DuckDB's own suggestion), and per-referenced-table
+  `available_columns` (from `information_schema.columns`) —
+  filling in the column list DuckDB's own "Candidate bindings"
+  diagnostic truncates.
+
 ## [0.6.0] - 2026-07-02
 
 ### Changed
@@ -51,13 +70,13 @@ v0.x.y disclaimer and the public-API scope.
 
 ### Added
 
-- `run_custom_query` now translates raw DuckDB errors (unknown
-  table, missing column, syntax) into typed envelopes with
-  actionable recovery hints (available tables / columns) instead
-  of leaking a raw traceback prefixed with `"Error: ..."` (issue
-  #227). Agents can now branch on the typed shape and surface
-  human-readable guidance to the user without pattern-matching on
-  DuckDB's downstream error phrasing.
+- Import path (`import_zip` via
+  `orchestrator._translate_conversion_error`) now translates raw
+  DuckDB `ConversionException` errors into typed envelopes with
+  a human-friendly root cause (issue #227, partial). The query
+  path (`run_custom_query`) is NOT translated in this release
+  and continues to return raw `f"Error: {exc}"` strings; that
+  gap is closed in v0.6.1 by issue #273.
 - `import_zip` clamps the caller-supplied `id` echoed back in the
   `invalid_id` error envelope to the argument's declared
   `max_length=64`, with a `...` suffix on overflow (issue #228).
