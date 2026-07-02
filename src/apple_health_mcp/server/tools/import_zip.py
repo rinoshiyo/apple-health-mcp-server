@@ -67,7 +67,7 @@ from apple_health_mcp.server.tools._async_blurb import (
     IMPORT_POLL_BLURB,
     IMPORT_RUNTIME_BLURB,
 )
-from apple_health_mcp.server.tools._gates import write_tool
+from apple_health_mcp.server.tools._gates import schema_gated_tool
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -141,11 +141,11 @@ def _truncate_id_for_echo(value: str) -> str:
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     # v0.5.1 #188 (issue #198): the schema_outdated envelope is injected by
-    # ``write_tool`` and now runs before ``asyncio.to_thread``. On the
+    # ``schema_gated_tool`` and now runs before ``asyncio.to_thread``. On the
     # cache-hit fast path (issue #197) that adds ~microseconds to the
     # event loop; on the cache-miss path the probe cost stays negligible
     # next to the multi-GB dispatch that follows.
-    @write_tool(mcp, conn, lock, description=DESCRIPTION)
+    @schema_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def import_zip(
         id: Annotated[
             str,
@@ -184,7 +184,7 @@ def _import_zip_dispatch(
     that drives :func:`apple_health_mcp.importers.zip_extract.extract_zip_and_import`.
     """
     # v0.5.1 #188 (issue #198): the schema_outdated gate now runs at
-    # the ``write_tool`` wrapper before we reach ``_import_zip_dispatch``,
+    # the ``schema_gated_tool`` wrapper before we reach ``_import_zip_dispatch``,
     # so a stale DB returns the ``NEEDS_REIMPORT`` envelope before the
     # writer ever hits ``INSERT INTO import_jobs``. Direct dispatch
     # callers (unit tests that bypass ``@mcp.tool``) are exercised on

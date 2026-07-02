@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Annotated
 from pydantic import Field
 
 from apple_health_mcp.server.query import query_to_json, run_query_payload
-from apple_health_mcp.server.tools._gates import read_tool
+from apple_health_mcp.server.tools._gates import ready_gated_tool
 
 if TYPE_CHECKING:
     import duckdb
@@ -26,9 +26,9 @@ DESCRIPTION = (
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    # v0.6 (issue #198): the require_imports_or_message gate is
-    # injected by ``read_tool`` at registration.
-    @read_tool(mcp, conn, lock, description=DESCRIPTION)
+    # v0.6 (issue #198): the require_ready_or_state_error gate is
+    # injected by ``ready_gated_tool`` at registration.
+    @ready_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def get_correlation_details(
         correlation_hash: Annotated[
             str,

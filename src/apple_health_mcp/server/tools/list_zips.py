@@ -28,7 +28,7 @@ from apple_health_mcp.server.tools._async_blurb import (
     IMPORT_POLL_BLURB,
     IMPORT_RUNTIME_BLURB,
 )
-from apple_health_mcp.server.tools._gates import write_tool
+from apple_health_mcp.server.tools._gates import schema_gated_tool
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -61,11 +61,11 @@ DESCRIPTION = (
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
     # v0.5.1 #188 (issue #198): the schema_outdated envelope is injected by
-    # ``write_tool`` so any v=5-or-earlier DB short-circuits before the
+    # ``schema_gated_tool`` so any v=5-or-earlier DB short-circuits before the
     # imports-cache load, which would otherwise hit DuckDB's
     # ``Catalog Error: Table source_zip_sha256 does not exist`` on the
     # legacy ``imports`` shape that lacks the v0.4 #148 columns.
-    @write_tool(mcp, conn, lock, description=DESCRIPTION)
+    @schema_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def list_zips() -> str:
         dir_str = (os.environ.get(EXPORT_ZIPS_DIR_ENV_VAR) or "").strip()
         if not dir_str:
