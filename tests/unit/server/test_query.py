@@ -15,6 +15,7 @@ import pytest
 from apple_health_mcp.server.data_state import (
     DataState,
     build_state_error_payload,
+    require_ready_or_state_error,
 )
 from apple_health_mcp.server.query import (
     OFFSET_DESCRIPTION,
@@ -24,7 +25,6 @@ from apple_health_mcp.server.query import (
     normalise_end_date,
     normalise_pagination,
     query_to_json,
-    require_imports_or_message,
     run_query,
     run_query_envelope,
     run_query_payload,
@@ -205,23 +205,23 @@ def test_imports_present_returns_false_when_imports_table_missing() -> None:
     assert imports_present(conn) is False
 
 
-def test_require_imports_or_message_returns_state_payload_when_empty() -> None:
+def test_require_ready_or_state_error_returns_state_payload_when_empty() -> None:
     """v0.4 (issue #148): the empty-DB path returns the structured
     NEEDS_CONFIG payload (env var is cleared by the conftest autouse
     fixture) instead of the pre-v0.4 plain-string IMPORT_REQUIRED_MESSAGE.
     """
     conn = duckdb.connect(":memory:")
-    assert require_imports_or_message(conn) == build_state_error_payload(DataState.NEEDS_CONFIG)
+    assert require_ready_or_state_error(conn) == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
-def test_require_imports_or_message_returns_none_when_imports_exist() -> None:
+def test_require_ready_or_state_error_returns_none_when_imports_exist() -> None:
     """Once the gate sees data, the helper returns ``None`` so the caller proceeds."""
     from apple_health_mcp.db.schema import ensure_schema
 
     conn = duckdb.connect(":memory:")
     ensure_schema(conn)
     seed_one_import(conn)
-    assert require_imports_or_message(conn) is None
+    assert require_ready_or_state_error(conn) is None
 
 
 # --- normalise_pagination ----------------------------------------------------

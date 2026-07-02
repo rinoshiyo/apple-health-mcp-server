@@ -18,11 +18,8 @@ import logging
 from threading import Lock
 from typing import TYPE_CHECKING
 
-from apple_health_mcp.server.query import (
-    query_to_json,
-    require_imports_or_message,
-    run_query_payload,
-)
+from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.tools._gates import ready_gated_tool
 
 if TYPE_CHECKING:
     import duckdb
@@ -59,10 +56,10 @@ _SQL = (
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    @mcp.tool(description=DESCRIPTION)
+    # v0.6 (issue #198): the require_ready_or_state_error gate is
+    # injected by ``ready_gated_tool`` at registration.
+    @ready_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def get_me_attributes() -> str:
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
         try:
             rows = query_to_json(conn, _SQL, lock=lock)
         except Exception as exc:

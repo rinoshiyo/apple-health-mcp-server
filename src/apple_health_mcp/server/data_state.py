@@ -393,11 +393,18 @@ def build_state_error_payload(state: DataState) -> str:
 #   ``__setattr__`` for arbitrary names. ``WeakSet`` was chosen
 #   over ``id(conn)`` -keyed dict so a GC'd connection cannot leave
 #   a stale id-collision entry for a later connection.
-# * TODO(#198): once the FastMCP ``@mcp.tool(gates=[...])``
-#   decorator lands, the natural memoisation site is the decorator
-#   wrapper's closure, not this module-level global. Migrate the
-#   ``WeakSet`` onto the decorator state as part of that refactor
-#   (or fold #197 into #198 outright).
+# * Issue #198 landed a decorator pair (``schema_gated_tool`` /
+#   ``ready_gated_tool`` in ``server/tools/_gates.py``) rather than
+#   the composable ``@mcp.tool(gates=[...])`` primitive originally
+#   sketched. The cache stays as a module-level ``WeakSet`` here on
+#   purpose: (a) the 1-conn-per-process serve topology means the
+#   set never carries more than a handful of entries even across
+#   fresh-resets, (b) moving the cache into each decorator's
+#   closure would give two disjoint caches with the same predicate,
+#   (c) callers outside the decorator surface (unit tests, future
+#   direct dispatches) still share the same cache. Revisit if
+#   ``_gates.py`` grows a third gate that has its own cache
+#   invariant.
 _SCHEMA_FRESH_DECIDED: WeakSet[duckdb.DuckDBPyConnection] = WeakSet()
 
 

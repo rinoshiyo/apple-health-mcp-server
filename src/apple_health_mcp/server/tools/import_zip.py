@@ -60,7 +60,6 @@ from pydantic import Field
 from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.server.data_state import (
     EXPORT_ZIPS_DIR_ENV_VAR,
-    block_if_schema_outdated,
     resolve_export_zips_dir,
 )
 from apple_health_mcp.server.query import query_to_json, run_query_payload
@@ -68,6 +67,7 @@ from apple_health_mcp.server.tools._async_blurb import (
     IMPORT_POLL_BLURB,
     IMPORT_RUNTIME_BLURB,
 )
+from apple_health_mcp.server.tools._gates import schema_gated_tool
 from apple_health_mcp.server.tools._zip_inspect import (
     ID_PREFIX_LEN,
     ZipInspection,
@@ -140,7 +140,12 @@ def _truncate_id_for_echo(value: str) -> str:
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    @mcp.tool(description=DESCRIPTION)
+    # v0.5.1 #188 (issue #198): the schema_outdated envelope is injected by
+    # ``schema_gated_tool`` and now runs before ``asyncio.to_thread``. On the
+    # cache-hit fast path (issue #197) that adds ~microseconds to the
+    # event loop; on the cache-miss path the probe cost stays negligible
+    # next to the multi-GB dispatch that follows.
+    @schema_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def import_zip(
         id: Annotated[
             str,
@@ -178,21 +183,12 @@ def _import_zip_dispatch(
     a ``job_id``, INSERTs the queued row, and spawns the worker thread
     that drives :func:`apple_health_mcp.importers.zip_extract.extract_zip_and_import`.
     """
-    # v0.5.1 #188: short-circuit on an outdated DB before the writer
-    # hits ``INSERT INTO import_jobs`` (the table did not exist before
-    # v=6). The schema_outdated envelope routes the agent at the
-    # fresh-reset recovery path instead of surfacing a raw DuckDB
-    # ``Catalog Error``.
-    #
-    # Intentionally placed BEFORE id-validation: an agent on a stale
-    # DB cannot recover by fixing its id; surfacing schema_outdated
-    # tells them the right next step. The pre-#188 behaviour of
-    # returning ``invalid_id`` for a malformed id on a stale DB is a
-    # tolerable wire-shape change at pre-1.0 (no production consumer
-    # branches on it, per post-#195 code-review Angle A/B).
-    if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
-        return envelope
-
+    # v0.5.1 #188 (issue #198): the schema_outdated gate now runs at
+    # the ``schema_gated_tool`` wrapper before we reach ``_import_zip_dispatch``,
+    # so a stale DB returns the ``NEEDS_REIMPORT`` envelope before the
+    # writer ever hits ``INSERT INTO import_jobs``. Direct dispatch
+    # callers (unit tests that bypass ``@mcp.tool``) are exercised on
+    # already-fresh in-memory DBs, so the check would be a no-op here.
     cleaned = target_id.strip().lower()
     if not (_MIN_ID_LEN <= len(cleaned) <= _MAX_ID_LEN and _ID_HEX_RE.fullmatch(cleaned)):
         echoed_id = _truncate_id_for_echo(target_id)

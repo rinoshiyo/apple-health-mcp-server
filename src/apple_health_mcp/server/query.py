@@ -27,7 +27,6 @@ from apple_health_mcp.server.data_state import (
     DataState,
     build_state_error_payload,
     check_data_state,
-    require_ready_or_state_error,
 )
 
 if TYPE_CHECKING:
@@ -77,16 +76,6 @@ def imports_present(
     /alien-DB cases stay handled in one place.
     """
     return check_data_state(conn, lock=lock) == DataState.READY
-
-
-# v0.4 source-compat alias for the pre-v0.4 helper name; the 4 tool
-# sites (get_workout_details, get_correlation_details, get_ecg_data,
-# get_me_attributes) still import this name. Re-exports the canonical
-# ``require_ready_or_state_error`` from :mod:`server.data_state` so
-# the body lives in one place and a future drift in error-envelope
-# shape cannot diverge the two helpers (they were byte-identical
-# during the rename and would have aged apart otherwise).
-require_imports_or_message = require_ready_or_state_error
 
 
 def _coerce(value: object) -> Any:

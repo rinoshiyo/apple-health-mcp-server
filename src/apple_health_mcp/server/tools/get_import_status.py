@@ -29,12 +29,12 @@ from typing import TYPE_CHECKING, Annotated
 from pydantic import Field
 
 from apple_health_mcp.db import import_jobs as job_registry
-from apple_health_mcp.server.data_state import block_if_schema_outdated
 from apple_health_mcp.server.query import run_query_payload
 from apple_health_mcp.server.tools._async_blurb import (
     IMPORT_POLL_BLURB,
     IMPORT_RUNTIME_BLURB,
 )
+from apple_health_mcp.server.tools._gates import schema_gated_tool
 
 if TYPE_CHECKING:
     import duckdb
@@ -70,7 +70,13 @@ DESCRIPTION = (
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    @mcp.tool(description=DESCRIPTION)
+    # v0.5.1 #188 (issue #198): schema_outdated gate injected by
+    # ``schema_gated_tool`` — an outdated DB does not carry ``import_jobs`` at
+    # all, so a raw ``get_job`` would raise ``Catalog Error: Table
+    # import_jobs does not exist``; the wrapper short-circuits with the
+    # ``NEEDS_REIMPORT`` envelope so the agent can route the user to
+    # the fresh-reset path.
+    @schema_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def get_import_status(
         job_id: Annotated[
             str,
@@ -90,14 +96,13 @@ def _get_import_status_dispatch(
     lock: Lock,
     job_id: str,
 ) -> str:
-    """Synchronous body; split so tests can drive it directly."""
-    # v0.5.1 #188: an outdated DB does not carry ``import_jobs`` at
-    # all, so ``job_registry.get_job`` would raise the raw DuckDB
-    # ``Catalog Error``. Short-circuit with the schema_outdated
-    # envelope so the agent can route the user to the fresh-reset path.
-    if (envelope := block_if_schema_outdated(conn, lock=lock)) is not None:
-        return envelope
+    """Synchronous body; split so tests can drive it directly.
 
+    v0.5.1 #188 gated on ``block_if_schema_outdated`` inline; issue
+    #198 moved the gate to the ``@schema_gated_tool`` wrapper. Direct
+    dispatch callers (unit tests) exercise this body on already-fresh
+    in-memory DBs, so the gate would be a no-op here.
+    """
     job = job_registry.get_job(conn, lock, job_id)
     if job is None:
         return run_query_payload(

@@ -7,11 +7,8 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 from pydantic import Field
 
-from apple_health_mcp.server.query import (
-    query_to_json,
-    require_imports_or_message,
-    run_query_payload,
-)
+from apple_health_mcp.server.query import query_to_json, run_query_payload
+from apple_health_mcp.server.tools._gates import ready_gated_tool
 
 if TYPE_CHECKING:
     import duckdb
@@ -32,15 +29,15 @@ DESCRIPTION = (
 
 
 def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
-    @mcp.tool(description=DESCRIPTION)
+    # v0.6 (issue #198): the require_ready_or_state_error gate is
+    # injected by ``ready_gated_tool`` at registration.
+    @ready_gated_tool(mcp, conn, lock, description=DESCRIPTION)
     async def get_workout_details(
         workout_hash: Annotated[
             str,
             Field(description="The workout hash identifier", max_length=64),
         ],
     ) -> str:
-        if msg := require_imports_or_message(conn, lock=lock):
-            return msg
         try:
             # Issue #93 (T5): explicit column list keeps ``import_id`` (an
             # internal join key) off the wire and pins the public response
