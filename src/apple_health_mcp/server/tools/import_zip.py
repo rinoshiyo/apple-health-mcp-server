@@ -1,7 +1,7 @@
 """``import_zip`` MCP tool — job-based async import driver (v0.5, issue #157).
 
 v0.4 (issue #148) introduced this tool as a *synchronous* importer that
-returned a ``done`` envelope after the full XML → ECG → GPX → finalize
+returned an ``ok`` envelope after the full XML → ECG → GPX → finalize
 pipeline finished. Dogfood on a fast workstation (Intel 14 + NVMe) ran
 in 44-106s, but the implicit MCP tool-call timeout on slower clients
 made the synchronous shape unshippable — a 200-400s import on mid-range
@@ -18,12 +18,12 @@ v0.5 splits the surface into two tools:
   synchronously through ``error`` envelopes — a job_id is only minted
   once we have a real importer to run.
 * ``get_import_status(job_id=...)`` — the new companion tool the agent
-  polls every 10-30 seconds to retrieve ``running`` / ``done`` / ``error``
+  polls every 10-30 seconds to retrieve ``running`` / ``ok`` / ``error``
   state from the same ``import_jobs`` row.
 
 **Idempotency.** A byte-identical re-import still no-ops in ms: the
 sha256 lookup against ``imports.source_zip_sha256`` runs BEFORE any
-job is inserted, so the agent receives a ``done`` envelope with
+job is inserted, so the agent receives an ``ok`` envelope with
 ``records_added: 0`` and ``already_imported_at`` populated, exactly
 matching the v0.4 wire shape. No row is written to ``import_jobs`` for
 the no-op case.
@@ -345,7 +345,7 @@ def _import_zip_dispatch(
                     f"Import for {selected.name} is already in flight "
                     f"(job_id={claimed.job_id}). Poll "
                     "get_import_status(job_id=...) every 10-30 seconds "
-                    "until status reaches 'done' or 'error'."
+                    "until status reaches 'ok' or 'error'."
                 ),
             }
         )
