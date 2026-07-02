@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-02
+
 ### Changed
 
 - **BREAKING: unified the state-machine error envelope's `reason`
@@ -22,6 +24,84 @@ v0.x.y disclaimer and the public-API scope.
   substring matching must switch to exact-match comparison; the
   human-readable explanation (env var name, recovery steps) still
   lives in `human_message`, unchanged.
+- `APPLE_HEALTH_EXPORT_ZIPS_DIR` is now resolved to an absolute path
+  before use (issue #226). A relative or `~`-prefixed value is
+  expanded and absolutised via `os.path.abspath` +
+  `Path.expanduser`, so envelopes (`list_zips.export_zips_dir`,
+  `import_zip` error messages) always surface the fully-resolved
+  path instead of the raw string a user might have typed. A
+  logger warning fires on any relative input so an operator who
+  intended an absolute path can see the fall-through immediately.
+- `import_zip` prose in module docstrings, DESCRIPTION strings,
+  and the multi-launch queued envelope now consistently uses the
+  on-wire terminal status `"ok"` where it previously said `"done"`
+  (issue #249). The internal `import_jobs.status` DB column value
+  remains `"done"` — the mismatch between DB state and wire status
+  is tracked at #257 for a follow-up alignment. Agents that were
+  instructed to poll `get_import_status` "until `done` or `error`"
+  now see the correct terminal `"ok"` in the message they read.
+- Async import polling prose consolidated into two shared
+  constants (`IMPORT_POLL_BLURB`, `IMPORT_RUNTIME_BLURB`) applied
+  across `list_zips` hint, `import_zip` DESCRIPTION + queued
+  envelopes, and `get_import_status` DESCRIPTION (issue #194). A
+  cadence or hardware baseline change is now a one-file edit that
+  reaches every agent-visible surface — the v0.4→v0.5 drift where
+  `list_zips` lagged at `60 seconds` while every other tool moved
+  to `10-30 seconds` (issue #187) cannot recur.
+
+### Added
+
+- `run_custom_query` now translates raw DuckDB errors (unknown
+  table, missing column, syntax) into typed envelopes with
+  actionable recovery hints (available tables / columns) instead
+  of leaking a raw traceback prefixed with `"Error: ..."` (issue
+  #227). Agents can now branch on the typed shape and surface
+  human-readable guidance to the user without pattern-matching on
+  DuckDB's downstream error phrasing.
+- `import_zip` clamps the caller-supplied `id` echoed back in the
+  `invalid_id` error envelope to the argument's declared
+  `max_length=64`, with a `...` suffix on overflow (issue #228).
+  Real MCP calls cannot reach the truncation path because
+  FastMCP's `Field(max_length=64)` rejects oversized inputs at
+  the boundary; the cap is defence-in-depth for unit tests and
+  any future regression of the boundary constraint.
+- `block_if_schema_outdated` memoises "fresh" decisions in a
+  `WeakSet` keyed on the DB connection so long-running polling
+  loops (`get_import_status` every 10-30 seconds) no longer
+  re-probe the schema-version sentinel on every call (issue
+  #197). A 10-minute import that polls twice a minute saves
+  ~30 DuckDB roundtrips. Only the "fresh" verdict is cached —
+  the orchestrator's mid-flight `reset_db_for_fresh_import` on a
+  stale schema stays observable.
+- Two decorator helpers, `schema_gated_tool` and
+  `ready_gated_tool`, register MCP tools with the correct
+  data-state gate injected at registration time (issue #198).
+  Adding a new tool now inherits the correct gate by picking the
+  decorator, rather than remembering to hand-write the first-
+  statement guard clause; the two regressions the guard-clause
+  pattern invited (v0.5.0 dogfood's raw
+  `Catalog Error: Table import_jobs does not exist`) are
+  structurally prevented at the type level.
+
+### Refactor (internal)
+
+- Folded the hand-rolled `_table_exists_in_main_conn` in
+  `db.connection` into the sole `table_exists_in_main` in
+  `db.migrations` and dropped the leading underscore now that
+  three modules import the helper across package boundaries
+  (issue #199). Future `v=7`-era catalog probes have a single
+  helper to reuse.
+- Test connections now apply the production
+  `_set_engine_safety_pragmas` sequence at every fixture open
+  through `tests/_helpers.open_test_connection` /
+  `open_test_memory_connection` (issue #201). Test fixtures no
+  longer diverge from production's engine-level lockdown
+  (`enable_external_access=false`, `lock_configuration=true`,
+  ...), so a change that would break at runtime cannot silently
+  PASS the suite.
+- README's async-import flow diagram + prose updated to reflect
+  the v0.5 `queued` → `ok` state machine and the `job_id`
+  polling contract (issue #193).
 
 ## [0.5.1] - 2026-06-29
 
