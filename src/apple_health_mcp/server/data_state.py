@@ -45,6 +45,8 @@ from pathlib import Path
 from threading import Lock
 from typing import TYPE_CHECKING, Final
 
+from apple_health_mcp.db.migrations import table_exists_in_main
+
 if TYPE_CHECKING:
     import duckdb
 
@@ -194,15 +196,10 @@ def _import_jobs_table_missing(conn: duckdb.DuckDBPyConnection) -> bool:
     outweighs the cost of letting a real corruption surface one tool
     call later via the regular DuckDB error path.
     """
-    # Reuse the existing parameterised probe in db.migrations rather
-    # than hand-rolling a third copy of the duckdb_tables() lookup (a
-    # twin already lives in db.connection._table_exists_in_main_conn).
-    # Lazy import matches the rest of this module's pattern and keeps
-    # the parse-time graph clean.
-    from apple_health_mcp.db.migrations import _table_exists_in_main
-
+    # Reuse the shared parameterised probe in db.migrations rather
+    # than hand-rolling a second copy of the duckdb_tables() lookup.
     try:
-        return not _table_exists_in_main(conn, "import_jobs")
+        return not table_exists_in_main(conn, "import_jobs")
     except Exception as exc:
         _logger.debug("import_jobs presence probe failed (%s); treating as present", exc)
         return False

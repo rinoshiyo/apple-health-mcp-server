@@ -35,12 +35,18 @@ if TYPE_CHECKING:
 CURRENT_SCHEMA_VERSION = 6
 
 
-def _table_exists_in_main(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
+def table_exists_in_main(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
     """Return True when ``name`` exists as a table in the ``main`` schema.
 
     The ``schema_name = 'main'`` filter prevents a connection with
     attached databases or user-created schemas from passing the probe
     on the basis of an unrelated same-named table.
+
+    Shared across ``db.migrations`` / ``db.connection`` /
+    ``server.data_state`` (issue #199): three modules previously
+    hand-rolled the same ``duckdb_tables()`` lookup; the underscore
+    was dropped when the helper's caller set went cross-module so its
+    shared status is visible at every import site.
     """
     row = conn.execute(
         "SELECT 1 FROM duckdb_tables() WHERE table_name = ? AND schema_name = 'main' LIMIT 1",
@@ -73,7 +79,7 @@ def schema_version_is_stale(conn: duckdb.DuckDBPyConnection) -> bool:
     The probe runs purely as a SELECT and is safe on read-only handles.
     A missing ``schema_version`` table reads as "fresh" (returns False).
     """
-    if not _table_exists_in_main(conn, "schema_version"):
+    if not table_exists_in_main(conn, "schema_version"):
         return False
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     current = int(row[0]) if row is not None and row[0] is not None else 0

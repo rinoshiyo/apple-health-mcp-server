@@ -403,14 +403,17 @@ def _migrate_if_needed_on_handle(
     (DuckDB rejects same-process concurrent opens of one file when
     either side is writable, so a second probe handle would fail).
     """
-    from apple_health_mcp.db.migrations import CURRENT_SCHEMA_VERSION
+    from apple_health_mcp.db.migrations import (
+        CURRENT_SCHEMA_VERSION,
+        table_exists_in_main,
+    )
 
     # Defer to the tool-level error path when the DB pre-dates the
     # ``imports`` table; the friendly read-path guidance lands on the
     # ``check_data_state`` empty-DB branch, not here.
-    if not _table_exists_in_main_conn(conn, "imports"):
+    if not table_exists_in_main(conn, "imports"):
         return
-    if not _table_exists_in_main_conn(conn, "schema_version"):
+    if not table_exists_in_main(conn, "schema_version"):
         return
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     current = int(row[0]) if row is not None and row[0] is not None else 0
@@ -423,22 +426,6 @@ def _migrate_if_needed_on_handle(
             current,
             CURRENT_SCHEMA_VERSION,
         )
-
-
-def _table_exists_in_main_conn(conn: duckdb.DuckDBPyConnection, name: str) -> bool:
-    """Return True when ``name`` exists as a table in the connection's ``main`` schema.
-
-    Local duplicate of :func:`db.migrations._table_exists_in_main` so the
-    ``connection`` module can probe without importing the migrations
-    module at parse time (the lazy import inside
-    :func:`_migrate_if_needed` is the load-bearing one; this helper runs
-    on every read-only open).
-    """
-    row = conn.execute(
-        "SELECT 1 FROM duckdb_tables() WHERE table_name = ? AND schema_name = 'main' LIMIT 1",
-        [name],
-    ).fetchone()
-    return row is not None
 
 
 def _materialise_empty_db(db_path: Path) -> None:

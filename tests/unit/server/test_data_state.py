@@ -368,7 +368,7 @@ def test_check_data_state_import_jobs_probe_handles_alien_db(
     real_execute = duckdb.DuckDBPyConnection.execute
 
     def _boom(self: duckdb.DuckDBPyConnection, sql: str, *args: object, **kw: object):  # type: ignore[no-untyped-def]
-        # The probe routes through ``_table_exists_in_main(conn,
+        # The probe routes through ``table_exists_in_main(conn,
         # 'import_jobs')``, which binds ``import_jobs`` as a SQL
         # parameter rather than splicing into the string. Match on the
         # bound parameter so this monkeypatch still catches the probe
