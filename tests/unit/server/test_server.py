@@ -17,6 +17,7 @@ from apple_health_mcp.db import ensure_schema, get_in_memory_connection
 from apple_health_mcp.exceptions import ConfigError
 from apple_health_mcp.server import create_server, run_server
 from apple_health_mcp.server.tools import ALL_TOOLS
+from tests._helpers import open_test_connection
 
 
 @pytest.fixture
@@ -91,7 +92,7 @@ def test_run_server_unknown_transport_raises(
     # still pre-seed below so the test pins both behaviours (file
     # exists -> probe path; transport check still rejects the bogus
     # name regardless).
-    conn = duckdb.connect(str(db_path))
+    conn = open_test_connection(str(db_path))
     ensure_schema(conn)
     conn.close()
     with pytest.raises(ConfigError, match="Unknown transport"):
@@ -103,7 +104,7 @@ def test_run_server_dispatches_stdio(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "health.duckdb"
-    conn = duckdb.connect(str(db_path))
+    conn = open_test_connection(str(db_path))
     ensure_schema(conn)
     conn.close()
 
@@ -130,7 +131,7 @@ def test_run_server_dispatches_http(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path = tmp_path / "health.duckdb"
-    conn = duckdb.connect(str(db_path))
+    conn = open_test_connection(str(db_path))
     ensure_schema(conn)
     conn.close()
 

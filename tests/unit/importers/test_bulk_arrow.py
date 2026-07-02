@@ -11,6 +11,7 @@ import pytest
 from apple_health_mcp.exceptions import HealthImportError
 from apple_health_mcp.importers import _bulk_arrow
 from apple_health_mcp.importers._bulk_arrow import SCHEMAS, bulk_load_via_arrow
+from tests._helpers import open_test_memory_connection
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def conn(monkeypatch: pytest.MonkeyPatch) -> duckdb.DuckDBPyConnection:
     )
     monkeypatch.setitem(SCHEMAS, "t", schema)
     monkeypatch.setattr(_bulk_arrow, "_ALLOWED_TABLES", frozenset(SCHEMAS.keys()) | {"t"})
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     conn.execute(
         """
         CREATE TABLE t (

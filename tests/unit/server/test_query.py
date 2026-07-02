@@ -29,7 +29,7 @@ from apple_health_mcp.server.query import (
     run_query_envelope,
     run_query_payload,
 )
-from tests._helpers import seed_one_import
+from tests._helpers import open_test_memory_connection, seed_one_import
 
 
 def test_coerce_none() -> None:
@@ -115,19 +115,19 @@ def test_coerce_unknown_falls_back_to_str() -> None:
 
 
 def test_query_to_json_basic() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     rows = query_to_json(conn, "SELECT 1 AS x, 'hi' AS y")
     assert rows == [{"x": 1, "y": "hi"}]
 
 
 def test_query_to_json_with_params() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     rows = query_to_json(conn, "SELECT ? AS v", [7])
     assert rows == [{"v": 7}]
 
 
 def test_query_to_json_uses_lock_when_supplied() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     lock = Lock()
     rows = query_to_json(conn, "SELECT 1 AS x", lock=lock)
     assert rows == [{"x": 1}]
@@ -137,7 +137,7 @@ def test_query_to_json_uses_lock_when_supplied() -> None:
 
 
 def test_run_query_returns_pretty_json() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     # ``require_data=False`` so the wire-format assertion does not race the
     # empty-DB gate (this test verifies pretty-printing, not the gate).
     out = run_query(conn, "SELECT 1 AS x", require_data=False)
@@ -147,7 +147,7 @@ def test_run_query_returns_pretty_json() -> None:
 
 
 def test_run_query_returns_error_string_on_failure() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     out = run_query(conn, "SELECT * FROM does_not_exist", require_data=False)
     assert out.startswith("Error: ")
 
@@ -160,7 +160,7 @@ def test_run_query_payload_pretty_prints() -> None:
 
 @pytest.mark.parametrize("v", [1, 2, 3])
 def test_query_to_json_int_types(v: int) -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     rows = query_to_json(conn, f"SELECT CAST({v} AS BIGINT) AS x")
     assert rows == [{"x": v}]
 
@@ -201,7 +201,7 @@ def test_imports_present_returns_false_when_imports_table_missing() -> None:
     ``"Error: Table imports does not exist"``, defeating the point of
     surfacing the structured state-error payload.
     """
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     assert imports_present(conn) is False
 
 
@@ -210,7 +210,7 @@ def test_require_ready_or_state_error_returns_state_payload_when_empty() -> None
     NEEDS_CONFIG payload (env var is cleared by the conftest autouse
     fixture) instead of the pre-v0.4 plain-string IMPORT_REQUIRED_MESSAGE.
     """
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     assert require_ready_or_state_error(conn) == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
@@ -218,7 +218,7 @@ def test_require_ready_or_state_error_returns_none_when_imports_exist() -> None:
     """Once the gate sees data, the helper returns ``None`` so the caller proceeds."""
     from apple_health_mcp.db.schema import ensure_schema
 
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     ensure_schema(conn)
     seed_one_import(conn)
     assert require_ready_or_state_error(conn) is None
@@ -293,7 +293,7 @@ def _seed_envelope_table(conn: duckdb.DuckDBPyConnection) -> None:
 
 def test_run_query_envelope_recovers_total_when_offset_past_end() -> None:
     """F1: ``offset > total`` must still surface the true ``total``."""
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     _seed_envelope_table(conn)
     out = run_query_envelope(conn, _envelope_sql("t"), [], offset=5, require_data=False)
     payload = json.loads(out)
@@ -308,7 +308,7 @@ def test_run_query_envelope_recovers_total_when_offset_past_end() -> None:
 
 def test_run_query_envelope_returns_zero_total_on_empty_table_no_offset() -> None:
     """An empty result set at offset=0 still wires ``total=0`` (no fallback)."""
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     conn.execute("CREATE TABLE t (x INTEGER)")
     sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 1 OFFSET 0"
     out = run_query_envelope(conn, sql, [], offset=0, require_data=False)
@@ -323,7 +323,7 @@ def test_run_query_envelope_returns_zero_total_on_empty_table_no_offset() -> Non
 
 def test_run_query_envelope_first_page_uses_window_total() -> None:
     """Non-empty pages keep the single-query total path."""
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     _seed_envelope_table(conn)
     sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 1 OFFSET 0"
     out = run_query_envelope(conn, sql, [], offset=0, require_data=False)
@@ -334,7 +334,7 @@ def test_run_query_envelope_first_page_uses_window_total() -> None:
 
 
 def test_run_query_envelope_returns_error_string_on_failure() -> None:
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     out = run_query_envelope(
         conn,
         "SELECT * FROM does_not_exist",
@@ -347,7 +347,7 @@ def test_run_query_envelope_returns_error_string_on_failure() -> None:
 
 def test_run_query_envelope_row_transform_applies_before_total_strip() -> None:
     """F4: ``row_transform`` runs per item before ``_total`` is dropped."""
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     _seed_envelope_table(conn)
     sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 100 OFFSET 0"
     captured: list[dict[str, Any]] = []
@@ -374,14 +374,14 @@ def test_run_query_envelope_gate_short_circuits_on_empty_db() -> None:
     NEEDS_CONFIG branch so the assertion is deterministic regardless
     of the developer's local environment.
     """
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     out = run_query_envelope(conn, "SELECT 1 AS x", [], offset=0)
     assert out == build_state_error_payload(DataState.NEEDS_CONFIG)
 
 
 def test_run_query_envelope_accepts_explicit_size_budget() -> None:
     """v0.5 (issue #171): an explicit ``size_budget_bytes`` overrides the default."""
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     _seed_envelope_table(conn)
     sql = "SELECT x, COUNT(*) OVER () AS _total FROM t ORDER BY x LIMIT 10 OFFSET 0"
     out = run_query_envelope(conn, sql, [], offset=0, require_data=False, size_budget_bytes=10)

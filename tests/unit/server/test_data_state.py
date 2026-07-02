@@ -19,7 +19,7 @@ from apple_health_mcp.server.data_state import (
     require_ready_or_state_error,
     resolve_export_zips_dir,
 )
-from tests._helpers import seed_one_import
+from tests._helpers import open_test_memory_connection, seed_one_import
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -140,7 +140,7 @@ def test_check_data_state_handles_missing_imports_table(
     tool layer -- the tool surfaces the friendly NEEDS_CONFIG /
     NEEDS_IMPORT guidance instead.
     """
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     try:
         assert check_data_state(conn) == DataState.NEEDS_CONFIG
     finally:

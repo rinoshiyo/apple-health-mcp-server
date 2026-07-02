@@ -15,6 +15,7 @@ from apple_health_mcp.importers.orchestrator import (
     make_import_id,
     run_import,
 )
+from tests._helpers import open_test_connection, open_test_memory_connection
 
 _EXPORT_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <HealthData locale="en_US">
@@ -94,7 +95,7 @@ def test_run_import_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     # Re-open the DB to confirm rows landed and finalize ran (dedup +
     # daily_record_stats materialization).
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = open_test_connection(str(db_path), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
         assert row is not None and int(row[0]) == 1
@@ -150,7 +151,7 @@ def test_run_import_rejects_both_conn_and_db_path(tmp_path: Path) -> None:
     export_dir = tmp_path / "export"
     export_dir.mkdir()
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(":memory:")
+    conn = open_test_memory_connection()
     try:
         with pytest.raises(ValueError, match="pass either"):
             run_import(export_dir, db_path, conn=conn)
@@ -175,7 +176,7 @@ def test_run_import_does_not_close_externally_owned_conn(tmp_path: Path) -> None
         '<?xml version="1.0"?><HealthData locale="en_US"/>', encoding="utf-8"
     )
     db_path = tmp_path / "h.duckdb"
-    owner = duckdb.connect(str(db_path), read_only=False)
+    owner = open_test_connection(str(db_path), read_only=False)
     try:
         run_import(export_dir, conn=owner, import_id="imp_owned")
         # The handle is still usable: a read-back query succeeds.
@@ -210,7 +211,7 @@ def test_run_import_stamps_source_zip_triple_when_provided(
 
     run_import(export_dir, db_path, import_id="imp_zip", source_zip=(sha, mtime, size))
 
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = open_test_connection(str(db_path), read_only=True)
     try:
         row = conn.execute(
             "SELECT source_zip_sha256, source_zip_mtime, source_zip_size "
@@ -282,7 +283,7 @@ def test_run_import_stamps_import_id_and_imported_at_at_same_utc_moment(
     db_path = tmp_path / "h.duckdb"
     run_import(export_dir, db_path)
 
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = open_test_connection(str(db_path), read_only=True)
     try:
         row = conn.execute("SELECT import_id, imported_at FROM imports LIMIT 1").fetchone()
         assert row is not None
@@ -330,7 +331,7 @@ def test_run_import_resets_stale_schema_before_importing(tmp_path: Path) -> None
     db_path = tmp_path / "stale.duckdb"
     # Build a stale-shaped DB stamped at CURRENT-1 with a sentinel
     # row that proves the reset wiped the old state.
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
         seeder.execute(
@@ -345,7 +346,7 @@ def test_run_import_resets_stale_schema_before_importing(tmp_path: Path) -> None
     stats = run_import(export_dir, db_path)
     # The legacy ``imports`` row was wiped by the fresh-reset; the
     # only row left is the one this call wrote.
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = open_test_connection(str(db_path), read_only=True)
     try:
         rows = conn.execute(
             "SELECT import_id, export_dir FROM imports ORDER BY imported_at"

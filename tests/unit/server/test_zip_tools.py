@@ -27,7 +27,7 @@ from apple_health_mcp.db.migrations import stamp_current_version
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.tools import import_zip as import_zip_mod
 from apple_health_mcp.server.tools import list_zips as list_zips_mod
-from tests._helpers import bind_tool, drain_import_workers
+from tests._helpers import bind_tool, drain_import_workers, open_test_connection
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
@@ -404,7 +404,7 @@ def test_import_zip_accepts_uppercase_hex_id(
 
     sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -436,7 +436,7 @@ def test_import_zip_accepts_id_with_surrounding_whitespace(
 
     sha = hashlib.sha256(zip_path.read_bytes()).hexdigest()
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -559,7 +559,7 @@ def test_import_zip_drives_run_import_against_live_handle(
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
 
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -602,7 +602,7 @@ def test_import_zip_resolves_via_db_cache_fast_path(
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
 
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -640,7 +640,7 @@ def test_import_zip_falls_through_when_db_prefix_match_lacks_disk_file(
     """
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -681,7 +681,7 @@ def test_import_zip_returns_already_imported_envelope_on_byte_identical_reimport
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
 
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -720,7 +720,7 @@ def test_import_zip_handles_flat_apple_health_zip(
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
 
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)
@@ -758,7 +758,7 @@ def test_import_zip_returns_zip_extract_failed_on_corrupt_archive(
     monkeypatch.setenv(EXPORT_ZIPS_DIR_ENV_VAR, str(tmp_path))
 
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(conn)
         stamp_current_version(conn)

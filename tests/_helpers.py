@@ -70,6 +70,72 @@ def call_tool(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> Any:
     return json.loads(raw)
 
 
+def open_test_connection(
+    db_path: str,
+    *,
+    read_only: bool = False,
+) -> duckdb.DuckDBPyConnection:
+    """Return a DuckDB connection with production safety pragmas applied.
+
+    Wraps ``duckdb.connect`` so tests do not diverge from the engine-level
+    lockdown ``db.connection.get_connection`` applies in production
+    (v0.5.1 issue #190 + v0.6 issue #201): ``memory_limit``,
+    ``max_temp_directory_size``, ``allow_community_extensions=false``,
+    ``enable_external_access=false``, and finally
+    ``lock_configuration=true`` so nothing after the pragma set can
+    re-open the surface. A raw ``duckdb.connect`` in a test fixture
+    otherwise runs at DuckDB's shipping defaults (50+ GiB memory, all
+    fs / http surfaces enabled), so a change that would fail in
+    production could still PASS in the suite.
+
+    ``get_connection`` and ``get_in_memory_connection`` from
+    ``apple_health_mcp.db`` are not reused directly because they run
+    ``_materialise_empty_db`` / ``ensure_schema`` bootstraps that most
+    test fixtures deliberately want to skip -- fixtures either seed
+    their own custom shape (schema-migration tests) or call
+    ``ensure_schema`` inline as part of the arrangement. This helper
+    keeps the pragma parity while leaving the fixture free to arrange
+    whatever DB shape it wants.
+    """
+    conn = duckdb.connect(db_path, read_only=read_only)
+    _set_engine_safety_pragmas(conn)
+    return conn
+
+
+def open_test_memory_connection() -> duckdb.DuckDBPyConnection:
+    """Return a fresh in-memory DuckDB connection with production pragmas.
+
+    Sibling of :func:`open_test_connection` for tests that only need an
+    ephemeral connection (``duckdb.connect(':memory:')``). Applying the
+    same pragma set keeps ``:memory:`` fixtures on the same lockdown as
+    production ``get_in_memory_connection``, closing the smoke path where
+    a change would break at runtime but the suite would still pass.
+    """
+    conn = duckdb.connect(":memory:")
+    _set_engine_safety_pragmas(conn)
+    return conn
+
+
+def _set_engine_safety_pragmas(conn: duckdb.DuckDBPyConnection) -> None:
+    """Apply the same pragma lockdown ``db.connection`` uses in production.
+
+    Duplicates the pragma sequence rather than importing it from
+    ``db.connection`` because that module keeps the helper private
+    (leading underscore) as a signal that it should be called exactly
+    once at connection-open. Tests reach through this wrapper instead
+    so a future change to the pragma set in ``db.connection`` can be
+    mirrored here deliberately, without accidentally coupling every
+    test fixture to a private production symbol.
+    """
+    conn.execute("SET memory_limit = '2GB';")
+    conn.execute("SET max_temp_directory_size = '4GB';")
+    conn.execute("SET allow_community_extensions = false;")
+    conn.execute("SET autoload_known_extensions = false;")
+    conn.execute("SET autoinstall_known_extensions = false;")
+    conn.execute("SET enable_external_access = false;")
+    conn.execute("SET lock_configuration = true;")
+
+
 def seed_one_import(
     conn: duckdb.DuckDBPyConnection,
     *,

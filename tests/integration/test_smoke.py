@@ -48,7 +48,7 @@ from apple_health_mcp.server.tools import (
     query_records,
     run_custom_query,
 )
-from tests._helpers import bind_tool, call_tool
+from tests._helpers import bind_tool, call_tool, open_test_connection
 
 _FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -105,7 +105,7 @@ def _open_db(db_path: Path) -> Iterator[duckdb.DuckDBPyConnection]:
     ``closing`` guarantees the close call runs regardless of how the
     ``with`` block exits.
     """
-    conn = duckdb.connect(str(db_path))
+    conn = open_test_connection(str(db_path))
     with closing(conn):
         yield conn
 
