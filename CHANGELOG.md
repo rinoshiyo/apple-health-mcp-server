@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-02
+
 ### Added
 
 - `run_custom_query` now translates raw DuckDB engine exceptions
