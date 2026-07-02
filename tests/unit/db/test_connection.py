@@ -19,7 +19,7 @@ from apple_health_mcp.db.connection import (
     resolve_db_path,
 )
 from apple_health_mcp.exceptions import ConfigError
-from tests._helpers import seed_one_import
+from tests._helpers import open_test_connection, seed_one_import
 
 if TYPE_CHECKING:
     from pytest import LogCaptureFixture, MonkeyPatch
@@ -550,7 +550,7 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
     # applying migrations -- the v=3 column is already DOUBLE here so
     # the migration registry would be a no-op anyway, but skipping the
     # stamp keeps schema_version at 0 ready for the downgrade.
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
         seeder.execute("CHECKPOINT;")
@@ -562,7 +562,7 @@ def _seed_legacy_v2_db(db_path: Path) -> None:
     # clean post-CHECKPOINT baseline. Doing the DROP/CREATE on the
     # same connection as the migration probe is what triggered the
     # "another transaction has altered this table" failure.
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         seeder.execute("DROP TABLE heart_rate_samples;")
         seeder.execute(
@@ -629,7 +629,7 @@ def test_get_connection_read_only_opens_legacy_v4_db_without_raising(
     from apple_health_mcp.db.schema import ensure_schema
 
     db_path = tmp_path / "legacy_v4.duckdb"
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
         set_current_version(seeder, 4)
@@ -662,7 +662,7 @@ def test_get_connection_writable_opens_legacy_v4_db_without_raising(
     from apple_health_mcp.db.schema import ensure_schema
 
     db_path = tmp_path / "legacy_v4_writable.duckdb"
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
         set_current_version(seeder, 4)
@@ -714,7 +714,7 @@ def test_get_connection_read_only_returns_quietly_on_current_db(
     from apple_health_mcp.db.schema import ensure_schema
 
     db_path = tmp_path / "current.duckdb"
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         ensure_schema(seeder)
         stamp_current_version(seeder)
@@ -758,7 +758,7 @@ def test_get_connection_read_only_skips_migration_when_imports_table_missing(
     simply returns without trying to stamp a version.
     """
     db_path = tmp_path / "pre_imports.duckdb"
-    seeder = duckdb.connect(str(db_path), read_only=False)
+    seeder = open_test_connection(str(db_path), read_only=False)
     try:
         seeder.execute("CREATE TABLE _placeholder (x INTEGER);")
     finally:

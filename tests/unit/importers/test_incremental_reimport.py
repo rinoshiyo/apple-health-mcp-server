@@ -44,6 +44,7 @@ from apple_health_mcp.importers.orchestrator import (
     _has_prior_imports,
     _sha256_matches_prior,
 )
+from tests._helpers import open_test_connection
 
 # ----------------------------------------------------------------------------
 # Synthetic export fixtures.
@@ -314,7 +315,7 @@ def test_fresh_import_stamps_sha256_in_imports_row(tmp_path: Path) -> None:
     assert stats.records >= 1
 
     sha = hashlib.sha256((export_dir / "export.xml").read_bytes()).hexdigest()
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute(
             "SELECT export_xml_sha256 FROM imports WHERE import_id = 'imp_first'"
@@ -339,7 +340,7 @@ def test_reimport_with_identical_xml_skips_via_sha256_fast_path(
     assert stats.ecg_readings == 0
     assert stats.route_points == 0
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM imports").fetchone()
         # imp_first only; the skipped second import did not write its row.
@@ -367,7 +368,7 @@ def test_force_bypasses_sha256_fast_path(tmp_path: Path) -> None:
     # zero -- but the pipeline DID run end-to-end and stamped an imports
     # row, which is what differentiates ``--force`` from the Tier 1 skip.
     assert stats.records == 0
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM imports").fetchone()
         assert row is not None and int(row[0]) == 2
@@ -408,7 +409,7 @@ def test_tier2_incremental_imports_row_carries_null_records_after_dedup(
     (export_dir / "export.xml").write_text(appended, encoding="utf-8")
     run_import(export_dir, db, import_id="imp_second")
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         # imp_first ran Phase-4 dedup: records_after_dedup is the
         # post-dedup count, NOT NULL. dedup_skipped is FALSE — the
@@ -470,7 +471,7 @@ def test_incremental_reimport_only_adds_new_record(tmp_path: Path) -> None:
     assert stats.activity_summaries == 0
     assert stats.correlations == 0
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         # records table now holds two rows (the original + the new one).
         row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
@@ -505,7 +506,7 @@ def test_force_reimport_keeps_one_row_via_tier_2_skip(tmp_path: Path) -> None:
     run_import(export_dir, db, import_id="imp_first")
 
     run_import(export_dir, db, import_id="imp_forced", force=True)
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
         assert row is not None and int(row[0]) == 1
@@ -549,7 +550,7 @@ def test_fresh_import_runs_legacy_phase4_dedup(
         for rec in caplog.records
     ), "expected the legacy Phase 4 dedup log line on a fresh import"
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute("SELECT COUNT(*) FROM records").fetchone()
         assert row is not None and int(row[0]) == 1
@@ -583,7 +584,7 @@ def test_incremental_skipped_workout_preserves_route_map_for_gpx(
 
     run_import(export_dir, db, import_id="imp_second")
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         # Exactly the same two route points as after the first import --
         # the route map carried the workout hash forward, so the GPX
@@ -734,7 +735,7 @@ def test_incremental_metadata_does_not_route_to_workout_when_record_skipped(
     # The nested-Record MetadataEntry from the first import is still
     # exactly one row in ``record_metadata`` -- not duplicated and not
     # incorrectly routed to ``workout_metadata``.
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         row = conn.execute(
             "SELECT COUNT(*) FROM record_metadata WHERE key = 'HKMetadataKeyHeartRateMotionContext'"
@@ -791,7 +792,7 @@ def test_incremental_fresh_record_nested_in_skipped_workout_keeps_metadata(
     (export_dir / "export.xml").write_text(second_xml, encoding="utf-8")
     run_import(export_dir, db, import_id="imp_second")
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         # The new Record landed.
         row = conn.execute(
@@ -835,7 +836,7 @@ def test_incremental_skipped_workout_does_not_double_count_events(
 
     run_import(export_dir, db, import_id="imp_second")
 
-    conn = duckdb.connect(str(db), read_only=True)
+    conn = open_test_connection(str(db), read_only=True)
     try:
         # Each child table holds exactly the rows from the first import.
         row = conn.execute("SELECT COUNT(*) FROM workout_events").fetchone()

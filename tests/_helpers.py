@@ -22,6 +22,10 @@ from typing import Any
 
 import duckdb
 
+from apple_health_mcp.db.connection import (
+    _set_engine_safety_pragmas as _apply_prod_pragmas,
+)
+
 
 class StubMCP:
     """Capture the function a tool module registers via ``@mcp.tool``."""
@@ -68,6 +72,47 @@ def call_tool(fn: Callable[..., Awaitable[str]], **kwargs: Any) -> Any:
     raw = asyncio.run(fn(**kwargs))
     assert not raw.startswith("Error: "), f"tool returned a validation error: {raw}"
     return json.loads(raw)
+
+
+def open_test_connection(
+    db_path: str,
+    *,
+    read_only: bool = False,
+) -> duckdb.DuckDBPyConnection:
+    """Return a DuckDB connection with production safety pragmas applied.
+
+    Wraps ``duckdb.connect`` so tests do not diverge from the engine-level
+    lockdown ``db.connection.get_connection`` applies in production
+    (v0.5.1 issue #190 + v0.6 issue #201). A raw ``duckdb.connect`` in a
+    test fixture otherwise runs at DuckDB's shipping defaults (50+ GiB
+    memory, all fs / http surfaces enabled), so a change that would fail
+    in production could still PASS in the suite.
+
+    ``get_connection`` and ``get_in_memory_connection`` from
+    ``apple_health_mcp.db`` are not reused directly because they run
+    ``_materialise_empty_db`` / ``ensure_schema`` bootstraps that most
+    test fixtures deliberately want to skip -- fixtures either seed
+    their own custom shape (schema-migration tests) or call
+    ``ensure_schema`` inline as part of the arrangement. Reaching for
+    the private ``_set_engine_safety_pragmas`` from the production
+    module is fine because it is the same package: the underscore is a
+    "not part of the external API" hint, not a boundary between
+    tests and code under test. Reusing the exact function guarantees the
+    lockdown stays in lockstep as the pragma set evolves.
+    """
+    conn = duckdb.connect(db_path, read_only=read_only)
+    _apply_prod_pragmas(conn)
+    return conn
+
+
+def open_test_memory_connection() -> duckdb.DuckDBPyConnection:
+    """Return a fresh in-memory DuckDB connection with production pragmas.
+
+    Thin alias for :func:`open_test_connection` at ``:memory:`` — kept as
+    its own name so the 13+ call sites read as "I want an ephemeral
+    connection" instead of a bare magic string.
+    """
+    return open_test_connection(":memory:")
 
 
 def seed_one_import(

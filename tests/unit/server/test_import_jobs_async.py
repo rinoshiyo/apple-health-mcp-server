@@ -39,7 +39,7 @@ from apple_health_mcp.db.migrations import stamp_current_version
 from apple_health_mcp.server.data_state import EXPORT_ZIPS_DIR_ENV_VAR
 from apple_health_mcp.server.tools import get_import_status as get_status_mod
 from apple_health_mcp.server.tools import import_zip as import_zip_mod
-from tests._helpers import bind_tool, drain_import_workers
+from tests._helpers import bind_tool, drain_import_workers, open_test_connection
 
 if TYPE_CHECKING:
     pass
@@ -85,7 +85,7 @@ _drain_import_workers = drain_import_workers
 def _writable_db(tmp_path: Path) -> tuple[duckdb.DuckDBPyConnection, Path]:
     """Open a real on-disk DuckDB so the importer's writable path succeeds."""
     db_path = tmp_path / "h.duckdb"
-    conn = duckdb.connect(str(db_path), read_only=False)
+    conn = open_test_connection(str(db_path), read_only=False)
     ensure_schema(conn)
     stamp_current_version(conn)
     return conn, db_path
@@ -406,7 +406,7 @@ def test_server_boot_sweeps_orphan_jobs(tmp_path: Path) -> None:
     from apple_health_mcp.server.server import create_server
 
     db_path = tmp_path / "h.duckdb"
-    seed = duckdb.connect(str(db_path), read_only=False)
+    seed = open_test_connection(str(db_path), read_only=False)
     ensure_schema(seed)
     stamp_current_version(seed)
     lock = Lock()
@@ -427,7 +427,7 @@ def test_server_boot_sweeps_orphan_jobs(tmp_path: Path) -> None:
     job_registry.mark_running(seed, lock, "ij_stuck_running")
     seed.close()
 
-    boot_conn = duckdb.connect(str(db_path), read_only=False)
+    boot_conn = open_test_connection(str(db_path), read_only=False)
     try:
         # Building the server triggers the boot-time orphan sweep.
         create_server(boot_conn)
