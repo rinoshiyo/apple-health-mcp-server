@@ -103,7 +103,15 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
             return translate_catalog_exception(conn, exc, lock=lock)
         except duckdb.BinderException as exc:
             return translate_binder_exception(conn, sql, exc, lock=lock)
-        except duckdb.ParserException as exc:
+        except duckdb.ParserException as exc:  # pragma: no cover - defensive
+            # Any SQL that reaches this point already parsed cleanly under
+            # sqlglot's duckdb dialect in ``validate_query`` (a genuine
+            # syntax typo like "FRM" is rejected there as
+            # ``QueryValidationError(reason="syntax_error")`` before
+            # ``query_to_json`` ever runs). This branch only fires if a
+            # future DuckDB release accepts SQL sqlglot's dialect does not
+            # -- kept as defence-in-depth so that divergence still yields a
+            # typed envelope instead of an unhandled exception.
             return translate_parser_exception(exc)
         except Exception as exc:
             _logger.debug("query failed: %s", exc)

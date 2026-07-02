@@ -66,9 +66,7 @@ _DID_YOU_MEAN_RE = re.compile(r"""Did you mean ["']([^"']+)["']""")
 _UNKNOWN_TABLE_RE = re.compile(
     r"Table with name (?:[\"'`])?([^\"'`\s!]+)(?:[\"'`])? does not exist"
 )
-_UNKNOWN_VIEW_RE = re.compile(
-    r"View with name (?:[\"'`])?([^\"'`\s!]+)(?:[\"'`])? does not exist"
-)
+_UNKNOWN_VIEW_RE = re.compile(r"View with name (?:[\"'`])?([^\"'`\s!]+)(?:[\"'`])? does not exist")
 
 # Match ``Referenced column "hearth_rate" not found`` — DuckDB always
 # double-quotes the identifier in this diagnostic.
@@ -112,7 +110,11 @@ def _referenced_tables_from_sql(sql: str) -> list[str]:
     except Exception as parse_exc:  # pragma: no cover - defensive
         _logger.debug("sqlglot parse failed while building hint: %s", parse_exc)
         return tables
-    if parsed is None:
+    if parsed is None:  # pragma: no cover - defensive
+        # ``sqlglot.parse_one`` raises ``ParseError`` (caught above) rather
+        # than returning ``None`` for every empty/whitespace/comment-only
+        # input under the pinned sqlglot version; this guard exists only
+        # in case a future sqlglot release changes that contract.
         return tables
     for node in parsed.find_all(sql_exp.Table):
         name = node.name
