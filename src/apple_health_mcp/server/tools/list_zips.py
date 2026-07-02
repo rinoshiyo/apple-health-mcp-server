@@ -55,7 +55,7 @@ DESCRIPTION = (
     "zip_status (one of 'valid_apple_health', 'valid_non_apple_health', "
     "'invalid_zip' — v0.4.1 / issue #158, lets the agent skip a corrupt "
     "or HTML-renamed file without paying the import cost). Use this "
-    "BEFORE import_zip: pick an entry, then call import_zip(id=…)."
+    "BEFORE import_zip: pick an entry, then call import_zip(id=...)."
 )
 
 
@@ -143,9 +143,8 @@ def register(mcp: FastMCP, conn: duckdb.DuckDBPyConnection, lock: Lock) -> None:
                 "already_imported_at, ...}`` in milliseconds without a "
                 "``job_id`` -- do NOT poll get_import_status on this "
                 "branch; just read the synchronous payload. A fresh "
-                "import returns ``{status: 'queued', job_id, ...}``; "
-                f"in that case {IMPORT_POLL_BLURB[0].lower() + IMPORT_POLL_BLURB[1:]}. "
-                f"{IMPORT_RUNTIME_BLURB}."
+                "import returns ``{status: 'queued', job_id, ...}``. "
+                f"{IMPORT_POLL_BLURB}. {IMPORT_RUNTIME_BLURB}."
             )
 
         return run_query_payload(

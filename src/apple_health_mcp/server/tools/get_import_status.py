@@ -31,7 +31,10 @@ from pydantic import Field
 from apple_health_mcp.db import import_jobs as job_registry
 from apple_health_mcp.server.data_state import block_if_schema_outdated
 from apple_health_mcp.server.query import run_query_payload
-from apple_health_mcp.server.tools._async_blurb import IMPORT_RUNTIME_BLURB
+from apple_health_mcp.server.tools._async_blurb import (
+    IMPORT_POLL_BLURB,
+    IMPORT_RUNTIME_BLURB,
+)
 
 if TYPE_CHECKING:
     import duckdb
@@ -59,9 +62,10 @@ DESCRIPTION = (
     "job_id, reason, message} -- worker raised, or the server restarted "
     "mid-import and the orphan sweep flagged this row "
     "(reason='server_restarted_while_running'). Unknown job_id surfaces "
-    "as {status: 'error', reason: 'job_not_found', message}. Polling "
-    "cost is one indexed SELECT (microseconds); no client back-off "
-    f"required. {IMPORT_RUNTIME_BLURB}."
+    "as {status: 'error', reason: 'job_not_found', message}. "
+    f"{IMPORT_POLL_BLURB}; polling cost is one indexed SELECT "
+    "(microseconds), so no client back-off is required. "
+    f"{IMPORT_RUNTIME_BLURB}."
 )
 
 
