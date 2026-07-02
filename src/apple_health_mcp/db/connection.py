@@ -405,15 +405,15 @@ def _migrate_if_needed_on_handle(
     """
     from apple_health_mcp.db.migrations import (
         CURRENT_SCHEMA_VERSION,
-        _table_exists_in_main,
+        table_exists_in_main,
     )
 
     # Defer to the tool-level error path when the DB pre-dates the
     # ``imports`` table; the friendly read-path guidance lands on the
     # ``check_data_state`` empty-DB branch, not here.
-    if not _table_exists_in_main(conn, "imports"):
+    if not table_exists_in_main(conn, "imports"):
         return
-    if not _table_exists_in_main(conn, "schema_version"):
+    if not table_exists_in_main(conn, "schema_version"):
         return
     row = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
     current = int(row[0]) if row is not None and row[0] is not None else 0

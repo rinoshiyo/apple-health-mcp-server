@@ -15,11 +15,11 @@ from apple_health_mcp.db import get_in_memory_connection
 from apple_health_mcp.db.migrations import (
     CURRENT_SCHEMA_VERSION,
     _ensure_version_table,
-    _table_exists_in_main,
     get_current_version,
     schema_version_is_stale,
     set_current_version,
     stamp_current_version,
+    table_exists_in_main,
 )
 
 
@@ -38,7 +38,7 @@ def test_get_current_version_creates_sentinel_table_on_first_call() -> None:
     conn = get_in_memory_connection()
     try:
         assert get_current_version(conn) == 0
-        assert _table_exists_in_main(conn, "schema_version")
+        assert table_exists_in_main(conn, "schema_version")
     finally:
         conn.close()
 
