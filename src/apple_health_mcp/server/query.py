@@ -204,6 +204,48 @@ def run_query_payload(payload: object) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+# v0.6.1 (issue #273): typed error envelope shape shared by
+# ``run_custom_query``'s validation- and execution-time error paths.
+# The wire shape is ``{state: "error", reason, message, hint?}`` — a
+# stable enum in ``reason`` lets an LLM branch on the failure kind
+# without pattern-matching on the free-form ``message`` text, and
+# ``hint`` carries structured recovery data (available tables /
+# columns, did-you-mean suggestions) when the translator can produce
+# it. This is distinct from the data-state envelopes in
+# ``data_state.py`` which follow ``{state: <ENUM>, reason,
+# suggested_action, human_message}`` and predate this issue.
+QUERY_ERROR_STATE: Final[str] = "error"
+
+
+def build_query_error_envelope(
+    *,
+    reason: str,
+    message: str,
+    hint: dict[str, Any] | None = None,
+) -> str:
+    """Build the typed error envelope emitted by ``run_custom_query``.
+
+    ``reason`` is a stable enum consumed by the LLM. Known values:
+    ``empty_query``, ``not_select_or_with``, ``multi_statement``,
+    ``disallowed_function``, ``syntax_error``, ``unknown_table``,
+    ``unknown_view``, ``missing_column``, ``execution_error``. Callers
+    pass one of those literals; the helper does not validate the enum
+    so future reasons can be added without a coordinated update.
+
+    ``hint`` is omitted from the payload entirely when ``None`` so
+    downstream consumers can rely on the key being present only when
+    structured recovery data was available.
+    """
+    payload: dict[str, Any] = {
+        "state": QUERY_ERROR_STATE,
+        "reason": reason,
+        "message": message,
+    }
+    if hint is not None:
+        payload["hint"] = hint
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
 # Shared ``offset`` parameter description (issue #108 / PR-E review F5).
 # Re-used across every envelope-shaped tool so a wording change lands in
 # one place instead of drifting across six modules.
