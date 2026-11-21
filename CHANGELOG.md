@@ -9,6 +9,8 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-21
+
 ### Security
 
 - Raise the `mcp` dependency to `>=1.30.0,<2` and refresh `uv.lock` to
