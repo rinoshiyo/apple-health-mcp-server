@@ -9,6 +9,15 @@ v0.x.y disclaimer and the public-API scope.
 
 ## [Unreleased]
 
+### Security
+
+- Raise the `mcp` dependency to `>=1.30.0,<2` and refresh `uv.lock` to
+  pick up fixed releases of `mcp`, `certifi`, `pyjwt`, `cryptography`,
+  `anyio`, `virtualenv`, `filelock`, and `typing-extensions`, resolving
+  the open Dependabot alerts (#286). The `<2` cap is required because
+  mcp 2.x renamed `FastMCP` to `MCPServer`, which the server still
+  imports; migrating to 2.x is tracked separately.
+
 ## [0.6.1] - 2026-07-02
 
 ### Added
